@@ -4,6 +4,7 @@ import XCTest
 final class HaliteTerminalTests: XCTestCase {
     func testSessionInitializes() {
         let session = HaliteSession(config: HaliteConfig())
+        defer { session.terminate() }
         XCTAssertFalse(session.processExited)
         XCTAssertNil(session.exitCode)
         XCTAssertEqual(session.title, "")
