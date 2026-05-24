@@ -452,4 +452,122 @@ final class GridTests: XCTestCase {
         XCTAssertEqual(g.cell(row: 0, col: 0).char, "A")
         XCTAssertEqual(g.cell(row: 1, col: 0).char, "B")
     }
+
+    // MARK: scroll region — DECSTBM (M3.8)
+
+    func testSetScrollRegionAndCursorHome() {
+        let g = makeGrid(cols: 4, rows: 6)
+        g.setCursor(row: 4, col: 3)
+        g.setScrollRegion(top: 1, bottom: 4) // rows 1..4 inclusive
+        XCTAssertEqual(g.scrollTop, 1)
+        XCTAssertEqual(g.scrollBottom, 4)
+        // cursor → (0, 0)
+        XCTAssertEqual(g.cursorRow, 0)
+        XCTAssertEqual(g.cursorCol, 0)
+    }
+
+    func testSetScrollRegionRejectsInvalidRange() {
+        let g = makeGrid(cols: 4, rows: 4)
+        g.setScrollRegion(top: 2, bottom: 1) // bottom < top → 무시
+        XCTAssertEqual(g.scrollTop, 0)
+        XCTAssertEqual(g.scrollBottom, 3)
+    }
+
+    func testScrollUpOnlyAffectsRegion() {
+        let g = makeGrid(cols: 2, rows: 5)
+        // 0: AA, 1: BB, 2: CC, 3: DD, 4: EE — write 5줄, 마지막 LF은 생략 (안 그러면 scrollUp)
+        let labels = ["A", "B", "C", "D", "E"]
+        for (i, label) in labels.enumerated() {
+            write(g, label + label)
+            if i < labels.count - 1 {
+                g.lineFeed(); g.carriageReturn()
+            }
+        }
+        // region rows 1..3 (BB, CC, DD); row 0 (AA) and row 4 (EE) frozen
+        g.setScrollRegion(top: 1, bottom: 3)
+        g.scrollUp(count: 1)
+        XCTAssertEqual(g.cell(row: 0, col: 0).char, "A") // frozen
+        XCTAssertEqual(g.cell(row: 1, col: 0).char, "C") // shifted up
+        XCTAssertEqual(g.cell(row: 2, col: 0).char, "D") // shifted up
+        XCTAssertEqual(g.cell(row: 3, col: 0).char, " ") // blank
+        XCTAssertEqual(g.cell(row: 4, col: 0).char, "E") // frozen
+    }
+
+    func testScrollDownOnlyAffectsRegion() {
+        let g = makeGrid(cols: 2, rows: 5)
+        let labels = ["A", "B", "C", "D", "E"]
+        for (i, label) in labels.enumerated() {
+            write(g, label + label)
+            if i < labels.count - 1 {
+                g.lineFeed(); g.carriageReturn()
+            }
+        }
+        g.setScrollRegion(top: 1, bottom: 3)
+        g.scrollDown(count: 1)
+        XCTAssertEqual(g.cell(row: 0, col: 0).char, "A") // frozen
+        XCTAssertEqual(g.cell(row: 1, col: 0).char, " ") // blank (new top)
+        XCTAssertEqual(g.cell(row: 2, col: 0).char, "B") // shifted down
+        XCTAssertEqual(g.cell(row: 3, col: 0).char, "C") // shifted down
+        XCTAssertEqual(g.cell(row: 4, col: 0).char, "E") // frozen
+    }
+
+    func testLineFeedAtScrollBottomScrollsRegion() {
+        let g = makeGrid(cols: 2, rows: 5)
+        g.setScrollRegion(top: 1, bottom: 3) // region rows 1..3
+        // row 1, 2, 3 각각에 표식 작성
+        g.setCursor(row: 2, col: 1); write(g, "XX") // row 1
+        g.setCursor(row: 3, col: 1); write(g, "YY") // row 2
+        g.setCursor(row: 4, col: 1); write(g, "ZZ") // row 3 (scrollBottom)
+        // cursor가 scrollBottom (3, 1)에 있고 pendingWrap. setCursor로 정리.
+        g.setCursor(row: 4, col: 2)
+        g.lineFeed()
+        // 커서는 scrollBottom 그대로 유지
+        XCTAssertEqual(g.cursorRow, 3)
+        // region 안에서 1줄 shift up: row 1 = (was row 2) = "YY", row 2 = "ZZ", row 3 = blank
+        XCTAssertEqual(g.cell(row: 1, col: 0).char, "Y")
+        XCTAssertEqual(g.cell(row: 2, col: 0).char, "Z")
+        XCTAssertEqual(g.cell(row: 3, col: 0).char, " ")
+    }
+
+    func testLineFeedBelowScrollBottomDoesNotScroll() {
+        let g = makeGrid(cols: 2, rows: 5)
+        g.setScrollRegion(top: 0, bottom: 2) // bottom of region is row 2
+        // Move cursor below region (row 3)
+        g.setCursor(row: 4, col: 1) // (3, 0)
+        write(g, "XX")
+        // cursor now at (3, 2) but pendingWrap. Force position.
+        g.setCursor(row: 4, col: 1) // (3, 0)
+        g.lineFeed() // 그냥 row 4로 이동, scrollUp 안 일어남
+        XCTAssertEqual(g.cursorRow, 4)
+        // row 3 contents 그대로
+        XCTAssertEqual(g.cell(row: 3, col: 0).char, "X")
+    }
+
+    func testResizeResetsScrollRegion() {
+        let g = makeGrid(cols: 4, rows: 6)
+        g.setScrollRegion(top: 1, bottom: 4)
+        g.resize(cols: 4, rows: 8)
+        XCTAssertEqual(g.scrollTop, 0)
+        XCTAssertEqual(g.scrollBottom, 7)
+    }
+
+    func testAltScreenHasIndependentScrollRegion() {
+        let g = makeGrid(cols: 4, rows: 6)
+        g.setScrollRegion(top: 1, bottom: 4)
+        g.enterAltScreen()
+        XCTAssertEqual(g.scrollTop, 0)
+        XCTAssertEqual(g.scrollBottom, 5) // alt는 전체 화면 region으로 시작
+        g.setScrollRegion(top: 2, bottom: 3)
+        g.leaveAltScreen()
+        // primary 복귀 시 원래 region이 복원되어야 함
+        XCTAssertEqual(g.scrollTop, 1)
+        XCTAssertEqual(g.scrollBottom, 4)
+    }
+
+    func testScrollUpInRegionDoesNotPushToScrollbackWhenTopNonZero() {
+        let g = makeGrid(cols: 2, rows: 4)
+        g.setScrollRegion(top: 1, bottom: 3)
+        g.scrollUp(count: 1)
+        XCTAssertEqual(g.scrollback.count, 0) // top != 0 이면 push 안 함
+    }
 }

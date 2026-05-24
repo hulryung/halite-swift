@@ -146,6 +146,12 @@ public final class HaliteSession: ObservableObject {
             grid.eraseInLine(mode: mode)
         case 0x53: grid.scrollUp(count: p1)   // S — SU
         case 0x54: grid.scrollDown(count: p1) // T — SD
+        case 0x72:                          // r — DECSTBM (private marker가 없어야 함)
+            if privateMarker == nil {
+                let top = (params.count > 0 && params[0] > 0) ? params[0] : 1
+                let bot = (params.count > 1 && params[1] > 0) ? params[1] : grid.rows
+                grid.setScrollRegion(top: top - 1, bottom: bot - 1)
+            }
         case 0x6D:                          // m — SGR
             grid.applySGR(params)
         case 0x68:                          // h — SET MODE

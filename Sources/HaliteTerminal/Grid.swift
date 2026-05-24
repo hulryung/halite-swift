@@ -24,6 +24,11 @@ public final class Grid {
     /// 셸이 prompt 그릴 동안 잠깐 숨기는 패턴에 사용.
     public private(set) var cursorVisible: Bool = true
 
+    /// DECSTBM scroll region 상단 (0-based, inclusive). 기본값 0.
+    public private(set) var scrollTop: Int = 0
+    /// DECSTBM scroll region 하단 (0-based, inclusive). 기본값 rows - 1.
+    public private(set) var scrollBottom: Int = 0
+
     /// 현재 펜(pen) 속성. SGR이 갱신.
     public var pen: CellAttrs
 
@@ -57,6 +62,8 @@ public final class Grid {
         var scrollback: [[Cell]]
         var scrollbackPushCount: UInt64
         var cursorVisible: Bool
+        var scrollTop: Int
+        var scrollBottom: Int
     }
     private var savedPrimary: PrimarySnapshot? = nil
 
@@ -67,6 +74,7 @@ public final class Grid {
         self.pen = pen
         self.defaultPen = pen
         self.cells = Self.makeBlank(rows: rows, cols: cols, attrs: pen)
+        self.scrollBottom = rows - 1
     }
 
     // MARK: - 셀 접근
@@ -105,12 +113,14 @@ public final class Grid {
         bumpVersion()
     }
 
-    /// LF (`\n`): cursor를 한 줄 아래로. 바닥에 닿으면 scroll up.
+    /// LF (`\n`): cursor를 한 줄 아래로.
+    /// - scroll region 바닥(`scrollBottom`)에 닿으면 region 안에서 scrollUp(1).
+    /// - region 밖의 frozen 영역에서는 단순 cursor 이동, 화면 끝에선 no-op.
     public func lineFeed() {
         pendingWrap = false
-        if cursorRow >= rows - 1 {
+        if cursorRow == scrollBottom {
             scrollUp(count: 1)
-        } else {
+        } else if cursorRow < rows - 1 {
             cursorRow += 1
         }
         bumpVersion()
@@ -135,26 +145,36 @@ public final class Grid {
 
     // MARK: - 스크롤
 
-    /// viewport 전체를 위로 `count`줄 만큼 밀어 올림.
-    /// primary buffer면 위로 빠지는 줄을 scrollback에 push, alt에선 그냥 버림. 바닥은 빈 줄로 채움.
+    /// scroll region을 위로 `count`줄만큼 밀어 올림. region 밖 행은 영향 없음.
+    /// 위로 빠지는 줄은 region이 화면 최상단에서 시작할 때만 (primary buffer + scrollTop==0)
+    /// scrollback에 push, 아니면 그냥 버림. 바닥은 빈 줄로 채움.
     public func scrollUp(count n: Int) {
         guard n > 0 else { return }
-        let evictCount = min(n, rows)
+        let regionHeight = scrollBottom - scrollTop + 1
+        guard regionHeight > 0 else { return }
+        let evictCount = min(n, regionHeight)
 
-        // alt screen일 땐 scrollback에 누적하지 않음 (vim/less 등이 이걸 기대).
-        if !isAltScreenActive {
+        // scrollback에는 region이 화면 최상단(scrollTop == 0)에서 시작하는 경우에만 push.
+        // tmux 상태바처럼 region이 중간에 있으면 위로 빠지는 내용을 누적하지 않음 (xterm 동작).
+        if !isAltScreenActive && scrollTop == 0 {
             for i in 0..<evictCount {
-                pushToScrollback(cells[i])
+                pushToScrollback(cells[scrollTop + i])
             }
         }
 
-        if n >= rows {
-            cells = Self.makeBlank(rows: rows, cols: cols, attrs: pen)
+        let blank = Array(repeating: Cell.empty(attrs: pen), count: cols)
+        if evictCount >= regionHeight {
+            for r in scrollTop...scrollBottom {
+                cells[r] = blank
+            }
         } else {
-            cells.removeFirst(n)
-            let blank = Array(repeating: Cell.empty(attrs: pen), count: cols)
-            for _ in 0..<n {
-                cells.append(blank)
+            // region 내 위로 shift
+            for r in scrollTop...(scrollBottom - evictCount) {
+                cells[r] = cells[r + evictCount]
+            }
+            // region 바닥 evictCount줄을 blank로
+            for r in (scrollBottom - evictCount + 1)...scrollBottom {
+                cells[r] = blank
             }
         }
         bumpVersion()
@@ -258,16 +278,25 @@ public final class Grid {
         bumpVersion()
     }
 
-    /// SD — scroll down by n (위로 빈 줄 삽입, 아래 줄 밀려남).
+    /// SD — scroll region을 아래로 `count`줄만큼 밀어 내림 (위에 빈 줄 삽입).
     public func scrollDown(count n: Int) {
         guard n > 0 else { return }
-        if n >= rows {
-            cells = Self.makeBlank(rows: rows, cols: cols, attrs: pen)
+        let regionHeight = scrollBottom - scrollTop + 1
+        guard regionHeight > 0 else { return }
+        let insertCount = min(n, regionHeight)
+        let blank = Array(repeating: Cell.empty(attrs: pen), count: cols)
+
+        if insertCount >= regionHeight {
+            for r in scrollTop...scrollBottom {
+                cells[r] = blank
+            }
         } else {
-            let blank = Array(repeating: Cell.empty(attrs: pen), count: cols)
-            for _ in 0..<n {
-                cells.removeLast()
-                cells.insert(blank, at: 0)
+            // region 내 아래로 shift (역순으로 복사)
+            for r in stride(from: scrollBottom, through: scrollTop + insertCount, by: -1) {
+                cells[r] = cells[r - insertCount]
+            }
+            for r in scrollTop..<(scrollTop + insertCount) {
+                cells[r] = blank
             }
         }
         bumpVersion()
@@ -390,12 +419,19 @@ public final class Grid {
             saved.cursorRow = max(0, min(newRows - 1, saved.cursorRow - savedRowOffset))
             saved.cursorCol = max(0, min(newCols - 1, saved.cursorCol))
             saved.pendingWrap = false
+            // saved primary의 scroll region도 새 rows에 맞게 reset/clip.
+            saved.scrollTop = 0
+            saved.scrollBottom = newRows - 1
             savedPrimary = saved
         }
 
         cols = newCols
         rows = newRows
         pendingWrap = false
+        // resize 시 scroll region은 전체 화면으로 reset (xterm 동작).
+        // 앱이 SIGWINCH 후 다시 DECSTBM을 설정함.
+        scrollTop = 0
+        scrollBottom = newRows - 1
         bumpVersion()
     }
 
@@ -425,6 +461,26 @@ public final class Grid {
         return newCells
     }
 
+    // MARK: - Scroll region (DECSTBM)
+
+    /// DECSTBM 적용. `top`, `bottom`은 0-based, inclusive.
+    /// 잘못된 범위면 무시 (`top >= bottom`이거나 `bottom >= rows`인 invalid 케이스).
+    /// 유효한 region 설정 후 cursor는 home (0,0)으로 이동 (DECOM 비활성 가정).
+    public func setScrollRegion(top: Int, bottom: Int) {
+        let newTop = max(0, top)
+        let newBottom = min(rows - 1, bottom)
+        guard newTop < newBottom else {
+            // 명백히 잘못된 범위 — 무시 (xterm 동작)
+            return
+        }
+        scrollTop = newTop
+        scrollBottom = newBottom
+        cursorRow = 0
+        cursorCol = 0
+        pendingWrap = false
+        bumpVersion()
+    }
+
     // MARK: - Alt screen (CSI ?1049 / ?1047 / ?47)
 
     /// alt buffer로 swap. 현재 primary 상태(cells/cursor/pen/scrollback/visibility)를 snapshot.
@@ -439,7 +495,9 @@ public final class Grid {
             pendingWrap: pendingWrap,
             scrollback: scrollback,
             scrollbackPushCount: scrollbackPushCount,
-            cursorVisible: cursorVisible
+            cursorVisible: cursorVisible,
+            scrollTop: scrollTop,
+            scrollBottom: scrollBottom
         )
         // 빈 alt buffer로 swap. pen은 그대로 (앱이 곧 SGR로 재설정).
         cells = Self.makeBlank(rows: rows, cols: cols, attrs: pen)
@@ -448,6 +506,8 @@ public final class Grid {
         pendingWrap = false
         scrollback = []
         scrollbackPushCount = 0
+        scrollTop = 0
+        scrollBottom = rows - 1
         isAltScreenActive = true
         bumpVersion()
     }
@@ -466,6 +526,8 @@ public final class Grid {
         scrollback = saved.scrollback
         scrollbackPushCount = saved.scrollbackPushCount
         cursorVisible = saved.cursorVisible
+        scrollTop = saved.scrollTop
+        scrollBottom = saved.scrollBottom
         savedPrimary = nil
         isAltScreenActive = false
         bumpVersion()
