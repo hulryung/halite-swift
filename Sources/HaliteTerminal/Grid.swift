@@ -20,6 +20,10 @@ public final class Grid {
     /// 셀이 마지막 열에 들어간 직후 set, 다음 평문이 들어오면 cursor를 다음 줄로.
     private var pendingWrap: Bool = false
 
+    /// DECTCEM (`\e[?25h` / `\e[?25l`)로 토글되는 커서 가시성.
+    /// 셸이 prompt 그릴 동안 잠깐 숨기는 패턴에 사용.
+    public private(set) var cursorVisible: Bool = true
+
     /// 현재 펜(pen) 속성. SGR이 갱신.
     public var pen: CellAttrs
 
@@ -361,6 +365,13 @@ public final class Grid {
         cols = newCols
         rows = newRows
         pendingWrap = false
+        bumpVersion()
+    }
+
+    /// DECTCEM 토글. private mode 25 `h/l` 디스패치에서 호출.
+    public func setCursorVisible(_ visible: Bool) {
+        if cursorVisible == visible { return }
+        cursorVisible = visible
         bumpVersion()
     }
 

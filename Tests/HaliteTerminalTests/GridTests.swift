@@ -343,4 +343,26 @@ final class GridTests: XCTestCase {
         g.clearScrollback()
         XCTAssertEqual(g.scrollback.count, 0)
     }
+
+    // MARK: cursor visibility (M3.6)
+
+    func testCursorVisibleDefaultsTrue() {
+        let g = makeGrid()
+        XCTAssertTrue(g.cursorVisible)
+    }
+
+    func testSetCursorVisibleBumpsVersion() {
+        let g = makeGrid()
+        let v0 = g.version
+        g.setCursorVisible(false)
+        XCTAssertFalse(g.cursorVisible)
+        XCTAssertGreaterThan(g.version, v0)
+    }
+
+    func testSetCursorVisibleNoOpIfSame() {
+        let g = makeGrid()
+        let v0 = g.version
+        g.setCursorVisible(true) // already true
+        XCTAssertEqual(g.version, v0)
+    }
 }

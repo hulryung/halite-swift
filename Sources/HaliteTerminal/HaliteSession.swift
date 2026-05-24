@@ -148,8 +148,26 @@ public final class HaliteSession: ObservableObject {
         case 0x54: grid.scrollDown(count: p1) // T — SD
         case 0x6D:                          // m — SGR
             grid.applySGR(params)
+        case 0x68:                          // h — SET MODE
+            applyModeChange(params: params, privateMarker: privateMarker, set: true)
+        case 0x6C:                          // l — RESET MODE
+            applyModeChange(params: params, privateMarker: privateMarker, set: false)
         default:
             break // 미지원 CSI는 무시 (alt screen / scroll region 등은 후속 milestone)
+        }
+    }
+
+    private func applyModeChange(params: [Int], privateMarker: UInt8?, set: Bool) {
+        // DEC private mode (`?`) 만 처리. ANSI mode는 거의 안 쓰임.
+        guard privateMarker == 0x3F else { return }
+        for p in params where p > 0 {
+            switch p {
+            case 25:
+                grid.setCursorVisible(set)
+            // 1049 (alt screen) 등은 M3.6 이후에 추가
+            default:
+                break
+            }
         }
     }
 }

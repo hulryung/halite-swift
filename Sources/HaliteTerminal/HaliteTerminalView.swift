@@ -237,15 +237,17 @@ public final class HaliteSurfaceView: NSView {
         let result = NSMutableAttributedString()
         result.beginEditing()
 
-        // Scrollback (오래된 → 최근), 각 줄 끝에 줄바꿈.
+        // Scrollback (오래된 → 최근). cursor는 안 그림.
         for line in grid.scrollback {
-            appendLine(line, cols: line.count, baseFont: baseFont, into: result)
+            appendLine(line, cols: line.count, cursorCol: nil, baseFont: baseFont, into: result)
             result.append(NSAttributedString(string: "\n"))
         }
 
-        // 현재 viewport.
+        // 현재 viewport. 커서가 있는 줄에서만 cursorCol 전달.
+        let cursorRow = grid.cursorVisible ? grid.cursorRow : -1
         for r in 0..<grid.rows {
-            appendLine(grid.row(r), cols: grid.cols, baseFont: baseFont, into: result)
+            let cc: Int? = (r == cursorRow) ? grid.cursorCol : nil
+            appendLine(grid.row(r), cols: grid.cols, cursorCol: cc, baseFont: baseFont, into: result)
             if r < grid.rows - 1 {
                 result.append(NSAttributedString(string: "\n"))
             }
@@ -261,17 +263,46 @@ public final class HaliteSurfaceView: NSView {
     }
 
     /// 한 줄(Cell 배열)을 run-length attribute 그룹으로 묶어서 attributed string에 append.
+    /// `cursorCol`이 주어지면 그 위치의 한 셀은 단독으로 inverse 처리해서 그림.
     private func appendLine(
         _ line: [Cell],
         cols: Int,
+        cursorCol: Int?,
         baseFont: NSFont,
         into result: NSMutableAttributedString
     ) {
-        var c = 0
-        while c < cols {
+        guard cols > 0 else { return }
+        let cc = cursorCol ?? -1
+        if cc >= 0 && cc < cols {
+            // [0, cc) : 일반 run-length
+            if cc > 0 {
+                appendRunGroup(line, range: 0..<cc, baseFont: baseFont, into: result)
+            }
+            // cc : inverse 한 셀
+            var attrs = line[cc].attrs
+            attrs.inverse.toggle()
+            let nsAttrs = makeAttributes(for: attrs, baseFont: baseFont)
+            result.append(NSAttributedString(string: String(line[cc].char), attributes: nsAttrs))
+            // (cc, cols) : 일반 run-length
+            if cc + 1 < cols {
+                appendRunGroup(line, range: (cc + 1)..<cols, baseFont: baseFont, into: result)
+            }
+        } else {
+            appendRunGroup(line, range: 0..<cols, baseFont: baseFont, into: result)
+        }
+    }
+
+    private func appendRunGroup(
+        _ line: [Cell],
+        range: Range<Int>,
+        baseFont: NSFont,
+        into result: NSMutableAttributedString
+    ) {
+        var c = range.lowerBound
+        while c < range.upperBound {
             let runAttrs = line[c].attrs
             var endC = c + 1
-            while endC < cols && line[endC].attrs == runAttrs {
+            while endC < range.upperBound && line[endC].attrs == runAttrs {
                 endC += 1
             }
             var runChars = ""
