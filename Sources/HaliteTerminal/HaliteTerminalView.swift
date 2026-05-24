@@ -57,12 +57,15 @@ public final class HaliteSurfaceView: NSView {
     private var lastReportedSize: (cols: Int, rows: Int)? = nil
     private var renderScheduled = false
     private var lastRenderedVersion: UInt64 = .max
+    /// 캐시된 cell metrics. `reportSizeIfChanged`가 갱신, render가 paragraph style에 사용.
+    private var cellMetrics: (width: CGFloat, height: CGFloat) = (1, 1)
 
     public init(session: HaliteSession) {
         self.session = session
 
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = false
         scroll.borderType = .noBorder
         scroll.autoresizingMask = [.width, .height]
         scroll.drawsBackground = false
@@ -78,6 +81,15 @@ public final class HaliteSurfaceView: NSView {
         tv.drawsBackground = true
         tv.autoresizingMask = [.width]
         tv.textContainerInset = NSSize(width: 4, height: 4)
+
+        // 줄 자동 wrap을 끔. 셀 단위 격자에서는 wrap이 시각 라인 수를 늘려
+        // scrollToEnd가 위쪽을 잘라낸 화면을 보여주는 원인이 됨.
+        tv.isHorizontallyResizable = true
+        tv.textContainer?.widthTracksTextView = false
+        tv.textContainer?.containerSize = NSSize(
+            width: CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude
+        )
 
         scroll.documentView = tv
 
@@ -118,6 +130,7 @@ public final class HaliteSurfaceView: NSView {
         let lineHeight = NSLayoutManager().defaultLineHeight(for: font)
         let cellW = max(glyphSize.width, 1)
         let cellH = max(lineHeight, 1)
+        cellMetrics = (cellW, cellH)
         let inset = textView.textContainerInset
         let usableW = bounds.width - inset.width * 2
         let usableH = bounds.height - inset.height * 2
@@ -227,6 +240,8 @@ public final class HaliteSurfaceView: NSView {
     private func renderNow() {
         let grid = session.grid
         if grid.version == lastRenderedVersion { return }
+        let priorWasAlt = (lastRenderedVersion != .max) && grid.isAltScreenActive
+        _ = priorWasAlt
         lastRenderedVersion = grid.version
 
         guard let storage = textView.textStorage else { return }
@@ -234,12 +249,24 @@ public final class HaliteSurfaceView: NSView {
             ?? NSFont.userFixedPitchFont(ofSize: session.config.fontSize)
             ?? NSFont.systemFont(ofSize: session.config.fontSize)
 
+        // 줄 높이를 정확히 cellH로 강제 (NSTextView 기본 spacing이 우리 cellH와
+        // 어긋나면 전체 컨텐츠가 viewport보다 커져 scroll이 발생).
+        let lineHeight = max(cellMetrics.height, 1)
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.minimumLineHeight = lineHeight
+        paragraphStyle.maximumLineHeight = lineHeight
+        paragraphStyle.lineSpacing = 0
+        paragraphStyle.lineBreakMode = .byClipping
+
         let result = NSMutableAttributedString()
         result.beginEditing()
 
         // Scrollback (오래된 → 최근). cursor는 안 그림.
         for line in grid.scrollback {
-            appendLine(line, cols: line.count, cursorCol: nil, baseFont: baseFont, into: result)
+            appendLine(
+                line, cols: line.count, cursorCol: nil,
+                baseFont: baseFont, paragraphStyle: paragraphStyle, into: result
+            )
             result.append(NSAttributedString(string: "\n"))
         }
 
@@ -247,7 +274,10 @@ public final class HaliteSurfaceView: NSView {
         let cursorRow = grid.cursorVisible ? grid.cursorRow : -1
         for r in 0..<grid.rows {
             let cc: Int? = (r == cursorRow) ? grid.cursorCol : nil
-            appendLine(grid.row(r), cols: grid.cols, cursorCol: cc, baseFont: baseFont, into: result)
+            appendLine(
+                grid.row(r), cols: grid.cols, cursorCol: cc,
+                baseFont: baseFont, paragraphStyle: paragraphStyle, into: result
+            )
             if r < grid.rows - 1 {
                 result.append(NSAttributedString(string: "\n"))
             }
@@ -258,8 +288,13 @@ public final class HaliteSurfaceView: NSView {
         storage.setAttributedString(result)
         storage.endEditing()
 
-        // 새 출력이 들어오면 항상 바닥으로 스크롤.
-        textView.scrollToEndOfDocument(nil)
+        // primary 화면에서만 자동 바닥 스크롤.
+        // alt screen에선 buffer 전체가 viewport에 fit 하도록 우리가 크기를
+        // 잡아두므로 스크롤 자체가 발생하면 안 되고, 우리가 강제로 호출하면
+        // 매 cursor move마다 화면이 튐.
+        if !grid.isAltScreenActive {
+            textView.scrollToEndOfDocument(nil)
+        }
     }
 
     /// 한 줄(Cell 배열)을 run-length attribute 그룹으로 묶어서 attributed string에 append.
@@ -269,26 +304,33 @@ public final class HaliteSurfaceView: NSView {
         cols: Int,
         cursorCol: Int?,
         baseFont: NSFont,
+        paragraphStyle: NSParagraphStyle,
         into result: NSMutableAttributedString
     ) {
         guard cols > 0 else { return }
         let cc = cursorCol ?? -1
         if cc >= 0 && cc < cols {
-            // [0, cc) : 일반 run-length
             if cc > 0 {
-                appendRunGroup(line, range: 0..<cc, baseFont: baseFont, into: result)
+                appendRunGroup(
+                    line, range: 0..<cc,
+                    baseFont: baseFont, paragraphStyle: paragraphStyle, into: result
+                )
             }
-            // cc : inverse 한 셀
             var attrs = line[cc].attrs
             attrs.inverse.toggle()
-            let nsAttrs = makeAttributes(for: attrs, baseFont: baseFont)
+            let nsAttrs = makeAttributes(for: attrs, baseFont: baseFont, paragraphStyle: paragraphStyle)
             result.append(NSAttributedString(string: String(line[cc].char), attributes: nsAttrs))
-            // (cc, cols) : 일반 run-length
             if cc + 1 < cols {
-                appendRunGroup(line, range: (cc + 1)..<cols, baseFont: baseFont, into: result)
+                appendRunGroup(
+                    line, range: (cc + 1)..<cols,
+                    baseFont: baseFont, paragraphStyle: paragraphStyle, into: result
+                )
             }
         } else {
-            appendRunGroup(line, range: 0..<cols, baseFont: baseFont, into: result)
+            appendRunGroup(
+                line, range: 0..<cols,
+                baseFont: baseFont, paragraphStyle: paragraphStyle, into: result
+            )
         }
     }
 
@@ -296,6 +338,7 @@ public final class HaliteSurfaceView: NSView {
         _ line: [Cell],
         range: Range<Int>,
         baseFont: NSFont,
+        paragraphStyle: NSParagraphStyle,
         into result: NSMutableAttributedString
     ) {
         var c = range.lowerBound
@@ -308,7 +351,7 @@ public final class HaliteSurfaceView: NSView {
             var runChars = ""
             runChars.reserveCapacity(endC - c)
             for i in c..<endC { runChars.append(line[i].char) }
-            let nsAttrs = makeAttributes(for: runAttrs, baseFont: baseFont)
+            let nsAttrs = makeAttributes(for: runAttrs, baseFont: baseFont, paragraphStyle: paragraphStyle)
             result.append(NSAttributedString(string: runChars, attributes: nsAttrs))
             c = endC
         }
@@ -316,7 +359,8 @@ public final class HaliteSurfaceView: NSView {
 
     private func makeAttributes(
         for cellAttrs: CellAttrs,
-        baseFont: NSFont
+        baseFont: NSFont,
+        paragraphStyle: NSParagraphStyle
     ) -> [NSAttributedString.Key: Any] {
         let (fg, bg) = cellAttrs.resolvedColors(defaultBG: session.config.backgroundColor)
         let font: NSFont
@@ -328,6 +372,7 @@ public final class HaliteSurfaceView: NSView {
         var attrs: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: fg,
+            .paragraphStyle: paragraphStyle,
         ]
         if let bg = bg {
             attrs[.backgroundColor] = bg
