@@ -10,6 +10,7 @@ public struct HaliteConfig {
     public var foregroundColor: NSColor
     public var palette: [Int: NSColor]
     public var scrollbackBytes: Int
+    public var scrollbackLines: Int
 
     // PTY spawn
     public var argv: [String]
@@ -23,6 +24,7 @@ public struct HaliteConfig {
         foregroundColor: NSColor = NSColor.white,
         palette: [Int: NSColor] = [:],
         scrollbackBytes: Int = 10_000_000,
+        scrollbackLines: Int = 10_000,
         argv: [String] = HaliteConfig.defaultArgv(),
         env: [String: String] = ProcessInfo.processInfo.environment,
         cwd: String? = nil
@@ -33,6 +35,7 @@ public struct HaliteConfig {
         self.foregroundColor = foregroundColor
         self.palette = palette
         self.scrollbackBytes = scrollbackBytes
+        self.scrollbackLines = scrollbackLines
         self.argv = argv
         self.env = env
         self.cwd = cwd

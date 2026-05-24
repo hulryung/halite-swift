@@ -29,6 +29,17 @@ public final class Grid {
     /// 호스트가 갱신을 감지하는 단조증가 버전. 매 mutation마다 +1.
     public private(set) var version: UInt64 = 0
 
+    /// 위로 밀려난 줄들. 가장 오래된 것이 index 0, 가장 최근이 마지막.
+    /// `maxScrollbackLines`를 초과하면 가장 오래된 것부터 evict.
+    public private(set) var scrollback: [[Cell]] = []
+
+    /// scrollback의 누적 push 카운트. evict가 일어나도 단조증가하므로
+    /// 호스트가 "그 사이 새로 추가된 줄 수" / "evict 여부"를 판단할 수 있음.
+    public private(set) var scrollbackPushCount: UInt64 = 0
+
+    /// scrollback 최대 줄 수. `HaliteSession`이 config에서 받아서 설정.
+    public var maxScrollbackLines: Int = 10_000
+
     public init(cols: Int, rows: Int, pen: CellAttrs) {
         precondition(cols > 0 && rows > 0)
         self.cols = cols
@@ -104,11 +115,19 @@ public final class Grid {
 
     // MARK: - 스크롤
 
-    /// viewport 전체를 위로 `count`줄 만큼 밀어 올림. 위로 빠지는 줄은
-    /// 일단 버림 (scrollback은 M3.5에서 추가). 바닥은 빈 줄로 채움.
+    /// viewport 전체를 위로 `count`줄 만큼 밀어 올림.
+    /// 위로 빠지는 줄은 scrollback에 push. 바닥은 빈 줄로 채움.
     public func scrollUp(count n: Int) {
         guard n > 0 else { return }
+        let evictCount = min(n, rows)
+
+        // 위쪽 evictCount줄을 scrollback으로
+        for i in 0..<evictCount {
+            pushToScrollback(cells[i])
+        }
+
         if n >= rows {
+            // 모두 비움 (scrollback push는 위에서 끝)
             cells = Self.makeBlank(rows: rows, cols: cols, attrs: pen)
         } else {
             cells.removeFirst(n)
@@ -118,6 +137,14 @@ public final class Grid {
             }
         }
         bumpVersion()
+    }
+
+    private func pushToScrollback(_ line: [Cell]) {
+        scrollback.append(line)
+        scrollbackPushCount &+= 1
+        if scrollback.count > maxScrollbackLines {
+            scrollback.removeFirst(scrollback.count - maxScrollbackLines)
+        }
     }
 
     // MARK: - 커서 이동 (CSI)
@@ -199,8 +226,11 @@ public final class Grid {
                 for c in 0..<cols { cells[r][c] = blank }
             }
             for c in 0...min(cursorCol, cols - 1) { cells[cursorRow][c] = blank }
-        case 2, 3:
+        case 2:
             cells = Self.makeBlank(rows: rows, cols: cols, attrs: pen)
+        case 3:
+            cells = Self.makeBlank(rows: rows, cols: cols, attrs: pen)
+            scrollback.removeAll(keepingCapacity: true)
         default:
             return
         }
@@ -303,6 +333,13 @@ public final class Grid {
         let rowOffset: Int = newRows < rows ? rows - newRows : 0
         let blank = Cell.empty(attrs: pen)
 
+        // 행 shrink 시 위로 사라지는 줄은 scrollback으로 보존
+        if rowOffset > 0 {
+            for r in 0..<rowOffset {
+                pushToScrollback(cells[r])
+            }
+        }
+
         var newCells: [[Cell]] = []
         newCells.reserveCapacity(newRows)
         for r in 0..<newRows {
@@ -324,6 +361,12 @@ public final class Grid {
         cols = newCols
         rows = newRows
         pendingWrap = false
+        bumpVersion()
+    }
+
+    /// 스크롤백 전체 비우기 (ED mode 3 등이 사용).
+    public func clearScrollback() {
+        scrollback.removeAll(keepingCapacity: true)
         bumpVersion()
     }
 

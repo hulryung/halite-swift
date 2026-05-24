@@ -41,6 +41,7 @@ public final class HaliteSession: ObservableObject {
             rows: 24,
             pen: CellAttrs(fg: config.foregroundColor)
         )
+        self.grid.maxScrollbackLines = config.scrollbackLines
 
         parser.delegate = self
 

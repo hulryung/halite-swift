@@ -237,22 +237,15 @@ public final class HaliteSurfaceView: NSView {
         let result = NSMutableAttributedString()
         result.beginEditing()
 
+        // Scrollback (오래된 → 최근), 각 줄 끝에 줄바꿈.
+        for line in grid.scrollback {
+            appendLine(line, cols: line.count, baseFont: baseFont, into: result)
+            result.append(NSAttributedString(string: "\n"))
+        }
+
+        // 현재 viewport.
         for r in 0..<grid.rows {
-            let row = grid.row(r)
-            var c = 0
-            while c < grid.cols {
-                let runAttrs = row[c].attrs
-                var endC = c + 1
-                while endC < grid.cols && row[endC].attrs == runAttrs {
-                    endC += 1
-                }
-                var runChars = ""
-                runChars.reserveCapacity(endC - c)
-                for i in c..<endC { runChars.append(row[i].char) }
-                let nsAttrs = makeAttributes(for: runAttrs, baseFont: baseFont)
-                result.append(NSAttributedString(string: runChars, attributes: nsAttrs))
-                c = endC
-            }
+            appendLine(grid.row(r), cols: grid.cols, baseFont: baseFont, into: result)
             if r < grid.rows - 1 {
                 result.append(NSAttributedString(string: "\n"))
             }
@@ -262,6 +255,32 @@ public final class HaliteSurfaceView: NSView {
         storage.beginEditing()
         storage.setAttributedString(result)
         storage.endEditing()
+
+        // 새 출력이 들어오면 항상 바닥으로 스크롤.
+        textView.scrollToEndOfDocument(nil)
+    }
+
+    /// 한 줄(Cell 배열)을 run-length attribute 그룹으로 묶어서 attributed string에 append.
+    private func appendLine(
+        _ line: [Cell],
+        cols: Int,
+        baseFont: NSFont,
+        into result: NSMutableAttributedString
+    ) {
+        var c = 0
+        while c < cols {
+            let runAttrs = line[c].attrs
+            var endC = c + 1
+            while endC < cols && line[endC].attrs == runAttrs {
+                endC += 1
+            }
+            var runChars = ""
+            runChars.reserveCapacity(endC - c)
+            for i in c..<endC { runChars.append(line[i].char) }
+            let nsAttrs = makeAttributes(for: runAttrs, baseFont: baseFont)
+            result.append(NSAttributedString(string: runChars, attributes: nsAttrs))
+            c = endC
+        }
     }
 
     private func makeAttributes(

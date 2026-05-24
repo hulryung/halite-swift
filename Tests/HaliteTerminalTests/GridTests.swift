@@ -289,4 +289,58 @@ final class GridTests: XCTestCase {
         XCTAssertLessThanOrEqual(g.cursorRow, 3)
         XCTAssertLessThanOrEqual(g.cursorCol, 3)
     }
+
+    // MARK: scrollback (M3.5)
+
+    func testScrollUpPushesEvictedRowToScrollback() {
+        let g = makeGrid(cols: 4, rows: 2)
+        write(g, "AAAA"); g.lineFeed(); g.carriageReturn()
+        write(g, "BBBB")
+        g.lineFeed() // forces scrollUp(1) since cursor is on bottom
+        XCTAssertEqual(g.scrollback.count, 1)
+        XCTAssertEqual(String(g.scrollback[0].map { $0.char }), "AAAA")
+        XCTAssertEqual(g.scrollbackPushCount, 1)
+    }
+
+    func testScrollbackEvictsOldestPastLimit() {
+        let g = makeGrid(cols: 2, rows: 2)
+        g.maxScrollbackLines = 3
+        // Force 5 lines to scroll off the top.
+        for ch in ["A", "B", "C", "D", "E", "F"] {
+            write(g, ch + ch)
+            g.lineFeed(); g.carriageReturn()
+        }
+        XCTAssertEqual(g.scrollback.count, 3)
+        XCTAssertEqual(g.scrollbackPushCount, 5) // 5 lines were pushed total
+        // Oldest two ("AA", "BB") evicted; "CC" should be the oldest kept.
+        XCTAssertEqual(String(g.scrollback[0].map { $0.char }), "CC")
+    }
+
+    func testResizeShrinkRowsPushesToScrollback() {
+        let g = makeGrid(cols: 4, rows: 3)
+        write(g, "AAA"); g.lineFeed(); g.carriageReturn()
+        write(g, "BBB"); g.lineFeed(); g.carriageReturn()
+        write(g, "CCC")
+        g.resize(cols: 4, rows: 2)
+        XCTAssertEqual(g.scrollback.count, 1)
+        XCTAssertEqual(String(g.scrollback[0].map { $0.char }), "AAA ")
+    }
+
+    func testEraseInDisplayMode3ClearsScrollback() {
+        let g = makeGrid(cols: 4, rows: 2)
+        write(g, "AAAA"); g.lineFeed(); g.carriageReturn()
+        write(g, "BBBB"); g.lineFeed()
+        XCTAssertEqual(g.scrollback.count, 1)
+        g.eraseInDisplay(mode: 3)
+        XCTAssertTrue(g.scrollback.isEmpty)
+    }
+
+    func testClearScrollback() {
+        let g = makeGrid(cols: 2, rows: 2)
+        write(g, "AA"); g.lineFeed(); g.carriageReturn()
+        write(g, "BB"); g.lineFeed()
+        XCTAssertGreaterThan(g.scrollback.count, 0)
+        g.clearScrollback()
+        XCTAssertEqual(g.scrollback.count, 0)
+    }
 }
