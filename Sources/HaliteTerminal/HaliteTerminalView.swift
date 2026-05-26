@@ -109,6 +109,12 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
     private var hoveredURL: (row: Int, colRange: Range<Int>, url: URL)?
     private var mouseTrackingArea: NSTrackingArea?
 
+    /// "live output 따라가기" 추적 플래그. 사용자 scroll로 위로 올라가면 false,
+    /// 다시 바닥에 닿으면 true. layout() 시점엔 이미 새 frame이 적용된 후라
+    /// 그 자리에서 isScrolledToBottom()을 재측정해도 부정확 — 이 플래그를 따로
+    /// 유지해야 tab bar 토글로 영역이 바뀔 때 바닥 anchor를 안정적으로 보존.
+    private var followingBottom: Bool = true
+
     public init(session: HaliteSession) {
         self.session = session
 
@@ -217,6 +223,30 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
         super.layout()
         scrollView.frame = bounds
         reportSizeIfChanged()
+        // layout 시점엔 이미 새 frame이 반영된 후라 isScrolledToBottom 재측정이
+        // 부정확. followingBottom 플래그(사용자 scroll에 의해 갱신)로 결정.
+        if followingBottom && !session.grid.isAltScreenActive {
+            scrollViewportToBottom()
+        }
+    }
+
+    private func isScrolledToBottom(tolerance: CGFloat = 2.0) -> Bool {
+        let docHeight = textView.frame.height
+        let visHeight = scrollView.contentView.bounds.height
+        let yMax = max(0, docHeight - visHeight)
+        let curY = scrollView.contentView.bounds.origin.y
+        return abs(curY - yMax) <= tolerance
+    }
+
+    private func scrollViewportToBottom() {
+        if let container = textView.textContainer {
+            textView.layoutManager?.ensureLayout(for: container)
+        }
+        let docHeight = textView.frame.height
+        let visHeight = scrollView.contentView.bounds.height
+        let yMax = max(0, docHeight - visHeight)
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: yMax))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 
     /// NSTextView가 실제 layout에서 사용하는 1줄 높이를 측정. `defaultLineHeight`보다
@@ -245,9 +275,26 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
         let inset = textView.textContainerInset
         // width: bounds.width 대신 scrollView.contentSize.width — vertical scroller가
         // 항상 보이는 시스템 설정에서 ~15pt 차지하기 때문.
-        // height: 가로 스크롤바는 없으니 bounds.height 그대로 사용.
         let usableW = max(scrollView.contentSize.width - inset.width * 2, 1)
-        let usableH = max(bounds.height - inset.height * 2, 1)
+
+        // height: bounds.height는 macOS 네이티브 탭 바 출현/사라짐(2탭↔1탭 토글)에
+        // 따라 ~36pt가 들락날락한다. window.contentRect도 마찬가지로 변함 (윈도우
+        // 자체가 탭바 만큼 작아지는 macOS 동작). 그대로 rows로 환산하면 매 토글마다
+        // SIGWINCH가 셸에 전달되어 prompt가 다시 그려져 누적됨.
+        //
+        // stable rows를 위해 탭바 가시 여부에 따라 조건부 보정:
+        //   탭바 hidden (1 tab):  contentRect - tabBarReservation
+        //   탭바 visible (2+ tabs): contentRect 그대로
+        // 결과: 두 상태 모두 동일한 effective height → rows count 일정.
+        let isTabBarVisible = (window?.tabbedWindows?.count ?? 1) >= 2
+        let stableContentHeight: CGFloat
+        if let w = window {
+            let cr = w.contentRect(forFrameRect: w.frame).height
+            stableContentHeight = isTabBarVisible ? cr : cr - tabBarReservation
+        } else {
+            stableContentHeight = bounds.height
+        }
+        let usableH = max(stableContentHeight - inset.height * 2, 1)
         let cols = max(Int(floor(usableW / cellW)), 1)
         let rows = max(Int(floor(usableH / cellH)), 1)
         if lastReportedSize?.cols == cols && lastReportedSize?.rows == rows {
@@ -256,6 +303,11 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
         lastReportedSize = (cols, rows)
         session.resize(cols: cols, rows: rows)
     }
+
+    /// macOS 네이티브 윈도우 탭 바가 실제로 차지하는 높이 — 탭이 추가되면 macOS는
+    /// `window.frame.height`를 이만큼 줄여서 탭바 공간을 만든다. 측정값: 600 → 564 = 36pt.
+    /// (직관과 반대 — 탭바가 contentView를 잠식하는 게 아니라 window 자체가 작아짐.)
+    private let tabBarReservation: CGFloat = 36.0
 
     public override var acceptsFirstResponder: Bool { true }
 
@@ -556,6 +608,11 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
             return
         }
         super.scrollWheel(with: event)
+        // scrollViewDidScroll observer가 bounds 변화로 호출되며 followingBottom 갱신.
+    }
+
+    private func refreshFollowingBottomFlag() {
+        followingBottom = isScrolledToBottom(tolerance: 4.0)
     }
 
     /// 마우스 이벤트를 PTY reporting으로 forward해야 하는지 판단.
@@ -1228,6 +1285,12 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
     /// underline/bar 모양 cursor를 CALayer로 위치/크기 갱신. block은 inverse-cell로 처리.
     @objc private func scrollViewDidScroll(_ note: Notification) {
         updateCursorLayer()
+        // followingBottom 플래그 갱신. async로 미루는 이유는 programmatic scroll
+        // (scrollViewportToBottom) 도중에 이 notification이 발생할 수 있어서, 그
+        // 변화의 최종 결과를 기준으로 판단하기 위함.
+        DispatchQueue.main.async { [weak self] in
+            self?.refreshFollowingBottomFlag()
+        }
     }
 
     private func updateCursorLayer() {
