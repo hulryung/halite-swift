@@ -24,11 +24,32 @@ public func fontWithNerdFallback(family: String, size: CGFloat) -> NSFont {
         cascade.append(NSFontDescriptor(name: nerd, size: size))
     }
 
-    // (3) 한글 fallback — Apple SD Gothic Neo. 설치 안 되어 있으면 시스템 chain에 위임.
-    if NSFont(name: "Apple SD Gothic Neo", size: size) != nil {
-        cascade.append(NSFontDescriptor(name: "Apple SD Gothic Neo", size: size))
-    } else if NSFont(name: "AppleSDGothicNeo-Regular", size: size) != nil {
-        cascade.append(NSFontDescriptor(name: "AppleSDGothicNeo-Regular", size: size))
+    // (3) 한글 monospace fallback — D2Coding 우선 (한국 개발자에게 표준이고 한글 글자
+    //     폭이 균일해 cell-grid 정렬에 좋음). 변형이 여러 개라 설치된 것을 차례로 시도.
+    let koreanMono = [
+        "D2Coding",
+        "D2CodingLigature",
+        "D2Coding Nerd Font Mono",
+        "D2Coding Nerd Font",
+        "D2CodingLigature Nerd Font Mono",
+        "D2CodingLigature Nerd Font",
+        "NanumGothicCoding",
+    ]
+    var addedKorean = false
+    for name in koreanMono where NSFont(name: name, size: size) != nil {
+        cascade.append(NSFontDescriptor(name: name, size: size))
+        addedKorean = true
+        break
+    }
+
+    // (4) D2Coding류가 미설치인 경우만 Apple SD Gothic Neo (모든 macOS에 있음).
+    //     주의: SD Gothic Neo는 proportional이라 한글 폭이 미세하게 어긋날 수 있음.
+    if !addedKorean {
+        if NSFont(name: "Apple SD Gothic Neo", size: size) != nil {
+            cascade.append(NSFontDescriptor(name: "Apple SD Gothic Neo", size: size))
+        } else if NSFont(name: "AppleSDGothicNeo-Regular", size: size) != nil {
+            cascade.append(NSFontDescriptor(name: "AppleSDGothicNeo-Regular", size: size))
+        }
     }
 
     guard !cascade.isEmpty else { return primary }
