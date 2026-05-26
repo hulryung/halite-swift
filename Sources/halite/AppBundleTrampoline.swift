@@ -72,6 +72,20 @@ enum AppBundleTrampoline {
         }
         try fm.copyItem(at: srcURL, to: dstBinaryURL)
         try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dstBinaryURL.path)
+
+        // binary가 RPATH `@loader_path`로 sibling Frameworks를 로드 — Sparkle 통합 후엔
+        // Sparkle.framework가 sibling으로 있어야 dyld 로드 성공. 원본 binary의 sibling
+        // .framework들을 cached bundle의 MacOS/에도 똑같이 복사.
+        let srcDir = srcURL.deletingLastPathComponent()
+        if let entries = try? fm.contentsOfDirectory(at: srcDir, includingPropertiesForKeys: nil) {
+            for entry in entries where entry.pathExtension == "framework" {
+                let dst = macosDir.appendingPathComponent(entry.lastPathComponent)
+                if fm.fileExists(atPath: dst.path) {
+                    try? fm.removeItem(at: dst)
+                }
+                try? fm.copyItem(at: entry, to: dst)
+            }
+        }
     }
 
     private static func infoPlist() -> String {

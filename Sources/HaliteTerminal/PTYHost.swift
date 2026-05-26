@@ -114,13 +114,29 @@ public final class PTYHost {
     }
 
     public func terminate() {
+        // ⚠️ macOS PTY: read thread가 master fd에서 read() blocking 중일 때
+        // 다른 스레드에서 close(fd)를 부르면 read가 종료될 때까지 close가
+        // **blocking**된다. main thread에서 호출되는 windowWillClose 경로에서
+        // 이 동작이 일어나면 UI 전체가 freeze (예: 사용자의 Cmd+W).
+        // → kill + close를 background queue로 옮기고 main은 즉시 반환.
+        let pidToKill = childPID
+        let fdToClose = masterFD
         isReading = false
-        if childPID > 0 {
-            kill(childPID, SIGTERM)
-        }
-        if masterFD >= 0 {
-            close(masterFD)
-            masterFD = -1
+        childPID = -1
+        masterFD = -1
+
+        DispatchQueue.global(qos: .utility).async {
+            if pidToKill > 0 {
+                kill(pidToKill, SIGTERM)
+                // shell이 SIGTERM 무시(vim 등 foreground app이 잡고 있는 경우)
+                // 면 1초 grace 후 강제 종료. 데이터 보존보다 응답성 우선
+                // (사용자가 명시적으로 닫기를 요청한 시점이므로).
+                Thread.sleep(forTimeInterval: 1.0)
+                kill(pidToKill, SIGKILL)
+            }
+            if fdToClose >= 0 {
+                close(fdToClose)
+            }
         }
     }
 
