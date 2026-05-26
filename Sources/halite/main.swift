@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import HaliteControl
 import HaliteTerminal
 import SwiftUI
 
@@ -61,6 +62,8 @@ final class HaliteAppDelegate: NSObject, NSApplicationDelegate {
     /// 살아있는 윈도우 컨트롤러들. windowWillClose가 자기 자신을 빼서 release되도록.
     fileprivate var controllers: [HaliteWindowController] = []
     private var settingsWindow: NSWindow?
+    /// halite-cli 와의 IPC. 첫 윈도우 생성 후 bind.
+    private var controlSocket: ControlSocketServer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         spawnWindow()
@@ -70,6 +73,80 @@ final class HaliteAppDelegate: NSObject, NSApplicationDelegate {
             name: .haliteSettingsChanged,
             object: nil
         )
+        bindControlSocket()
+    }
+
+    // MARK: - halite-cli IPC
+
+    private func bindControlSocket() {
+        let server = ControlSocketServer()
+        do {
+            let path = try server.start(handler: { [weak self] cmd in
+                // handler는 worker thread에서 호출됨 → main으로 hop 후 결과 대기.
+                guard let self = self else { return .err("halite is shutting down") }
+                let sem = DispatchSemaphore(value: 0)
+                var resp: ControlResponse = .err("dispatch lost")
+                DispatchQueue.main.async {
+                    resp = self.dispatch(controlCommand: cmd)
+                    sem.signal()
+                }
+                let r = sem.wait(timeout: .now() + 2.0)
+                if r == .timedOut {
+                    return .err("timeout waiting for halite to process command")
+                }
+                return resp
+            })
+            self.controlSocket = server
+            NSLog("halite: control socket listening at %@", path)
+        } catch {
+            NSLog("halite: failed to bind control socket: %@", String(describing: error))
+        }
+    }
+
+    /// `dispatch` — main actor에서 호출됨. 모든 분기 동기 처리.
+    @MainActor
+    private func dispatch(controlCommand cmd: ControlCommand) -> ControlResponse {
+        switch cmd.kind {
+        case .newTab:
+            spawnWindow()
+            return .ok()
+        case .split:
+            // halite-swift는 single-pane 단계. 의미 있는 동작이 없으므로 명시적 에러.
+            return .err("split is not supported in halite-swift (single-pane only)")
+        case .closeTab:
+            if let win = NSApp.keyWindow ?? controllers.last?.window {
+                win.performClose(nil)
+                return .ok()
+            }
+            return .err("no active window to close")
+        case .switchTab(let index):
+            let tabs = currentTabbedWindows()
+            guard index >= 0, index < tabs.count else {
+                return .err("tab index \(index) out of range (have \(tabs.count) tabs)")
+            }
+            tabs[index].makeKeyAndOrderFront(nil)
+            return .ok()
+        case .listTabs:
+            let tabs = currentTabbedWindows()
+            let list = tabs.enumerated().map { (i, _) in
+                TabInfo(index: i, pane_count: 1)
+            }
+            return .tabs(list)
+        }
+    }
+
+    /// 현재 활성 탭 그룹의 윈도우 목록. 단일 윈도우면 [그 윈도우], 탭 그룹이면 .tabbedWindows.
+    @MainActor
+    private func currentTabbedWindows() -> [NSWindow] {
+        if let key = NSApp.keyWindow {
+            if let group = key.tabbedWindows { return group }
+            return [key]
+        }
+        if let first = controllers.first?.window {
+            if let group = first.tabbedWindows { return group }
+            return [first]
+        }
+        return []
     }
 
     @objc func showSettings(_ sender: Any?) {

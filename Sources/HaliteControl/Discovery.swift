@@ -1,0 +1,87 @@
+import Foundation
+#if canImport(Darwin)
+import Darwin
+#endif
+
+/// `runtimeDir()` — halite control socket이 사는 디렉토리.
+/// 우선순위:
+///   1. `$XDG_RUNTIME_DIR/halite`
+///   2. `$TMPDIR/halite-{uid}` (macOS 기본 — TMPDIR이 항상 set)
+///   3. `/tmp/halite-{uid}` (최후 fallback)
+/// Rust halite의 `runtime_dir`과 동일 (cross-impl 호환).
+public func haliteRuntimeDir() -> String {
+    let env = ProcessInfo.processInfo.environment
+    if let xdg = env["XDG_RUNTIME_DIR"], !xdg.isEmpty {
+        return (xdg as NSString).appendingPathComponent("halite")
+    }
+    let uid = getuid()
+    if let tmp = env["TMPDIR"], !tmp.isEmpty {
+        // TMPDIR은 보통 trailing slash 있음 — NSString이 정리.
+        return (tmp as NSString).appendingPathComponent("halite-\(uid)")
+    }
+    return "/tmp/halite-\(uid)"
+}
+
+/// 디스크에서 발견된 한 halite 인스턴스.
+public struct HaliteInstance: Sendable {
+    public let pid: Int
+    public let socketPath: String
+    public let mtime: Date?
+}
+
+/// 실행 중인 halite 인스턴스 목록 (newest first).
+/// "실행 중" = socket file 존재 + connect 시 즉시 `ECONNREFUSED`가 아님.
+public func listHaliteInstances() -> [HaliteInstance] {
+    let dir = haliteRuntimeDir()
+    let fm = FileManager.default
+    guard let names = try? fm.contentsOfDirectory(atPath: dir) else {
+        return []
+    }
+    var found: [HaliteInstance] = []
+    for name in names {
+        guard name.hasSuffix(".sock") else { continue }
+        let stem = String(name.dropLast(5))
+        guard let pid = Int(stem), pid > 0 else { continue }
+        let path = (dir as NSString).appendingPathComponent(name)
+        guard isSocketLive(path: path) else { continue }
+        let mtime = (try? fm.attributesOfItem(atPath: path))?[.modificationDate] as? Date
+        found.append(HaliteInstance(pid: pid, socketPath: path, mtime: mtime))
+    }
+    found.sort { (a, b) in
+        let am = a.mtime ?? .distantPast
+        let bm = b.mtime ?? .distantPast
+        return am > bm
+    }
+    return found
+}
+
+public struct PickSocketError: Error, CustomStringConvertible, Equatable, Sendable {
+    public let message: String
+    public init(_ m: String) { self.message = m }
+    public var description: String { message }
+}
+
+/// `--pid`가 주어지면 해당 인스턴스, 없으면 가장 최근 mtime의 인스턴스.
+public func pickHaliteSocket(pid: Int?) -> Result<String, PickSocketError> {
+    let instances = listHaliteInstances()
+    if let want = pid {
+        if let m = instances.first(where: { $0.pid == want }) {
+            return .success(m.socketPath)
+        }
+        return .failure(PickSocketError("no halite instance with pid \(want)"))
+    }
+    if let first = instances.first {
+        return .success(first.socketPath)
+    }
+    return .failure(PickSocketError(
+        "no running halite instance found (try `halite-cli --list-instances`)"
+    ))
+}
+
+/// connect를 시도해 본 후 즉시 끊는다. 살아있으면 true.
+public func isSocketLive(path: String) -> Bool {
+    let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+    guard fd >= 0 else { return false }
+    defer { close(fd) }
+    return bindOrConnectUnix(fd: fd, path: path, listen: false) == nil
+}
