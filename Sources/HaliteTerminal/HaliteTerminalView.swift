@@ -687,8 +687,13 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
         // 잡아두므로 스크롤 자체가 발생하면 안 되고, 우리가 강제로 호출하면
         // 매 cursor move마다 화면이 튐.
         if !grid.isAltScreenActive {
-            // scrollToEndOfDocument()는 x도 함께 "end"로 옮겨서 column 0이 좌측으로
-            // 밀려나는 경우가 있음. x는 0으로 고정, y만 bottom으로.
+            // NSTextView는 setAttributedString 직후에도 frame.height 갱신이 비동기적
+            // 일 수 있어서, 그대로 docHeight 읽으면 stale 값으로 yMax가 부족해짐
+            // → 화면 바닥이 가려진 채 그 다음 keystroke의 render에서야 따라잡힘.
+            // ensureLayout으로 강제 동기 layout 후 frame.height 읽음.
+            if let container = textView.textContainer {
+                textView.layoutManager?.ensureLayout(for: container)
+            }
             let docHeight = textView.frame.height
             let visHeight = scrollView.contentView.bounds.height
             let yMax = max(0, docHeight - visHeight)
