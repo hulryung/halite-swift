@@ -109,11 +109,83 @@ halite-cli --list-instances
 MARKETING_VERSION=0.2.0 BUILD_NUMBER=20260526 ./scripts/release.sh
 ```
 
+## Sparkle 자동업데이트
+
+`.app`은 SPUStandardUpdaterController로 부팅 시 자동으로 업데이트 체크.
+사용자는 App 메뉴 → "Check for Updates…"로 즉시 체크 가능.
+
+### 1회성: EdDSA 키 발급
+
+```sh
+./scripts/sparkle-keygen.sh
+# 출력 예: rxFA7zVTQNxX1cd...= (base64 public key)
+```
+
+이 public key 문자열을 `SPARKLE_PUBLIC_KEY` env에 넣어두면 build-app.sh가
+Info.plist의 `SUPublicEDKey`로 자동 박는다. private key는 macOS keychain에
+저장된 상태로 유지 (`security find-generic-password -s "https://sparkle-project.org" -a ed25519`).
+
+### 릴리즈할 때
+
+```sh
+export SPARKLE_PUBLIC_KEY='rxFA7zVTQNxX1cd...='
+MARKETING_VERSION=0.1.0 ./scripts/release.sh
+./scripts/sparkle-appcast.sh \
+    --dmg dist/Halite-0.1.0.dmg \
+    --version 0.1.0 \
+    --build 1 \
+    --url 'https://github.com/hulryung/halite-swift/releases/download/v0.1.0/Halite-0.1.0.dmg' \
+    > /tmp/entry.xml
+python3 .github/scripts/insert-appcast-entry.py appcast.xml /tmp/entry.xml > appcast.new.xml
+mv appcast.new.xml appcast.xml
+git add appcast.xml && git commit -m "appcast 0.1.0"
+git tag v0.1.0 && git push --tags
+gh release create v0.1.0 dist/Halite-0.1.0.dmg
+```
+
+`SUFeedURL`이 `https://raw.githubusercontent.com/.../main/appcast.xml`로
+박혀 있어서, appcast.xml 커밋이 main에 push되면 다음 백그라운드 체크에서
+사용자에게 알림이 뜬다.
+
+## GitHub Actions 자동 릴리즈
+
+`.github/workflows/release.yml` — `v*` 태그 push 시 자동으로 모든 단계 실행
+(빌드 → 사인 → 노타라이즈 → .dmg → appcast 갱신 → GitHub Release 생성).
+
+### 필요한 secrets (Settings → Secrets and variables → Actions)
+
+| 키 | 설명 |
+|---|---|
+| `APPLE_CERTIFICATE_BASE64` | Developer ID Application `.p12`를 `base64 -i cert.p12` |
+| `APPLE_CERTIFICATE_PASSWORD` | `.p12` import 시 사용한 password |
+| `APPLE_SIGNING_IDENTITY` | `"Developer ID Application: Your Name (TEAMID)"` |
+| `APPLE_ID` | Apple ID 이메일 |
+| `APPLE_APP_SPECIFIC_PASSWORD` | appleid.apple.com 발급 |
+| `APPLE_TEAM_ID` | `ABCDE12345` |
+| `SPARKLE_PUBLIC_KEY` | base64 EdDSA public key (sparkle-keygen.sh 출력) |
+| `SPARKLE_PRIVATE_KEY` | base64 EdDSA private key (keychain export) |
+
+private key export 방법:
+```sh
+security find-generic-password -s "https://sparkle-project.org" -a ed25519 -w \
+  | base64
+# 이 출력을 SPARKLE_PRIVATE_KEY secret에 붙여넣음.
+```
+
+### 사용
+
+```sh
+git tag v0.1.0
+git push --tags
+# Actions가 자동 실행됨. 진행 상황: gh run watch
+```
+
+수동 트리거도 가능: Actions 탭 → "release" workflow → "Run workflow" → version 입력.
+
 ## 알려진 제한
 
 - **Universal binary 미지원** — 현재 빌드 머신 아키텍처(arm64 또는 x86_64)만.
-  CI에서 `swift build --arch arm64 --arch x86_64` + `lipo`로 합치는 단계는
-  C4 후속 작업.
-- **Sparkle 미통합** — 자동 업데이트는 별도 작업.
+  CI도 arm64(macos-14)에서만 돌아감. Intel 사용자도 지원하려면
+  `swift build --arch arm64 --arch x86_64` + `lipo`로 합치는 단계 필요.
 - **App icon 미적용** — `Resources/Halite.icns` 추가하면 자동으로 번들에
   포함되도록 build-app.sh가 미리 처리해 둠.

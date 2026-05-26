@@ -34,5 +34,17 @@
 	<string>NSApplication</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>halite-swift contributors. MIT licensed.</string>
+
+	<!-- Sparkle 자동업데이트 -->
+	<key>SUFeedURL</key>
+	<string>https://raw.githubusercontent.com/hulryung/halite-swift/main/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>__SPARKLE_PUBLIC_KEY__</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUEnableInstallerLauncherService</key>
+	<true/>
+	<key>SUScheduledCheckInterval</key>
+	<integer>86400</integer>
 </dict>
 </plist>

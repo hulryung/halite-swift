@@ -28,6 +28,12 @@ let package = Package(
             targets: ["halite-cli"]
         ),
     ],
+    dependencies: [
+        // Sparkle 자동업데이트 — Developer ID 서명된 .app 한정으로 동작.
+        // EdDSA 키페어는 scripts/sparkle-keygen.sh로 1회 생성 후 Info.plist의
+        // SUPublicEDKey에 박힘. 자세한 절차는 docs/RELEASE.md 참조.
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0"),
+    ],
     targets: [
         .target(
             name: "HaliteTerminal",
@@ -40,7 +46,11 @@ let package = Package(
         ),
         .executableTarget(
             name: "halite",
-            dependencies: ["HaliteTerminal", "HaliteControl"],
+            dependencies: [
+                "HaliteTerminal",
+                "HaliteControl",
+                .product(name: "Sparkle", package: "Sparkle"),
+            ],
             path: "Sources/halite"
         ),
         .executableTarget(

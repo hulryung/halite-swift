@@ -74,6 +74,8 @@ final class HaliteAppDelegate: NSObject, NSApplicationDelegate {
             object: nil
         )
         bindControlSocket()
+        // Sparkle은 lazy init — 첫 access 시점에 자동 시작.
+        _ = HaliteUpdater.shared
     }
 
     // MARK: - halite-cli IPC
@@ -218,6 +220,15 @@ func installMainMenu() {
         action: #selector(HaliteAppDelegate.showSettings(_:)),
         keyEquivalent: ","
     )
+    appMenu.addItem(NSMenuItem.separator())
+    // Sparkle 자동업데이트 — target은 SPUStandardUpdaterController 자체.
+    let updateItem = NSMenuItem(
+        title: "Check for Updates…",
+        action: NSSelectorFromString("checkForUpdates:"),
+        keyEquivalent: ""
+    )
+    updateItem.target = HaliteUpdater.shared.target
+    appMenu.addItem(updateItem)
     appMenu.addItem(NSMenuItem.separator())
     appMenu.addItem(
         withTitle: "Quit halite",

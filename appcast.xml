@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Sparkle appcast — halite-swift 자동업데이트 채널.
+    릴리즈 시 scripts/sparkle-appcast.sh가 생성한 <item> 블록이 가장 최근 순으로
+    여기 추가됨. 첫 정식 릴리즈 전까지는 빈 상태로 둠.
+-->
+<rss version="2.0"
+     xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"
+     xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <channel>
+        <title>halite-swift</title>
+        <link>https://github.com/hulryung/halite-swift</link>
+        <description>halite-swift release feed</description>
+        <language>en</language>
+    </channel>
+</rss>

@@ -44,8 +44,29 @@ if [[ -z "${APPLE_SIGNING_IDENTITY:-}" ]]; then
     exit 1
 fi
 
-echo "==> codesign nested CLI"
-# nested executable 먼저 (deep signing의 inner-to-outer 규칙).
+echo "==> codesign nested executables + frameworks (inner → outer)"
+
+# Sparkle.framework — inner XPC services 먼저, 다음 본체.
+SPARKLE_FW="$APP/Contents/Frameworks/Sparkle.framework"
+if [[ -d "$SPARKLE_FW" ]]; then
+    # XPC services. Sparkle 2.x는 Autoupdate + Installer 2개를 둠.
+    while IFS= read -r -d '' xpc; do
+        echo "  + $xpc"
+        codesign --force --options runtime --timestamp \
+            --sign "$APPLE_SIGNING_IDENTITY" "$xpc"
+    done < <(find "$SPARKLE_FW" -name "*.xpc" -type d -print0)
+    # Autoupdate.app(스파클 인스톨러) — 있는 경우.
+    while IFS= read -r -d '' nested; do
+        echo "  + $nested"
+        codesign --force --options runtime --timestamp \
+            --sign "$APPLE_SIGNING_IDENTITY" "$nested"
+    done < <(find "$SPARKLE_FW/Versions/Current/Resources" -name "*.app" -type d -print0 2>/dev/null)
+    # Sparkle.framework 본체.
+    codesign --force --options runtime --timestamp \
+        --sign "$APPLE_SIGNING_IDENTITY" "$SPARKLE_FW"
+fi
+
+# halite-cli — nested executable.
 codesign --force --options runtime --timestamp \
     --entitlements "$ENTITLEMENTS" \
     --sign "$APPLE_SIGNING_IDENTITY" \

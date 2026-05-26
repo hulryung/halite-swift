@@ -61,14 +61,32 @@ chmod 0755 "$MACOS_DIR/halite"
 cp "$CLI_BIN" "$RESOURCES_DIR/halite-cli"
 chmod 0755 "$RESOURCES_DIR/halite-cli"
 
+# Sparkle.framework — SwiftPM이 .app으로 자동 번들 안 하므로 직접 복사.
+# release dir에 SwiftPM이 link 시점에 복사해 둠 (RPATH가 @executable_path/../Frameworks).
+SPARKLE_FW="$BIN_DIR/Sparkle.framework"
+if [[ -d "$SPARKLE_FW" ]]; then
+    FRAMEWORKS_DIR="$CONTENTS/Frameworks"
+    mkdir -p "$FRAMEWORKS_DIR"
+    # -R로 심볼릭 링크(Versions/Current → A, Sparkle → Versions/Current/Sparkle 등) 보존.
+    cp -R "$SPARKLE_FW" "$FRAMEWORKS_DIR/Sparkle.framework"
+    # XPC services (autoupdate + installer-launcher) — 이미 .framework 안에 있음.
+    # 추가 작업 필요 없음.
+else
+    echo "warning: $SPARKLE_FW 없음 — 자동업데이트 동작 안 함. swift build 결과 확인" >&2
+fi
+
 # Info.plist — 토큰 치환.
 TEMPLATE="$REPO_ROOT/Resources/Info.plist.template"
 if [[ ! -f "$TEMPLATE" ]]; then
     echo "error: missing $TEMPLATE" >&2
     exit 1
 fi
+# Sparkle 공개키 — 1회성으로 생성한 EdDSA public key를 env로 받음.
+# 없으면 placeholder 토큰을 그대로 둬서 자동업데이트는 동작 안 함 (dev 빌드 OK).
+SPARKLE_KEY="${SPARKLE_PUBLIC_KEY:-__SPARKLE_PUBLIC_KEY__}"
 sed -e "s|__MARKETING_VERSION__|$MARKETING_VERSION|g" \
     -e "s|__BUILD_NUMBER__|$BUILD_NUMBER|g" \
+    -e "s|__SPARKLE_PUBLIC_KEY__|$SPARKLE_KEY|g" \
     "$TEMPLATE" > "$CONTENTS/Info.plist"
 
 # 향후 아이콘: $REPO/Resources/Halite.icns가 있으면 복사.
