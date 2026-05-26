@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- 터미널 앱은 임의 프로세스(shell, vim, claude, ...)를 spawn해야 하므로
+	     App Sandbox를 켜지 않는다. Hardened Runtime은 codesign --options runtime으로
+	     활성화하되, 다음 예외만 둠. -->
+
+	<!-- 자식 process를 통해 임의 사용자 코드(shell rc, brew bin, etc) 실행을
+	     허가받아야 함. Hardened Runtime의 기본 정책은 이를 막는다. -->
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+
+	<!-- 사용자가 PATH 어디에 둔 명령(non-Apple 서명)도 실행 가능하도록. -->
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+
+	<!-- AppleEvents (osascript 등) — 디버그 시 자기 자신을 osascript로 만지는
+	     workflow가 있으므로 허용. -->
+	<key>com.apple.security.cs.allow-jit</key>
+	<false/>
+
+	<!-- 명시적으로 sandboxing 꺼둠 (없으면 false가 default이지만 의도를 못박음). -->
+	<key>com.apple.security.app-sandbox</key>
+	<false/>
+</dict>
+</plist>
