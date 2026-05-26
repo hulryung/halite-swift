@@ -7,6 +7,7 @@ struct HaliteSettingsView: View {
     @AppStorage("halite.fontSize") private var fontSize: Double = 13
     @AppStorage("halite.fontFamily") private var fontFamily: String = "Menlo"
     @AppStorage("halite.scrollbackLines") private var scrollbackLines: Int = 10_000
+    @AppStorage("halite.tabBarStyle") private var tabBarStyleRaw: String = TabBarStyle.compact.rawValue
 
     var body: some View {
         Form {
@@ -33,13 +34,21 @@ struct HaliteSettingsView: View {
                     }
                 }
             }
+            Section("Window") {
+                Picker("Tab Bar", selection: $tabBarStyleRaw) {
+                    ForEach(TabBarStyle.allCases, id: \.rawValue) { style in
+                        Text(style.displayName).tag(style.rawValue)
+                    }
+                }
+            }
         }
         .formStyle(.grouped)
         .padding()
-        .frame(width: 420, height: 280)
+        .frame(width: 460, height: 360)
         .onChange(of: fontSize) { _ in postChanged() }
         .onChange(of: fontFamily) { _ in postChanged() }
         .onChange(of: scrollbackLines) { _ in postChanged() }
+        .onChange(of: tabBarStyleRaw) { _ in postChanged() }
     }
 
     private func postChanged() {

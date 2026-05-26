@@ -300,9 +300,25 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
         if lastReportedSize?.cols == cols && lastReportedSize?.rows == rows {
             return
         }
-        lastReportedSize = (cols, rows)
-        session.resize(cols: cols, rows: rows)
+        // 모드 전환 / appearance 변경 / styleMask 변경 등으로 짧은 시간 내에 layout이
+        // 여러 번 fire 될 때, 그 cascade 중간의 transient size까지 매번 PTY로
+        // 보내면 셸이 매번 SIGWINCH를 받고 prompt가 폭발적으로 누적된다. 짧은
+        // debounce로 마지막 stable size만 한 번 전달.
+        pendingResize = (cols, rows)
+        resizeDebounceItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self = self, let pending = self.pendingResize else { return }
+            self.pendingResize = nil
+            self.lastReportedSize = pending
+            self.session.resize(cols: pending.cols, rows: pending.rows)
+        }
+        resizeDebounceItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08, execute: item)
     }
+
+    /// resize debounce 상태.
+    private var pendingResize: (cols: Int, rows: Int)?
+    private var resizeDebounceItem: DispatchWorkItem?
 
     /// macOS 네이티브 윈도우 탭 바가 실제로 차지하는 높이 — 탭이 추가되면 macOS는
     /// `window.frame.height`를 이만큼 줄여서 탭바 공간을 만든다. 측정값: 600 → 564 = 36pt.

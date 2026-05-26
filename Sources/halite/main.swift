@@ -16,6 +16,7 @@ AppBundleTrampoline.relaunchInAppBundleIfNeeded()
 final class HaliteWindowController: NSWindowController, NSWindowDelegate {
     let session: HaliteSession
     private var titleSubscription: AnyCancellable?
+    private var tabStyleApplier: TabBarStyleApplier?
 
     init(session: HaliteSession) {
         self.session = session
@@ -47,6 +48,14 @@ final class HaliteWindowController: NSWindowController, NSWindowDelegate {
                 let display = newTitle.isEmpty ? "halite" : newTitle
                 self?.window?.title = display
             }
+        // 사용자가 Settings에서 고른 탭 스타일 적용. 초기값은 TabBarStyle.current.
+        let applier = TabBarStyleApplier(window: window)
+        applier.apply(TabBarStyle.current)
+        self.tabStyleApplier = applier
+    }
+
+    func applyTabBarStyle(_ style: TabBarStyle) {
+        tabStyleApplier?.apply(style)
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -172,8 +181,10 @@ final class HaliteAppDelegate: NSObject, NSApplicationDelegate {
     @objc private func settingsChanged(_ note: Notification) {
         // 활성 세션 전체에 새 config 푸시.
         let newConfig = HaliteConfig.fromUserDefaults()
+        let newTabStyle = TabBarStyle.current
         for c in controllers {
             c.session.updateConfig(newConfig)
+            c.applyTabBarStyle(newTabStyle)
         }
     }
 
