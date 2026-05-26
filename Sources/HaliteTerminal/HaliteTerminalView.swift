@@ -96,6 +96,12 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
         scroll.borderType = .noBorder
         scroll.autoresizingMask = [.width, .height]
         scroll.drawsBackground = false
+        // Big Sur+ NSScrollView가 system chrome(타이틀바 등)에 맞춰 자동으로
+        // contentInsets를 추가하는데, 우리 터미널은 cell-grid 정렬이라 이 inset이
+        // 들어가면 leftmost / topmost column이 일부 가려짐. 명시적으로 끔.
+        scroll.automaticallyAdjustsContentInsets = false
+        scroll.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
+        scroll.scrollerInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
 
         let tv = PassiveTextView(frame: .zero)
         tv.isEditable = false
@@ -109,14 +115,14 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
         tv.autoresizingMask = [.width]
         tv.textContainerInset = NSSize(width: 4, height: 4)
 
-        // 줄 자동 wrap을 끔. 셀 단위 격자에서는 wrap이 시각 라인 수를 늘려
-        // scrollToEnd가 위쪽을 잘라낸 화면을 보여주는 원인이 됨.
-        tv.isHorizontallyResizable = true
-        tv.textContainer?.widthTracksTextView = false
-        tv.textContainer?.containerSize = NSSize(
-            width: CGFloat.greatestFiniteMagnitude,
-            height: CGFloat.greatestFiniteMagnitude
-        )
+        // textView 너비를 scrollView의 가시 영역에 묶고, wrap 없이 초과분은 clip.
+        // 트랙패드 좌우 스와이프로 빈 공간이 드러나는 문제 방지.
+        tv.isHorizontallyResizable = false
+        tv.textContainer?.widthTracksTextView = true
+        tv.textContainer?.heightTracksTextView = false
+        // 기본 5pt의 line fragment padding을 제거. 이게 있으면 모든 줄의 시작이
+        // textContainerInset 너머로 추가 5pt 들여 써져서 cell 정렬과 어긋남.
+        tv.textContainer?.lineFragmentPadding = 0
 
         scroll.documentView = tv
 
@@ -149,18 +155,35 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
         reportSizeIfChanged()
     }
 
+    /// NSTextView가 실제 layout에서 사용하는 1줄 높이를 측정. `defaultLineHeight`보다
+    /// 정확함 (typesetter / leading 등의 미세 차이까지 반영).
+    private func measuredLineHeight(font: NSFont) -> CGFloat {
+        let lm = NSLayoutManager()
+        let storage = NSTextStorage(string: "M\nM\nM", attributes: [.font: font])
+        storage.addLayoutManager(lm)
+        let container = NSTextContainer(size: NSSize(width: 10000, height: 10000))
+        lm.addTextContainer(container)
+        lm.ensureLayout(for: container)
+        let height = lm.usedRect(for: container).height
+        return height / 3.0
+    }
+
     private func reportSizeIfChanged() {
         guard bounds.width > 0, bounds.height > 0 else { return }
         let font = textView.font ?? NSFont.userFixedPitchFont(ofSize: session.config.fontSize)
             ?? NSFont.systemFont(ofSize: session.config.fontSize)
         let glyphSize = ("M" as NSString).size(withAttributes: [.font: font])
-        let lineHeight = NSLayoutManager().defaultLineHeight(for: font)
         let cellW = max(glyphSize.width, 1)
-        let cellH = max(lineHeight, 1)
+        // NSLayoutManager().defaultLineHeight는 NSTextView가 실제 쓰는 line height와
+        // 미세하게 다른 경우가 있어 rows가 over-report됨. 실제 layout 결과로 측정.
+        let cellH = max(measuredLineHeight(font: font), 1)
         cellMetrics = (cellW, cellH)
         let inset = textView.textContainerInset
-        let usableW = bounds.width - inset.width * 2
-        let usableH = bounds.height - inset.height * 2
+        // width: bounds.width 대신 scrollView.contentSize.width — vertical scroller가
+        // 항상 보이는 시스템 설정에서 ~15pt 차지하기 때문.
+        // height: 가로 스크롤바는 없으니 bounds.height 그대로 사용.
+        let usableW = max(scrollView.contentSize.width - inset.width * 2, 1)
+        let usableH = max(bounds.height - inset.height * 2, 1)
         let cols = max(Int(floor(usableW / cellW)), 1)
         let rows = max(Int(floor(usableH / cellH)), 1)
         if lastReportedSize?.cols == cols && lastReportedSize?.rows == rows {
@@ -664,7 +687,13 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
         // 잡아두므로 스크롤 자체가 발생하면 안 되고, 우리가 강제로 호출하면
         // 매 cursor move마다 화면이 튐.
         if !grid.isAltScreenActive {
-            textView.scrollToEndOfDocument(nil)
+            // scrollToEndOfDocument()는 x도 함께 "end"로 옮겨서 column 0이 좌측으로
+            // 밀려나는 경우가 있음. x는 0으로 고정, y만 bottom으로.
+            let docHeight = textView.frame.height
+            let visHeight = scrollView.contentView.bounds.height
+            let yMax = max(0, docHeight - visHeight)
+            scrollView.contentView.scroll(to: NSPoint(x: 0, y: yMax))
+            scrollView.reflectScrolledClipView(scrollView.contentView)
         }
     }
 

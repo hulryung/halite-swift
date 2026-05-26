@@ -1,7 +1,6 @@
 import AppKit
 import Combine
 import HaliteTerminal
-import SwiftUI
 
 // 독립 halite.app의 진입점.
 // SwiftPM 실행: `swift run halite`
@@ -18,9 +17,6 @@ final class HaliteWindowController: NSWindowController, NSWindowDelegate {
 
     init(session: HaliteSession) {
         self.session = session
-        let contentView = HaliteTerminalView(session: session)
-            .frame(minWidth: 720, minHeight: 480)
-        let hostingController = NSHostingController(rootView: contentView)
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
             styleMask: [.titled, .closable, .resizable, .miniaturizable],
@@ -28,7 +24,14 @@ final class HaliteWindowController: NSWindowController, NSWindowDelegate {
             defer: false
         )
         window.title = "halite"
-        window.contentViewController = hostingController
+        // SwiftUI NSHostingController 우회 — SwiftUI hosting layer가 leading edge에
+        // 미세한 inset을 추가해서 cell-grid 첫 column이 가려지는 문제가 있음.
+        // halite.app은 cmux integration용 SwiftUI API를 안 거치고 직접 NSView 사용.
+        let surface = HaliteSurfaceView(session: session)
+        surface.translatesAutoresizingMaskIntoConstraints = true
+        surface.autoresizingMask = [.width, .height]
+        window.contentView = surface
+        window.contentMinSize = NSSize(width: 320, height: 200)
         window.center()
         super.init(window: window)
         window.delegate = self
