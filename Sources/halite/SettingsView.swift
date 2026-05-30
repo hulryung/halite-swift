@@ -10,6 +10,7 @@ struct HaliteSettingsView: View {
     @AppStorage("halite.tabBarStyle") private var tabBarStyleRaw: String = TabBarStyle.compact.rawValue
     @AppStorage("halite.imeStyle") private var imeStyleRaw: String = IMECompositionStyle.none.rawValue
     @AppStorage("halite.theme") private var themeName: String = HaliteTheme.defaultDark.name
+    @AppStorage("halite.autoUpdate") private var autoUpdate: Bool = false
 
     private let nerdFonts = FontDiscovery.nerdFontFamilies()
     private let regularFonts = FontDiscovery.regularMonospaceFamilies()
@@ -89,6 +90,12 @@ struct HaliteSettingsView: View {
                     }
                 }
             }
+            Section("Updates") {
+                Toggle("Automatic Updates", isOn: $autoUpdate)
+                Text("켜면 백그라운드에서 새 버전을 확인합니다. \"Check for Updates…\"로 언제든 수동 확인 가능.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
         }
         .formStyle(.grouped)
         .padding()
@@ -99,6 +106,10 @@ struct HaliteSettingsView: View {
         .onChange(of: tabBarStyleRaw) { _ in postChanged() }
         .onChange(of: imeStyleRaw) { _ in postChanged() }
         .onChange(of: themeName) { _ in postChanged() }
+        .onChange(of: autoUpdate) { _ in
+            // Sparkle updater에 즉시 반영 (config hot-reload 경로와 별개).
+            HaliteUpdater.shared.applyAutomaticChecksSetting()
+        }
     }
 
     private func postChanged() {
