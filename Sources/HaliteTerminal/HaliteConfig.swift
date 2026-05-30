@@ -21,12 +21,15 @@ public enum IMECompositionStyle: String, Codable, CaseIterable, Sendable {
 public struct HaliteConfig {
     public var fontFamily: String
     public var fontSize: CGFloat
-    public var backgroundColor: NSColor
-    public var foregroundColor: NSColor
-    public var palette: [Int: NSColor]
+    public var theme: HaliteTheme
     public var scrollbackBytes: Int
     public var scrollbackLines: Int
     public var imeStyle: IMECompositionStyle
+
+    // 색은 theme에서 파생 — 기존 호출처 호환용 computed property.
+    public var backgroundColor: NSColor { theme.background }
+    public var foregroundColor: NSColor { theme.foreground }
+    public var cursorColor: NSColor { theme.cursor }
 
     // PTY spawn
     public var argv: [String]
@@ -36,9 +39,7 @@ public struct HaliteConfig {
     public init(
         fontFamily: String = "Menlo",
         fontSize: CGFloat = 13,
-        backgroundColor: NSColor = NSColor.black,
-        foregroundColor: NSColor = NSColor.white,
-        palette: [Int: NSColor] = [:],
+        theme: HaliteTheme = .defaultDark,
         scrollbackBytes: Int = 10_000_000,
         scrollbackLines: Int = 10_000,
         imeStyle: IMECompositionStyle = .none,
@@ -48,9 +49,7 @@ public struct HaliteConfig {
     ) {
         self.fontFamily = fontFamily
         self.fontSize = fontSize
-        self.backgroundColor = backgroundColor
-        self.foregroundColor = foregroundColor
-        self.palette = palette
+        self.theme = theme
         self.scrollbackBytes = scrollbackBytes
         self.scrollbackLines = scrollbackLines
         self.imeStyle = imeStyle

@@ -4,7 +4,7 @@ import XCTest
 
 final class GridTests: XCTestCase {
     private func makeGrid(cols: Int = 8, rows: Int = 4) -> Grid {
-        Grid(cols: cols, rows: rows, pen: CellAttrs(fg: .white))
+        Grid(cols: cols, rows: rows, pen: CellAttrs(fg: .default))
     }
 
     private func write(_ g: Grid, _ s: String) {
@@ -222,10 +222,16 @@ final class GridTests: XCTestCase {
 
     func testSGRResetRestoresDefaultPen() {
         let g = makeGrid()
-        g.applySGR([31]) // red
-        XCTAssertEqual(g.pen.fg, Palette.normal16[1])
+        g.applySGR([31]) // red → palette(1)
+        XCTAssertEqual(g.pen.fg, .palette(1))
         g.applySGR([0])
         XCTAssertEqual(g.pen.fg, g.defaultPen.fg)
+    }
+
+    func testSGRBrightFGMapsToPaletteIndex8Plus() {
+        let g = makeGrid()
+        g.applySGR([91]) // bright red → palette(9)
+        XCTAssertEqual(g.pen.fg, .palette(9))
     }
 
     func testSGRBoldAndReset() {
@@ -238,22 +244,36 @@ final class GridTests: XCTestCase {
 
     func testSGR256ColorFG() {
         let g = makeGrid()
-        g.applySGR([38, 5, 196]) // 256-color red-ish
-        let expected = Palette.color256(196)
-        XCTAssertEqual(g.pen.fg, expected)
+        g.applySGR([38, 5, 196]) // 256-color index
+        XCTAssertEqual(g.pen.fg, .palette(196))
     }
 
     func testSGRTruecolorBG() {
         let g = makeGrid()
         g.applySGR([48, 2, 10, 20, 30])
-        XCTAssertEqual(g.pen.bg, Palette.rgb(10, 20, 30))
+        XCTAssertEqual(g.pen.bg, .rgb(10, 20, 30))
     }
 
     func testPenAppliesToNewCells() {
         let g = makeGrid()
         g.applySGR([31])
         g.putChar("X")
-        XCTAssertEqual(g.cell(row: 0, col: 0).attrs.fg, Palette.normal16[1])
+        XCTAssertEqual(g.cell(row: 0, col: 0).attrs.fg, .palette(1))
+    }
+
+    // 테마 resolve — 같은 grid를 다른 테마로 그리면 indexed 색은 달라지고
+    // truecolor는 동일.
+    func testThemeResolvesIndexedDifferentlyButRGBSame() {
+        let indexed = CellAttrs(fg: .palette(1))
+        let truecolor = CellAttrs(fg: .rgb(10, 20, 30))
+        let dark = HaliteTheme.defaultDark
+        let dracula = HaliteTheme.dracula
+        // indexed: 테마마다 ANSI red가 다름.
+        XCTAssertNotEqual(indexed.resolvedColors(theme: dark).fg,
+                          indexed.resolvedColors(theme: dracula).fg)
+        // truecolor: 절대값이라 테마 무관.
+        XCTAssertEqual(truecolor.resolvedColors(theme: dark).fg,
+                       truecolor.resolvedColors(theme: dracula).fg)
     }
 
     // MARK: resize (M3.3)
@@ -623,7 +643,7 @@ final class GridTests: XCTestCase {
         XCTAssertEqual(g.cursorRow, 2)
         XCTAssertEqual(g.cursorCol, 4)
         // pen도 복원
-        XCTAssertEqual(g.pen.fg, Palette.normal16[1]) // red
+        XCTAssertEqual(g.pen.fg, .palette(1)) // red
     }
 
     func testRestoreCursorWithoutSaveIsNoOp() {

@@ -9,6 +9,7 @@ struct HaliteSettingsView: View {
     @AppStorage("halite.scrollbackLines") private var scrollbackLines: Int = 10_000
     @AppStorage("halite.tabBarStyle") private var tabBarStyleRaw: String = TabBarStyle.compact.rawValue
     @AppStorage("halite.imeStyle") private var imeStyleRaw: String = IMECompositionStyle.none.rawValue
+    @AppStorage("halite.theme") private var themeName: String = HaliteTheme.defaultDark.name
 
     private let nerdFonts = FontDiscovery.nerdFontFamilies()
     private let regularFonts = FontDiscovery.regularMonospaceFamilies()
@@ -55,6 +56,25 @@ struct HaliteSettingsView: View {
                     }
                 }
             }
+            Section("Theme") {
+                Picker("Color Theme", selection: $themeName) {
+                    ForEach(HaliteTheme.presets, id: \.name) { theme in
+                        Text(theme.name).tag(theme.name)
+                    }
+                }
+                // 미리보기 — 선택된 테마의 배경 위에 ANSI 8색 샘플.
+                if let theme = HaliteTheme.preset(named: themeName) {
+                    HStack(spacing: 0) {
+                        ForEach(0..<8, id: \.self) { i in
+                            Color(nsColor: theme.ansi[i])
+                                .frame(width: 22, height: 18)
+                        }
+                    }
+                    .padding(4)
+                    .background(Color(nsColor: theme.background))
+                    .cornerRadius(4)
+                }
+            }
             Section("Window") {
                 Picker("Tab Bar", selection: $tabBarStyleRaw) {
                     ForEach(TabBarStyle.allCases, id: \.rawValue) { style in
@@ -72,12 +92,13 @@ struct HaliteSettingsView: View {
         }
         .formStyle(.grouped)
         .padding()
-        .frame(width: 460, height: 360)
+        .frame(width: 460, height: 480)
         .onChange(of: fontSize) { _ in postChanged() }
         .onChange(of: fontFamily) { _ in postChanged() }
         .onChange(of: scrollbackLines) { _ in postChanged() }
         .onChange(of: tabBarStyleRaw) { _ in postChanged() }
         .onChange(of: imeStyleRaw) { _ in postChanged() }
+        .onChange(of: themeName) { _ in postChanged() }
     }
 
     private func postChanged() {
@@ -107,6 +128,10 @@ extension HaliteConfig {
         if let raw = d.string(forKey: "halite.imeStyle"),
            let style = IMECompositionStyle(rawValue: raw) {
             config.imeStyle = style
+        }
+        if let themeName = d.string(forKey: "halite.theme"),
+           let theme = HaliteTheme.preset(named: themeName) {
+            config.theme = theme
         }
         // 새 터미널의 시작 디렉토리는 사용자의 홈 디렉토리. 그렇지 않으면 halite를 띄운
         // working directory(예: Xcode 빌드, /tmp, 어딘가에서 cmd 실행)가 그대로 상속되어

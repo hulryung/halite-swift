@@ -48,7 +48,7 @@ public final class HaliteSession: ObservableObject {
         self.grid = Grid(
             cols: 80,
             rows: 24,
-            pen: CellAttrs(fg: config.foregroundColor)
+            pen: CellAttrs(fg: .default)
         )
         self.grid.maxScrollbackLines = config.scrollbackLines
 
@@ -129,7 +129,7 @@ public final class HaliteSession: ObservableObject {
             // OSC 4 ; index ; spec — query if spec == "?"
             guard oscParams.count >= 3, oscParams[2] == "?",
                   let index = Int(oscParams[1]), (0...15).contains(index) else { return }
-            let color = index < 8 ? Palette.normal16[index] : Palette.bright16[index - 8]
+            let color = config.theme.paletteColor(index)
             respondToOSCColorQuery(kind: "4", index: index, color: color)
         case "10":
             // OSC 10 ; ? — query default fg

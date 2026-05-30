@@ -498,7 +498,7 @@ public final class Grid {
             case 24: pen.underline = false
             case 27: pen.inverse = false
             case 30...37:
-                pen.fg = Palette.normal16[p - 30]
+                pen.fg = .palette(p - 30)
             case 38:
                 if let (color, skip) = extendedColor(params: params, from: i + 1) {
                     pen.fg = color
@@ -507,7 +507,7 @@ public final class Grid {
             case 39:
                 pen.fg = defaultPen.fg
             case 40...47:
-                pen.bg = Palette.normal16[p - 40]
+                pen.bg = .palette(p - 40)
             case 48:
                 if let (color, skip) = extendedColor(params: params, from: i + 1) {
                     pen.bg = color
@@ -516,9 +516,9 @@ public final class Grid {
             case 49:
                 pen.bg = nil
             case 90...97:
-                pen.fg = Palette.bright16[p - 90]
+                pen.fg = .palette(p - 90 + 8)   // bright 8-15
             case 100...107:
-                pen.bg = Palette.bright16[p - 100]
+                pen.bg = .palette(p - 100 + 8)
             default:
                 break
             }
@@ -528,18 +528,18 @@ public final class Grid {
     }
 
     /// `38;5;n` 또는 `38;2;r;g;b` 파싱. (색, 추가 소비한 파람 수) 반환.
-    private func extendedColor(params: [Int], from idx: Int) -> (NSColor, Int)? {
+    private func extendedColor(params: [Int], from idx: Int) -> (TermColor, Int)? {
         guard idx < params.count else { return nil }
         switch params[idx] {
         case 5:
             guard idx + 1 < params.count else { return nil }
-            return (Palette.color256(params[idx + 1]), 2)
+            return (.palette(max(0, min(255, params[idx + 1]))), 2)
         case 2:
             guard idx + 3 < params.count else { return nil }
-            let r = max(0, min(255, params[idx + 1]))
-            let g = max(0, min(255, params[idx + 2]))
-            let b = max(0, min(255, params[idx + 3]))
-            return (Palette.rgb(r, g, b), 4)
+            let r = UInt8(max(0, min(255, params[idx + 1])))
+            let g = UInt8(max(0, min(255, params[idx + 2])))
+            let b = UInt8(max(0, min(255, params[idx + 3])))
+            return (.rgb(r, g, b), 4)
         default:
             return nil
         }

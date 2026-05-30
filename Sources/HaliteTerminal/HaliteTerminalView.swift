@@ -177,7 +177,7 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
         // Cursor overlay layer — underline/bar 모양용. block은 별도 처리.
         cursorLayer.zPosition = 100
         cursorLayer.isHidden = true
-        cursorLayer.backgroundColor = session.config.foregroundColor.cgColor
+        cursorLayer.backgroundColor = session.config.cursorColor.cgColor
         layer?.addSublayer(cursorLayer)
 
         // 사용자 스크롤 시 cursor 위치 추적 (auto-scroll 외에도 변동될 수 있음).
@@ -1617,7 +1617,7 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
         CATransaction.begin()
         CATransaction.setDisableActions(true) // animation 끔
         cursorLayer.frame = frame
-        cursorLayer.backgroundColor = session.config.foregroundColor.cgColor
+        cursorLayer.backgroundColor = session.config.cursorColor.cgColor
         cursorLayer.isHidden = false
         CATransaction.commit()
     }
@@ -1862,7 +1862,7 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
         isHoveredURL: Bool = false,
         hyperlink: String? = nil
     ) -> [NSAttributedString.Key: Any] {
-        let (fg, bg) = cellAttrs.resolvedColors(defaultBG: session.config.backgroundColor)
+        let (fg, bg) = cellAttrs.resolvedColors(theme: session.config.theme)
         let font: NSFont
         if cellAttrs.bold {
             font = NSFontManager.shared.convert(baseFont, toHaveTrait: .boldFontMask)

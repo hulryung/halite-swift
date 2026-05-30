@@ -1,19 +1,32 @@
 import AppKit
 import Foundation
 
+/// 셀의 의미론적 색. NSColor를 직접 저장하지 않고 "무슨 색인지"만 보관한 뒤
+/// 렌더 시점에 현재 테마로 resolve한다 → 테마를 바꾸면 이미 그려진 ANSI 색까지
+/// 즉시 recolor됨 (Terminal.app/iTerm2 동작). truecolor(.rgb)는 절대값이라
+/// 테마와 무관 (Starship 무지개 프롬프트 등은 테마 바꿔도 그대로 — 정상).
+public enum TermColor: Equatable {
+    /// 기본 전경색 (테마의 foreground). bg에는 사용하지 않음 — bg의 "기본"은 nil(투명).
+    case `default`
+    /// ANSI 팔레트 인덱스 0-255. 0-15는 테마의 16색, 16-255는 표준 xterm cube/grayscale.
+    case palette(Int)
+    /// truecolor.
+    case rgb(UInt8, UInt8, UInt8)
+}
+
 /// 한 셀의 시각 속성. SGR로 바뀌는 "현재 펜(pen)"이 이 값을 만들고,
 /// 새 글자가 grid에 쓰일 때 그 글자에 attach 된다.
 public struct CellAttrs: Equatable {
-    public var fg: NSColor
-    public var bg: NSColor?
+    public var fg: TermColor
+    public var bg: TermColor?
     public var bold: Bool
     public var italic: Bool
     public var underline: Bool
     public var inverse: Bool
 
     public init(
-        fg: NSColor,
-        bg: NSColor? = nil,
+        fg: TermColor = .default,
+        bg: TermColor? = nil,
         bold: Bool = false,
         italic: Bool = false,
         underline: Bool = false,
@@ -27,12 +40,15 @@ public struct CellAttrs: Equatable {
         self.inverse = inverse
     }
 
-    /// foregroundColor / backgroundColor를 inverse 반영 후 산출.
-    public func resolvedColors(defaultBG: NSColor) -> (fg: NSColor, bg: NSColor?) {
+    /// 현재 테마로 fg/bg를 실제 NSColor로 resolve (inverse 반영).
+    /// bg가 nil이면 투명(window background 비침).
+    public func resolvedColors(theme: HaliteTheme) -> (fg: NSColor, bg: NSColor?) {
+        let f = theme.nsColor(fg)
+        let b: NSColor? = bg.map { theme.nsColor($0) }
         if inverse {
-            return (bg ?? defaultBG, fg)
+            return (b ?? theme.background, f)
         }
-        return (fg, bg)
+        return (f, b)
     }
 }
 
