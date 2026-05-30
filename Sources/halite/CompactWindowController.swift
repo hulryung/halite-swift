@@ -226,6 +226,17 @@ final class CompactWindowController: NSWindowController, NSWindowDelegate {
         tabs[currentIndex].tree.split(direction: .vertical)
     }
 
+    /// halite-cli IPC용 — 방향을 직접 받아 active 탭의 active pane split.
+    func splitActive(direction: SplitDirection) {
+        guard currentIndex < tabs.count else { return }
+        tabs[currentIndex].tree.split(direction: direction)
+    }
+
+    /// 각 탭의 pane(leaf) 수 — list-tabs IPC 응답용.
+    var tabPaneCounts: [Int] {
+        tabs.map { $0.tree.root.leaves().count }
+    }
+
     // MARK: - 탭 키보드 네비
 
     /// Cmd+Shift+] / Ctrl+Tab — 다음 탭 (wrap).

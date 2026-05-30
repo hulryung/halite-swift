@@ -102,6 +102,11 @@ final class HaliteWindowController: NSWindowController, NSWindowDelegate {
         tree.split(direction: .vertical)
     }
 
+    /// halite-cli IPC용 — 방향을 직접 받아 active pane split.
+    func splitActive(direction: SplitDirection) {
+        tree.split(direction: direction)
+    }
+
     /// Cmd+W — active pane 닫기. 마지막 pane이면 onAllPanesClosed로 윈도우 닫힘.
     @objc func performCloseTab(_ sender: Any?) {
         tree.closeActive()
@@ -202,8 +207,17 @@ final class HaliteAppDelegate: NSObject, NSApplicationDelegate {
         case .newTab:
             newTabOrWindow()
             return .ok()
-        case .split:
-            return .err("split is not supported in halite-swift (single-pane only)")
+        case .split(let dir):
+            let direction: SplitDirection = (dir == .vertical) ? .vertical : .horizontal
+            if let active = activeCompact() {
+                active.splitActive(direction: direction)
+                return .ok()
+            }
+            if let single = activeSingleController() {
+                single.splitActive(direction: direction)
+                return .ok()
+            }
+            return .err("no active window to split")
         case .closeTab:
             // Compact controller가 키 윈도우면 활성 탭 닫음. 아니면 윈도우 닫음.
             if let active = activeCompact() {
@@ -231,16 +245,24 @@ final class HaliteAppDelegate: NSObject, NSApplicationDelegate {
             return .ok()
         case .listTabs:
             if let active = activeCompact() {
-                let list = active.sessions.enumerated().map { (i, _) in
-                    TabInfo(index: i, pane_count: 1)
+                // 각 탭의 실제 pane(leaf) 수 보고.
+                let list = active.tabPaneCounts.enumerated().map { (i, count) in
+                    TabInfo(index: i, pane_count: count)
+                }
+                return .tabs(list)
+            }
+            // Standard/Auto: 네이티브 탭마다 그 윈도우의 pane 수.
+            let single = controllers.filter { $0.window?.isVisible == true }
+            if !single.isEmpty {
+                let tabs = currentNativeTabs()
+                let list = tabs.enumerated().map { (i, win) -> TabInfo in
+                    let count = controllers.first { $0.window === win }?.sessions.count ?? 1
+                    return TabInfo(index: i, pane_count: count)
                 }
                 return .tabs(list)
             }
             let tabs = currentNativeTabs()
-            let list = tabs.enumerated().map { (i, _) in
-                TabInfo(index: i, pane_count: 1)
-            }
-            return .tabs(list)
+            return .tabs(tabs.enumerated().map { (i, _) in TabInfo(index: i, pane_count: 1) })
         }
     }
 
@@ -251,6 +273,15 @@ final class HaliteAppDelegate: NSObject, NSApplicationDelegate {
             return compactControllers.first
         }
         return compactControllers.first(where: { $0.window === keyWindow })
+    }
+
+    /// 현재 키 윈도우가 HaliteWindowController(Standard/Auto)가 소유한 것이면 그 controller.
+    @MainActor
+    private func activeSingleController() -> HaliteWindowController? {
+        guard let keyWindow = NSApp.keyWindow else {
+            return controllers.first
+        }
+        return controllers.first(where: { $0.window === keyWindow }) ?? controllers.first
     }
 
     /// 네이티브 탭 그룹 윈도우 목록 (Standard/Auto 모드).
