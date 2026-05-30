@@ -101,6 +101,10 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
     private var findQuery: String = ""
     /// 검색 매치 — `[textViewRow: [colRange...]]`. render 시 highlight 표시용.
     private var findMatchesByRow: [Int: [Range<Int>]] = [:]
+    /// 매치들을 textViewRow → col 순으로 정렬한 평탄 리스트. Cmd+G next/prev 네비용.
+    private var findMatchesOrdered: [(row: Int, range: Range<Int>)] = []
+    /// 현재 활성 매치 인덱스 (Cmd+G로 순회). -1이면 미선택.
+    private var activeMatchIndex: Int = -1
 
     /// Cmd-hover URL 표시 상태. Cmd 누른 채로 URL 위에 마우스를 올렸을 때
     /// 해당 URL을 밝게 underline 표시 + pointing-hand cursor.
@@ -204,8 +208,35 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
                 self?.applyConfig(cfg)
             }
 
+        // BEL (\a) — 시각 flash + 시스템 비프. session.onBell이 off-main에서 호출될
+        // 수 있으므로 main으로 hop.
+        session.onBell = { [weak self] in
+            DispatchQueue.main.async { self?.handleBell() }
+        }
+
         // 초기 1회 렌더.
         scheduleRender()
+    }
+
+    /// BEL 처리 — 짧은 시각 flash overlay + 시스템 비프.
+    private func handleBell() {
+        NSSound.beep()
+        // 시각 flash: 전체 위에 흰색 반투명 레이어를 잠깐 띄웠다 fade out.
+        let flash = CALayer()
+        flash.frame = bounds
+        flash.backgroundColor = NSColor.white.withAlphaComponent(0.18).cgColor
+        flash.zPosition = 200
+        layer?.addSublayer(flash)
+        let anim = CABasicAnimation(keyPath: "opacity")
+        anim.fromValue = 1.0
+        anim.toValue = 0.0
+        anim.duration = 0.18
+        anim.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        flash.add(anim, forKey: "fade")
+        // 애니메이션 후 제거.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+            flash.removeFromSuperlayer()
+        }
     }
 
     /// Settings 변경 → session.updateConfig → 여기로 들어와서 textView/색상/스크롤백 적용.
@@ -416,6 +447,51 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
             self.inputContext?.handleEvent(event)
             self.isWarmingUpIME = false
         }
+    }
+
+    // MARK: - Context menu (우클릭)
+
+    public override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = NSMenu()
+        let copyItem = NSMenuItem(
+            title: String(localized: "menu.copy", defaultValue: "Copy"),
+            action: #selector(copy(_:)), keyEquivalent: ""
+        )
+        copyItem.target = self
+        copyItem.isEnabled = (selectedText() != nil)
+        menu.addItem(copyItem)
+
+        let pasteItem = NSMenuItem(
+            title: String(localized: "menu.paste", defaultValue: "Paste"),
+            action: #selector(paste(_:)), keyEquivalent: ""
+        )
+        pasteItem.target = self
+        pasteItem.isEnabled = (NSPasteboard.general.string(forType: .string) != nil)
+        menu.addItem(pasteItem)
+
+        menu.addItem(.separator())
+
+        let findItem = NSMenuItem(
+            title: String(localized: "menu.find", defaultValue: "Find…"),
+            action: #selector(performFindPanelAction(_:)), keyEquivalent: ""
+        )
+        findItem.target = self
+        menu.addItem(findItem)
+
+        menu.addItem(.separator())
+
+        // Split — responder chain으로 윈도우 컨트롤러에 전달 (Compact 모드에서만 처리됨).
+        let splitH = NSMenuItem(
+            title: String(localized: "menu.splitH", defaultValue: "Split Horizontally"),
+            action: Selector(("splitPaneHorizontally:")), keyEquivalent: ""
+        )
+        menu.addItem(splitH)
+        let splitV = NSMenuItem(
+            title: String(localized: "menu.splitV", defaultValue: "Split Vertically"),
+            action: Selector(("splitPaneVertically:")), keyEquivalent: ""
+        )
+        menu.addItem(splitV)
+        return menu
     }
 
     public override func mouseDown(with event: NSEvent) {
@@ -869,7 +945,9 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
         let overlay = FindOverlayView(
             initialQuery: findQuery,
             onQueryChange: { [weak self] q in self?.applyFindQuery(q) },
-            onDismiss: { [weak self] in self?.hideFindOverlay() }
+            onDismiss: { [weak self] in self?.hideFindOverlay() },
+            onNext: { [weak self] in self?.findNextMatch() },
+            onPrev: { [weak self] in self?.findPreviousMatch() }
         )
         overlay.autoresizingMask = [.minXMargin, .minYMargin]
         let pad: CGFloat = 8
@@ -889,6 +967,8 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
         findOverlay?.removeFromSuperview()
         findOverlay = nil
         findMatchesByRow.removeAll()
+        findMatchesOrdered.removeAll()
+        activeMatchIndex = -1
         window?.makeFirstResponder(self)
         scheduleRender()
     }
@@ -896,6 +976,8 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
     private func applyFindQuery(_ query: String) {
         findQuery = query
         findMatchesByRow.removeAll()
+        findMatchesOrdered.removeAll()
+        activeMatchIndex = -1
         let trimmed = query.trimmingCharacters(in: .whitespaces)
         if trimmed.isEmpty {
             findOverlay?.updateCount(matched: 0)
@@ -946,8 +1028,51 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
 
         for (i, line) in grid.scrollback.enumerated() { scan(line, row: i) }
         for r in 0..<grid.rows { scan(grid.row(r), row: scrollbackCount + r) }
+
+        // 정렬된 평탄 리스트 — Cmd+G next/prev 네비용 (row 오름차순, 같은 row 내 col 오름차순).
+        findMatchesOrdered = findMatchesByRow
+            .sorted { $0.key < $1.key }
+            .flatMap { row, ranges in
+                ranges.sorted { $0.lowerBound < $1.lowerBound }.map { (row: row, range: $0) }
+            }
+        // 첫 매치를 active로 선택하고 그쪽으로 스크롤 (입력 중 점진 검색에서도 첫 매치 보이게).
+        if !findMatchesOrdered.isEmpty {
+            activeMatchIndex = 0
+            scrollToActiveMatch()
+        }
         findOverlay?.updateCount(matched: total)
         scheduleRender()
+    }
+
+    /// 다음/이전 매치로 이동 (Cmd+G / Cmd+Shift+G). wrap-around.
+    /// 메뉴/단축키에서 responder chain으로 들어오므로 @objc public 노출.
+    @objc public func findNextMatch() { stepMatch(+1) }
+    @objc public func findPreviousMatch() { stepMatch(-1) }
+
+    private func stepMatch(_ delta: Int) {
+        guard !findMatchesOrdered.isEmpty else { NSSound.beep(); return }
+        if activeMatchIndex < 0 {
+            activeMatchIndex = delta > 0 ? 0 : findMatchesOrdered.count - 1
+        } else {
+            let n = findMatchesOrdered.count
+            activeMatchIndex = (activeMatchIndex + delta + n) % n
+        }
+        scrollToActiveMatch()
+        findOverlay?.updateCount(matched: findMatchesOrdered.count,
+                                 current: activeMatchIndex + 1)
+        scheduleRender()
+    }
+
+    /// 활성 매치 row가 viewport 가운데쯤 보이도록 스크롤.
+    private func scrollToActiveMatch() {
+        guard activeMatchIndex >= 0, activeMatchIndex < findMatchesOrdered.count else { return }
+        let row = findMatchesOrdered[activeMatchIndex].row
+        let visHeight = scrollView.contentView.bounds.height
+        let rowY = CGFloat(row) * cellMetrics.height + textView.textContainerInset.height
+        // 매치를 viewport 1/3 지점에 두어 위아래 맥락이 보이게.
+        let targetY = max(0, rowY - visHeight / 3)
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: targetY))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 
     /// 한 줄에서 find 매치가 차지하는 col 범위들.

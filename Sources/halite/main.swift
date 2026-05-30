@@ -377,6 +377,18 @@ func installMainMenu() {
         action: Selector(("performFindPanelAction:")),
         keyEquivalent: "f"
     )
+    editMenu.addItem(
+        withTitle: "Find Next",
+        action: #selector(HaliteSurfaceView.findNextMatch),
+        keyEquivalent: "g"
+    )
+    let findPrev = NSMenuItem(
+        title: "Find Previous",
+        action: #selector(HaliteSurfaceView.findPreviousMatch),
+        keyEquivalent: "g"
+    )
+    findPrev.keyEquivalentModifierMask = [.command, .shift]
+    editMenu.addItem(findPrev)
 
     // View menu — font zoom
     let viewItem = NSMenuItem()
@@ -416,6 +428,59 @@ func installMainMenu() {
     )
     vsplit.keyEquivalentModifierMask = [.command, .shift]
     splitMenu.addItem(vsplit)
+
+    splitMenu.addItem(NSMenuItem.separator())
+
+    // Pane focus 네비 — Cmd+Opt+화살표.
+    let focusDirs: [(String, Selector, UInt16)] = [
+        ("Focus Pane Left", Selector(("focusPaneLeft:")), 123),
+        ("Focus Pane Right", Selector(("focusPaneRight:")), 124),
+        ("Focus Pane Down", Selector(("focusPaneDown:")), 125),
+        ("Focus Pane Up", Selector(("focusPaneUp:")), 126),
+    ]
+    let arrowChars: [UInt16: String] = [
+        123: "\u{2190}", 124: "\u{2192}", 125: "\u{2193}", 126: "\u{2191}",
+    ]
+    for (title, sel, code) in focusDirs {
+        let item = NSMenuItem(title: title, action: sel,
+                              keyEquivalent: arrowChars[code] ?? "")
+        item.keyEquivalentModifierMask = [.command, .option]
+        splitMenu.addItem(item)
+    }
+
+    // Window menu — 탭 네비.
+    let windowItem = NSMenuItem()
+    mainMenu.addItem(windowItem)
+    let windowMenu = NSMenu(title: "Window")
+    windowItem.submenu = windowMenu
+
+    let nextTab = NSMenuItem(
+        title: "Show Next Tab",
+        action: Selector(("selectNextTab:")), keyEquivalent: "]"
+    )
+    nextTab.keyEquivalentModifierMask = [.command, .shift]
+    windowMenu.addItem(nextTab)
+
+    let prevTab = NSMenuItem(
+        title: "Show Previous Tab",
+        action: Selector(("selectPreviousTab:")), keyEquivalent: "["
+    )
+    prevTab.keyEquivalentModifierMask = [.command, .shift]
+    windowMenu.addItem(prevTab)
+
+    windowMenu.addItem(NSMenuItem.separator())
+
+    // Cmd+1..9 — n번째 탭으로. tag에 1-based 번호.
+    for n in 1...9 {
+        let item = NSMenuItem(
+            title: "Tab \(n)",
+            action: Selector(("selectTabByNumber:")),
+            keyEquivalent: "\(n)"
+        )
+        item.keyEquivalentModifierMask = [.command]
+        item.tag = n
+        windowMenu.addItem(item)
+    }
 
     NSApp.mainMenu = mainMenu
 }

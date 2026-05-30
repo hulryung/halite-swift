@@ -196,6 +196,41 @@ final class CompactWindowController: NSWindowController, NSWindowDelegate {
         tabs[currentIndex].tree.split(direction: .vertical)
     }
 
+    // MARK: - 탭 키보드 네비
+
+    /// Cmd+Shift+] / Ctrl+Tab — 다음 탭 (wrap).
+    @objc func selectNextTab(_ sender: Any?) {
+        guard !tabs.isEmpty else { return }
+        selectTab((currentIndex + 1) % tabs.count)
+    }
+
+    /// Cmd+Shift+[ / Ctrl+Shift+Tab — 이전 탭 (wrap).
+    @objc func selectPreviousTab(_ sender: Any?) {
+        guard !tabs.isEmpty else { return }
+        selectTab((currentIndex - 1 + tabs.count) % tabs.count)
+    }
+
+    /// Cmd+1..9 — n번째 탭 (9는 마지막 탭). NSMenuItem.tag에 1-based 번호.
+    @objc func selectTabByNumber(_ sender: Any?) {
+        guard let item = sender as? NSMenuItem else { return }
+        let n = item.tag
+        let idx = (n == 9) ? tabs.count - 1 : n - 1
+        if idx >= 0 && idx < tabs.count { selectTab(idx) }
+    }
+
+    // MARK: - Pane focus 키보드 네비
+
+    /// Cmd+Opt+화살표 — 인접 pane으로 focus 이동.
+    @objc func focusPaneLeft(_ sender: Any?) { moveFocus(.left) }
+    @objc func focusPaneRight(_ sender: Any?) { moveFocus(.right) }
+    @objc func focusPaneUp(_ sender: Any?) { moveFocus(.up) }
+    @objc func focusPaneDown(_ sender: Any?) { moveFocus(.down) }
+
+    private func moveFocus(_ dir: PaneFocusDirection) {
+        guard currentIndex < tabs.count else { return }
+        tabs[currentIndex].tree.moveFocus(dir)
+    }
+
     private func refreshTabBar() {
         let titles = tabs.map { tab in
             tab.tree.root.leaves().first?.session.title ?? "halite"

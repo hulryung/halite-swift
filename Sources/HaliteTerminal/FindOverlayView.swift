@@ -8,16 +8,22 @@ final class FindOverlayView: NSView, NSTextFieldDelegate {
 
     private let onQueryChange: (String) -> Void
     private let onDismiss: () -> Void
+    private let onNext: () -> Void
+    private let onPrev: () -> Void
 
     init(
         initialQuery: String,
         onQueryChange: @escaping (String) -> Void,
-        onDismiss: @escaping () -> Void
+        onDismiss: @escaping () -> Void,
+        onNext: @escaping () -> Void = {},
+        onPrev: @escaping () -> Void = {}
     ) {
         self.textField = NSTextField()
         self.countLabel = NSTextField(labelWithString: "")
         self.onQueryChange = onQueryChange
         self.onDismiss = onDismiss
+        self.onNext = onNext
+        self.onPrev = onPrev
         super.init(frame: NSRect(x: 0, y: 0, width: 280, height: 30))
         wantsLayer = true
         layer?.backgroundColor = NSColor(white: 0.13, alpha: 0.95).cgColor
@@ -46,8 +52,14 @@ final class FindOverlayView: NSView, NSTextFieldDelegate {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    func updateCount(matched: Int) {
-        countLabel.stringValue = matched > 0 ? "\(matched) match\(matched == 1 ? "" : "es")" : ""
+    func updateCount(matched: Int, current: Int? = nil) {
+        if matched == 0 {
+            countLabel.stringValue = ""
+        } else if let cur = current {
+            countLabel.stringValue = "\(cur)/\(matched)"
+        } else {
+            countLabel.stringValue = "\(matched) match\(matched == 1 ? "" : "es")"
+        }
     }
 
     func focus() {
@@ -68,8 +80,13 @@ final class FindOverlayView: NSView, NSTextFieldDelegate {
             return true
         }
         if commandSelector == #selector(NSResponder.insertNewline(_:)) {
-            // Enter — 일단 dismiss로 처리 (next/prev는 후속)
-            onDismiss()
+            // Enter — 다음 매치로. Shift+Enter는 insertBacktab/별도 셀렉터로 안 와서
+            // NSEvent modifierFlags로 직접 판정.
+            if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
+                onPrev()
+            } else {
+                onNext()
+            }
             return true
         }
         return false

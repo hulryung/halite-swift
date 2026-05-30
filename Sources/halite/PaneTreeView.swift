@@ -1,6 +1,11 @@
 import AppKit
 import HaliteTerminal
 
+/// Pane focus 이동 방향 (Cmd+Opt+화살표).
+enum PaneFocusDirection {
+    case left, right, up, down
+}
+
 /// PaneNode 트리를 화면에 배치하는 NSView. divider drag로 ratio 조정 + leaf 클릭으로
 /// active pane 선택. Cmd+D / Cmd+Shift+D 로 split, Cmd+W 로 active pane 닫기.
 final class PaneTreeView: NSView {
@@ -81,6 +86,45 @@ final class PaneTreeView: NSView {
         if case .leaf(_, let surface) = leaf.kind {
             window?.makeFirstResponder(surface)
         }
+    }
+
+    /// Cmd+Opt+화살표 — 현재 active pane의 화면 위치 기준으로 방향상 가장 가까운
+    /// 인접 pane으로 focus 이동. leaf wrapper들의 self 좌표계 frame을 사용.
+    func moveFocus(_ dir: PaneFocusDirection) {
+        var wrappers: [PaneLeafWrapper] = []
+        func collect(_ v: NSView) {
+            if let w = v as? PaneLeafWrapper { wrappers.append(w) }
+            for sub in v.subviews { collect(sub) }
+        }
+        collect(self)
+        guard wrappers.count >= 2,
+              let current = wrappers.first(where: { $0.leaf === activeLeaf })
+        else { return }
+
+        let cur = current.convert(current.bounds, to: self)
+        let curMid = NSPoint(x: cur.midX, y: cur.midY)
+
+        // 방향에 맞는 후보만 추리고 (해당 축으로 분명히 떨어진 것), 중심 거리 최소 선택.
+        var best: PaneLeafWrapper?
+        var bestDist = CGFloat.greatestFiniteMagnitude
+        for w in wrappers where w !== current {
+            let f = w.convert(w.bounds, to: self)
+            let mid = NSPoint(x: f.midX, y: f.midY)
+            let dx = mid.x - curMid.x
+            let dy = mid.y - curMid.y
+            // self는 non-flipped(y up). up = y 증가, down = y 감소.
+            let matches: Bool
+            switch dir {
+            case .left: matches = dx < -1
+            case .right: matches = dx > 1
+            case .up: matches = dy > 1
+            case .down: matches = dy < -1
+            }
+            guard matches else { continue }
+            let dist = dx * dx + dy * dy
+            if dist < bestDist { bestDist = dist; best = w }
+        }
+        if let target = best { setActive(target.leaf) }
     }
 
     // MARK: - Tree → NSView 재구성
