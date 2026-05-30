@@ -12,14 +12,23 @@ import SwiftUI
 // 한글 IME 첫 자모 race를 잡기 위해 필수 (LaunchServices 등록).
 AppBundleTrampoline.relaunchInAppBundleIfNeeded()
 
-/// 한 윈도우 + 한 세션을 묶어서 관리.
+/// 한 윈도우 + 한 pane 트리(Standard/Auto 모드). 네이티브 NSWindow 탭으로 여러
+/// 윈도우가 묶이고, 각 윈도우 안에서 Cmd+D / Cmd+Shift+D로 pane split.
 final class HaliteWindowController: NSWindowController, NSWindowDelegate {
-    let session: HaliteSession
+    private let tree: PaneTreeView
     private var titleSubscription: AnyCancellable?
     private var tabStyleApplier: TabBarStyleApplier?
 
+    /// 외부(settingsChanged/willTerminate)가 순회할 leaf 세션들.
+    var sessions: [HaliteSession] { tree.root.leaves().map { $0.session } }
+    /// 현재 active pane 세션 (없으면 첫 leaf).
+    var activeSession: HaliteSession? {
+        if case .leaf(let s, _) = tree.activeLeaf.kind { return s }
+        return tree.root.leaves().first?.session
+    }
+
     init(session: HaliteSession) {
-        self.session = session
+        self.tree = PaneTreeView(rootSession: session)
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
             styleMask: [.titled, .closable, .resizable, .miniaturizable],
@@ -30,20 +39,18 @@ final class HaliteWindowController: NSWindowController, NSWindowDelegate {
         // SwiftUI NSHostingController 우회 — SwiftUI hosting layer가 leading edge에
         // 미세한 inset을 추가해서 cell-grid 첫 column이 가려지는 문제가 있음.
         // halite.app은 cmux integration용 SwiftUI API를 안 거치고 직접 NSView 사용.
-        let surface = HaliteSurfaceView(session: session)
-        surface.translatesAutoresizingMaskIntoConstraints = false
+        tree.translatesAutoresizingMaskIntoConstraints = false
         // contentView를 container로 감싸서 titlebar 영역에 NSVisualEffectView를
-        // 깔 수 있는 자리를 만든다. Compact 모드에선 fullSizeContentView로 컨테이너가
-        // 윈도우 전체에 펼쳐지고, VFX가 위쪽 titlebarHeight만큼 점유 + surface는
-        // 그 아래로 inset됨. 다른 모드에선 VFX 숨기고 surface가 컨테이너 전체.
+        // 깔 수 있는 자리를 만든다. (Standard/Auto 모드에선 inset 0 — TabBarStyleApplier가
+        // compact일 때만 inset; 이 컨트롤러는 non-compact 전용이므로 항상 0.)
         let container = NSView()
         container.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(surface)
-        let surfaceTop = surface.topAnchor.constraint(equalTo: container.topAnchor)
+        container.addSubview(tree)
+        let surfaceTop = tree.topAnchor.constraint(equalTo: container.topAnchor)
         NSLayoutConstraint.activate([
-            surface.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            surface.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            surface.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            tree.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            tree.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            tree.bottomAnchor.constraint(equalTo: container.bottomAnchor),
             surfaceTop,
         ])
         window.contentView = container
@@ -55,17 +62,24 @@ final class HaliteWindowController: NSWindowController, NSWindowDelegate {
         window.tabbingIdentifier = "halite.terminal"
         super.init(window: window)
         window.delegate = self
-        titleSubscription = session.$title
-            .receive(on: RunLoop.main)
-            .sink { [weak self] newTitle in
-                let display = newTitle.isEmpty ? "halite" : newTitle
-                self?.window?.title = display
-            }
-        // 사용자가 Settings에서 고른 탭 스타일 적용. 초기값은 TabBarStyle.current.
+        // 마지막 pane이 닫히면 윈도우(=네이티브 탭) 닫기.
+        tree.onAllPanesClosed = { [weak self] in
+            self?.window?.performClose(nil)
+        }
+        // 제목은 root 첫 leaf 세션 따라감 (Compact와 동일 정책).
+        if let firstSession = tree.root.leaves().first?.session {
+            titleSubscription = firstSession.$title
+                .receive(on: RunLoop.main)
+                .sink { [weak self] newTitle in
+                    let display = newTitle.isEmpty ? "halite" : newTitle
+                    self?.window?.title = display
+                }
+        }
+        // 사용자가 Settings에서 고른 탭 스타일 적용 (이 컨트롤러는 non-compact만).
         let applier = TabBarStyleApplier(
             window: window,
             container: container,
-            surface: surface,
+            surface: tree,
             surfaceTopConstraint: surfaceTop
         )
         applier.apply(TabBarStyle.current)
@@ -76,10 +90,36 @@ final class HaliteWindowController: NSWindowController, NSWindowDelegate {
         tabStyleApplier?.apply(style)
     }
 
+    // 메서드 이름은 CompactWindowController와 동일 — HaliteSurfaceView의 Cmd+W
+    // (performCloseTab:) 및 Split 메뉴(splitPaneHorizontally:/Vertically:)가
+    // responder chain으로 두 컨트롤러 모두에 동일하게 도달.
+
+    @objc func splitPaneHorizontally(_ sender: Any?) {
+        tree.split(direction: .horizontal)
+    }
+
+    @objc func splitPaneVertically(_ sender: Any?) {
+        tree.split(direction: .vertical)
+    }
+
+    /// Cmd+W — active pane 닫기. 마지막 pane이면 onAllPanesClosed로 윈도우 닫힘.
+    @objc func performCloseTab(_ sender: Any?) {
+        tree.closeActive()
+    }
+
+    // Pane focus 네비 (Cmd+Opt+화살표).
+    @objc func focusPaneLeft(_ sender: Any?) { tree.moveFocus(.left) }
+    @objc func focusPaneRight(_ sender: Any?) { tree.moveFocus(.right) }
+    @objc func focusPaneUp(_ sender: Any?) { tree.moveFocus(.up) }
+    @objc func focusPaneDown(_ sender: Any?) { tree.moveFocus(.down) }
+
     required init?(coder: NSCoder) { fatalError() }
 
     func windowWillClose(_ notification: Notification) {
-        session.terminate()
+        // 이 윈도우의 모든 pane 세션 종료. (PaneTreeView.deinit도 terminateAll
+        // 하지만 윈도우 닫힘 시점에 명시적으로 한 번 — 이중 종료는 PTYHost가
+        // childPID=-1로 idempotent.)
+        tree.root.terminateAll()
         // 마지막 윈도우면 application이 자동 종료
         // (applicationShouldTerminateAfterLastWindowClosed == true).
     }
@@ -117,7 +157,7 @@ final class HaliteAppDelegate: NSObject, NSApplicationDelegate {
 
     /// 종료 직전 — 현재 Compact 윈도우들의 레이아웃 + cwd 저장.
     func applicationWillTerminate(_ notification: Notification) {
-        for c in controllers { c.session.terminate() }
+        for c in controllers { for s in c.sessions { s.terminate() } }
         for cc in compactControllers { for s in cc.sessions { s.terminate() } }
         // 세션 상태 저장 (Compact 윈도우만 — single-session/native-tab 모드는 복원 안 함).
         let windows = compactControllers.map { $0.toRestorableWindow() }
@@ -251,7 +291,8 @@ final class HaliteAppDelegate: NSObject, NSApplicationDelegate {
         let newConfig = HaliteConfig.fromUserDefaults()
         let newTabStyle = TabBarStyle.current
         for c in controllers {
-            c.session.updateConfig(newConfig)
+            // split된 pane 모두 hot-reload — 하나라도 빠지면 그 pane만 옛 폰트/테마.
+            for s in c.sessions { s.updateConfig(newConfig) }
             c.applyTabBarStyle(newTabStyle)
         }
         for cc in compactControllers {
