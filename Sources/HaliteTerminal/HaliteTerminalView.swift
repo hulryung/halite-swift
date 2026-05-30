@@ -127,7 +127,10 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
         scroll.hasHorizontalScroller = false
         scroll.borderType = .noBorder
         scroll.autoresizingMask = [.width, .height]
-        scroll.drawsBackground = false
+        // 테마 배경으로 직접 칠함. false면 textView 콘텐츠 아래 빈 영역에 window
+        // 기본 배경(다크모드 회색)이 비쳐서 검정 테마인데 회색으로 보이는 문제 발생.
+        scroll.drawsBackground = true
+        scroll.backgroundColor = session.config.backgroundColor
         // Big Sur+ NSScrollView가 system chrome(타이틀바 등)에 맞춰 자동으로
         // contentInsets를 추가하는데, 우리 터미널은 cell-grid 정렬이라 이 inset이
         // 들어가면 leftmost / topmost column이 일부 가려짐. 명시적으로 끔.
@@ -244,6 +247,7 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
         let font = fontWithNerdFallback(family: config.fontFamily, size: config.fontSize)
         textView.font = font
         textView.backgroundColor = config.backgroundColor
+        scrollView.backgroundColor = config.backgroundColor
         // ⚠️ textView.textColor = ... 는 rich-text 모드에서 textStorage 전체의
         // .foregroundColor 어트리뷰트를 flat하게 덮어쓴다 → per-cell SGR 색이
         // 다 흰색으로 사라지는 회귀가 발생함. 우리 render는 per-cell .foregroundColor

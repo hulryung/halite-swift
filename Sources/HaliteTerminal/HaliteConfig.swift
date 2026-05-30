@@ -59,7 +59,24 @@ public struct HaliteConfig {
     }
 
     public static func defaultArgv() -> [String] {
-        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
-        return [shell]
+        // 로그인 셸(-l)로 spawn — 그래야 /etc/zprofile의 path_helper가 돌아서
+        // Homebrew(/opt/homebrew/bin) 등이 PATH에 들어감. GUI 앱(LaunchServices로
+        // 실행)이 spawn하는 셸은 기본적으로 non-login이라 PATH가 시스템 기본만 잡혀
+        // starship 등 brew 설치 도구를 "command not found"로 못 찾는 문제가 있음.
+        // Terminal.app/iTerm2도 로그인 셸로 띄운다.
+        return [loginShellPath(), "-l"]
+    }
+
+    /// 사용자의 로그인 셸 경로. SHELL 환경변수 우선, GUI 앱에선 비어있을 수 있으므로
+    /// passwd DB(getpwuid)로 폴백, 그래도 없으면 /bin/zsh.
+    public static func loginShellPath() -> String {
+        if let s = ProcessInfo.processInfo.environment["SHELL"], !s.isEmpty {
+            return s
+        }
+        if let pw = getpwuid(getuid()), let sh = pw.pointee.pw_shell {
+            let path = String(cString: sh)
+            if !path.isEmpty { return path }
+        }
+        return "/bin/zsh"
     }
 }
