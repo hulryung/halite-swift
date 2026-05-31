@@ -436,7 +436,7 @@ final class GridTests: XCTestCase {
         g.inSyncOutputMode = true
         g.lineFeed() // sync 중 scrollUp — 그래도 push 되어야 함.
         XCTAssertEqual(g.scrollback.count, 1)
-        XCTAssertEqual(String(g.scrollback[0].map { $0.char }), "AAAA")
+        XCTAssertEqual(String(g.scrollback[0].cells.map { $0.char }), "AAAA")
     }
 
     func testAltScreenSuppressesScrollbackPush() {
