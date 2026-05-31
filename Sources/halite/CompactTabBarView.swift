@@ -10,10 +10,16 @@ final class CompactTabBarView: NSView {
     var onTabSelected: ((Int) -> Void)?
     var onTabClosed: ((Int) -> Void)?
     var onNewTab: (() -> Void)?
+    /// Reorder result after a drag: move the tab from `from` to `to`.
+    var onTabReordered: ((Int, Int) -> Void)?
 
     private var tabButtons: [TabButton] = []
     private let newTabButton = NSButton()
     private var selectedIndex: Int = 0
+
+    // Drag-reorder state.
+    private var perTab: CGFloat = 100   // current per-tab width (updated in layout)
+    private var dragTargetIndex: Int?
 
     private let leadingReservation: CGFloat = 80   // 신호등 자리
     private let trailingReservation: CGFloat = 12
@@ -60,12 +66,63 @@ final class CompactTabBarView: NSView {
         for (i, title) in titles.enumerated() {
             let btn = TabButton(title: title.isEmpty ? "halite" : title,
                                 isSelected: i == selectedIndex)
+            btn.index = i
             btn.onClick = { [weak self] in self?.onTabSelected?(i) }
             btn.onClose = { [weak self] in self?.onTabClosed?(i) }
+            btn.onDragBegan = { [weak self] idx in self?.dragBegan(idx) }
+            btn.onDragMoved = { [weak self] idx, dx in self?.dragMoved(idx, dx) }
+            btn.onDragEnded = { [weak self] idx in self?.dragEnded(idx) }
             addSubview(btn)
             tabButtons.append(btn)
         }
         needsLayout = true
+    }
+
+    // MARK: - Drag to reorder
+
+    private func tabBaseX(_ i: Int) -> CGFloat {
+        leadingReservation + CGFloat(i) * (perTab + tabSpacing)
+    }
+
+    private func dragBegan(_ idx: Int) {
+        guard idx < tabButtons.count else { return }
+        tabButtons[idx].layer?.zPosition = 10
+        dragTargetIndex = idx
+    }
+
+    private func dragMoved(_ idx: Int, _ dx: CGFloat) {
+        guard idx < tabButtons.count else { return }
+        let btn = tabButtons[idx]
+        // Follow the cursor horizontally from the tab's home slot.
+        btn.frame.origin.x = tabBaseX(idx) + dx
+        // Which slot does the dragged tab's center fall into?
+        let center = btn.frame.midX
+        var target = 0
+        for i in 0..<tabButtons.count {
+            let slotCenter = tabBaseX(i) + perTab / 2
+            if center >= slotCenter { target = i }
+        }
+        dragTargetIndex = target
+        // Shift the other tabs to open a gap at `target`.
+        let tabY = (bounds.height - tabHeight) / 2
+        var slot = 0
+        for (i, other) in tabButtons.enumerated() where i != idx {
+            if slot == target { slot += 1 }  // leave room for the dragged tab
+            other.frame = NSRect(x: tabBaseX(slot), y: tabY, width: perTab, height: tabHeight)
+            slot += 1
+        }
+    }
+
+    private func dragEnded(_ idx: Int) {
+        guard idx < tabButtons.count else { return }
+        tabButtons[idx].layer?.zPosition = 0
+        let target = dragTargetIndex ?? idx
+        dragTargetIndex = nil
+        if target != idx {
+            onTabReordered?(idx, target)
+        } else {
+            needsLayout = true  // snap back
+        }
     }
 
     override func layout() {
@@ -90,7 +147,7 @@ final class CompactTabBarView: NSView {
         let count = CGFloat(tabButtons.count)
         let available = bounds.width - leadingReservation - trailingReservation - btnSize - 4
             - tabSpacing * (count - 1)
-        let perTab = max(minTabWidth, min(maxTabWidth, available / count))
+        perTab = max(minTabWidth, min(maxTabWidth, available / count))
         let tabY = (bounds.height - tabHeight) / 2
 
         for (i, btn) in tabButtons.enumerated() {
@@ -115,10 +172,20 @@ final class CompactTabBarView: NSView {
     }
 }
 
-/// 탭 하나. 제목 + 우측 close X.
+/// One tab: title + trailing close X. Supports click, close, and drag-to-reorder.
 private final class TabButton: NSView {
     var onClick: (() -> Void)?
     var onClose: (() -> Void)?
+    /// Drag-to-reorder callbacks. dx is the cumulative horizontal offset from
+    /// the drag start (in this view's window coordinates).
+    var onDragBegan: ((Int) -> Void)?
+    var onDragMoved: ((Int, CGFloat) -> Void)?
+    var onDragEnded: ((Int) -> Void)?
+    /// This tab's index in the bar; set by CompactTabBarView on layout.
+    var index: Int = 0
+
+    private var dragStart: NSPoint?
+    private var didDrag = false
 
     private let titleLabel = NSTextField(labelWithString: "")
     private let closeButton = NSButton()
@@ -177,8 +244,31 @@ private final class TabButton: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        // close 영역 클릭은 closeButton이 받음 → 여기 도달 안 함.
-        onClick?()
+        // Clicks on the close button are handled there; this only fires elsewhere.
+        dragStart = event.locationInWindow
+        didDrag = false
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let start = dragStart else { return }
+        let dx = event.locationInWindow.x - start.x
+        if !didDrag && abs(dx) > 4 {
+            didDrag = true
+            onDragBegan?(index)
+        }
+        if didDrag {
+            onDragMoved?(index, dx)
+        }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if didDrag {
+            onDragEnded?(index)
+        } else {
+            onClick?()
+        }
+        dragStart = nil
+        didDrag = false
     }
 
     @objc private func closeClicked() {

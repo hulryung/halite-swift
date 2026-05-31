@@ -103,6 +103,7 @@ final class CompactWindowController: NSWindowController, NSWindowDelegate {
         tabBar.onTabSelected = { [weak self] idx in self?.selectTab(idx) }
         tabBar.onTabClosed = { [weak self] idx in self?.closeTab(idx) }
         tabBar.onNewTab = { [weak self] in self?.addNewTab() }
+        tabBar.onTabReordered = { [weak self] from, to in self?.reorderTab(from: from, to: to) }
         contentView.addSubview(tabBar)
 
         // 세션 surface가 들어가는 컨테이너 — 탭 바 아래 채움.
@@ -185,6 +186,25 @@ final class CompactWindowController: NSWindowController, NSWindowDelegate {
         if let firstSession = tree.root.leaves().first?.session {
             let title = firstSession.title
             window?.title = title.isEmpty ? "halite" : title
+        }
+        refreshTabBar()
+    }
+
+    /// Move a tab from one position to another (drag-to-reorder).
+    func reorderTab(from: Int, to: Int) {
+        guard from != to, from >= 0, from < tabs.count, to >= 0, to < tabs.count else {
+            refreshTabBar()
+            return
+        }
+        let moved = tabs.remove(at: from)
+        tabs.insert(moved, at: to)
+        // Keep currentIndex pointing at the same tab after the shuffle.
+        if currentIndex == from {
+            currentIndex = to
+        } else if from < currentIndex && to >= currentIndex {
+            currentIndex -= 1
+        } else if from > currentIndex && to <= currentIndex {
+            currentIndex += 1
         }
         refreshTabBar()
     }
