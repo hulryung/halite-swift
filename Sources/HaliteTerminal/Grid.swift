@@ -207,11 +207,19 @@ public final class Grid {
         guard regionHeight > 0 else { return }
         let evictCount = min(n, regionHeight)
 
-        // scrollback에는 region이 화면 최상단(scrollTop == 0)에서 시작하는 경우에만 push.
-        // tmux 상태바처럼 region이 중간에 있으면 위로 빠지는 내용을 누적하지 않음 (xterm 동작).
-        // alt-screen 활성 중이거나 sync output burst 중이면 scrollback 누적 안 함.
-        // (xterm 동작과 동일하게 region이 화면 최상단 아닌 경우도 push 안 함.)
-        let suppressForTUI = isAltScreenActive || inSyncOutputMode
+        // scrollback에는 region이 화면 최상단(scrollTop == 0)에서 시작하고 alt-screen이
+        // 아닐 때만 push. tmux 상태바처럼 region이 중간에 있으면 위로 빠지는 내용을
+        // 누적하지 않음 (xterm 동작).
+        //
+        // DEC 2026 synchronized output(inSyncOutputMode) 중에도 push한다 — sync는
+        // presentation hint일 뿐 scrollback과 무관(실제 터미널들과 동일). Claude Code 등
+        // primary-screen TUI의 redraw 프레임은 대부분 in-place(cursor up→reprint→복귀,
+        // net-zero scroll)라 scrollback에 아무것도 안 쌓이고, 실제 새 내용이 위로 밀려
+        // 나갈 때만 push되어 사용자가 위로 스크롤해 대화 history를 볼 수 있음. (sync
+        // frame은 host가 ESU까지 모아 atomic하게 present하므로 torn-frame 중복도 없음.)
+        // 이전엔 inSyncOutputMode 동안 push를 막았는데, 그게 TUI의 history를 통째로
+        // 버려 "위로 스크롤이 안 되고 화면 밖으로 사라지는" 회귀를 만들었음.
+        let suppressForTUI = isAltScreenActive
         if !suppressForTUI && scrollTop == 0 {
             for i in 0..<evictCount {
                 pushToScrollback(cells[scrollTop + i])

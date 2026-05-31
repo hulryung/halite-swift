@@ -302,8 +302,9 @@ public final class HaliteSession: ObservableObject {
                 //   - hasUsedSyncOutput: 한 번이라도 set 되면 sticky-true. resize 시
                 //     viewport-top anchoring 등 TUI-friendly 정책 활성화.
                 //   - inSyncOutputMode: transient (set ⇔ true, clear ⇔ false).
-                //     redraw burst 중 line-feed로 발생하는 scrollUp이 옛 라인을
-                //     scrollback으로 push하지 않도록 막는 데 사용.
+                //     host가 frame을 ESU까지 모아 atomic하게 present하는 데 사용
+                //     (torn frame 방지). scrollback 누적과는 무관 — sync는 presentation
+                //     hint일 뿐이라 redraw 중에도 위로 빠지는 줄은 정상 누적됨.
                 if set { grid.hasUsedSyncOutput = true }
                 grid.inSyncOutputMode = set
             default:
