@@ -830,11 +830,19 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
     private func followTargetY() -> CGFloat? {
         let grid = session.grid
         let inset = textView.textContainerInset.height
-        if grid.isAltScreenActive {
-            // Alt-screen — viewport top anchor로 alt 영역 전체가 보이도록.
+        if grid.isAltScreenActive || grid.hasUsedSyncOutput {
+            // Alt-screen / primary-screen TUI(Claude Code 등) — 라이브 grid 전체가
+            // 보이도록 grid-top을 viewport-top에 anchor. (rows*cellH ≤ visHeight라
+            // grid가 항상 viewport에 들어감 → 하단 안 잘림.)
+            //
+            // 중요: scrollback이 늘어나는 TUI(sync output 누적)에서 cursor-visible
+            // 정책을 쓰면, cursor가 이미 보일 때 scroll을 안 해서 매 프레임 scrollback이
+            // 1줄씩 늘 때마다 grid가 fold 밑으로 밀려 새 내용이 안 보이는 회귀가 생김.
+            // grid-top anchor는 scrollback.count에 묶여 있어 늘어나는 만큼 같이 내려가
+            // 새 내용(grid 하단)을 항상 보여줌. layout()의 anchor와도 일치.
             return CGFloat(grid.scrollback.count) * cellMetrics.height + inset
         }
-        // 일반 셸 + primary-screen TUI — cursor-visible 정책.
+        // 일반 셸 — cursor-visible 정책.
         let visHeight = scrollView.contentView.bounds.height
         let cursorViewRow = grid.scrollback.count + grid.cursorRow
         let cursorY = CGFloat(cursorViewRow) * cellMetrics.height + inset
