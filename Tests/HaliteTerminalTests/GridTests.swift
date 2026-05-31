@@ -336,6 +336,24 @@ final class GridTests: XCTestCase {
         XCTAssertEqual(String(g.scrollback[0].map { $0.char }), "CC")
     }
 
+    func testSyncOutputModeSuppressesScrollbackPush() {
+        // DEC 2026 sync frame 중 line-feed로 발생하는 scrollUp은 scrollback에
+        // 누적하지 않는다 (primary-screen TUI redraw burst). 이 불변식이 깨지면
+        // redraw가 history를 오염시키고 화면에 중복/덮어쓰기로 보임.
+        let g = makeGrid(cols: 4, rows: 2)
+        write(g, "AAAA"); g.lineFeed(); g.carriageReturn()
+        write(g, "BBBB")
+        g.inSyncOutputMode = true
+        g.lineFeed() // sync 중 scrollUp — push 되면 안 됨.
+        XCTAssertEqual(g.scrollback.count, 0)
+        XCTAssertEqual(g.scrollbackPushCount, 0)
+        // sync 종료 후의 scrollUp은 정상적으로 누적.
+        g.inSyncOutputMode = false
+        g.carriageReturn(); write(g, "CCCC")
+        g.lineFeed()
+        XCTAssertEqual(g.scrollback.count, 1)
+    }
+
     func testResizeShrinkRowsPushesToScrollback() {
         let g = makeGrid(cols: 4, rows: 3)
         write(g, "AAA"); g.lineFeed(); g.carriageReturn()

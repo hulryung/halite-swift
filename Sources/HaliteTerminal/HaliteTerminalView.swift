@@ -57,6 +57,12 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
     private var configSubscription: AnyCancellable?
     private var lastReportedSize: (cols: Int, rows: Int)? = nil
     private var renderScheduled = false
+    /// DEC 2026 sync output flush 안전 타이머가 이미 예약돼 있는지.
+    private var syncFlushScheduled = false
+    /// sync frame이 ESU 없이 너무 오래 열려 있을 때 강제 present까지의 시간(초).
+    /// 정상 Claude Code/Ink 프레임은 한 자릿수 ms 안에 ESU가 와서 이 타이머는
+    /// 거의 발동하지 않음 — freeze 방지용 안전망.
+    private let syncFlushDeadline: TimeInterval = 0.15
     private var lastRenderedVersion: UInt64 = .max
     /// 마지막 렌더 시점의 marked text. grid 변화 없이 marked text만 비워질 때
     /// (BS-cancel 등) 강제 재렌더링하기 위한 비교용.
@@ -132,6 +138,11 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
     /// 사용자가 위로 스크롤한 상태에서 scrollback 최상단이 evict되면 보던 콘텐츠가
     /// 위로 밀리는데, 그 양만큼 스크롤도 따라 올려 content-anchor를 유지하는 데 사용.
     private var lastEvictedTotal: UInt64 = 0
+
+    /// 키 입력 점프 애니메이션이 진행 중인지. true인 동안엔 renderNow()/layout()의
+    /// 즉시 follow-scroll을 건너뛴다 — 안 그러면 echo 렌더가 애니메이션을 끝 위치로
+    /// 순간이동시켜 부드러운 점프가 보이지 않음.
+    private var isSnappingToCursor: Bool = false
 
     public init(session: HaliteSession) {
         self.session = session
@@ -324,7 +335,8 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
         reportSizeIfChanged()
         // 사용자가 위로 스크롤한 상태(followingBottom == false)면 layout 패스(리사이즈
         // 등)에서도 위치를 건드리지 않는다 — 보던 history가 강제로 바닥으로 튀지 않게.
-        if followingBottom {
+        // 키 입력 점프 애니메이션 중(isSnappingToCursor)에도 건드리지 않음.
+        if followingBottom && !isSnappingToCursor {
             if session.grid.isAltScreenActive || session.grid.hasUsedSyncOutput {
                 scrollViewportToAltTop()
             } else {
@@ -812,15 +824,52 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
         followingBottom = isScrolledToBottom(tolerance: 4.0)
     }
 
-    /// 사용자 입력(키 입력/붙여넣기)이 들어오면 follow를 재개하고 즉시 cursor/뷰포트로
-    /// 점프. 위로 스크롤해 history를 보던 중 키를 누르면 곧장 작업 위치로 돌아오게 한다.
+    /// follow 중일 때 스크롤이 안착해야 할 Y. renderNow()의 follow 로직과 동일하게
+    /// 계산해 애니메이션/즉시 스크롤이 같은 지점으로 가도록 통일. 이미 적절한 위치면
+    /// nil(스크롤 불필요).
+    private func followTargetY() -> CGFloat? {
+        let grid = session.grid
+        let inset = textView.textContainerInset.height
+        if grid.isAltScreenActive {
+            // Alt-screen — viewport top anchor로 alt 영역 전체가 보이도록.
+            return CGFloat(grid.scrollback.count) * cellMetrics.height + inset
+        }
+        // 일반 셸 + primary-screen TUI — cursor-visible 정책.
+        let visHeight = scrollView.contentView.bounds.height
+        let cursorViewRow = grid.scrollback.count + grid.cursorRow
+        let cursorY = CGFloat(cursorViewRow) * cellMetrics.height + inset
+        let cursorBottom = cursorY + cellMetrics.height
+        let curY = scrollView.contentView.bounds.origin.y
+        if cursorBottom > curY + visHeight {
+            return cursorBottom - visHeight
+        } else if cursorY < curY {
+            return cursorY
+        }
+        return nil // cursor 이미 가시 영역 — 스크롤 불필요.
+    }
+
+    /// 사용자 입력(키 입력/붙여넣기)이 들어오면 follow를 재개하고 cursor/뷰포트로
+    /// **부드럽게** 점프. 위로 스크롤해 history를 보던 중 키를 누르면 작업 위치로 복귀.
     private func snapToCursorOnUserInput() {
         followingBottom = true
-        if session.grid.isAltScreenActive || session.grid.hasUsedSyncOutput {
-            scrollViewportToAltTop()
-        } else {
-            scrollViewportToBottom()
-        }
+        guard let targetY = followTargetY() else { return }
+        let curY = scrollView.contentView.bounds.origin.y
+        guard abs(targetY - curY) > 0.5 else { return }
+        isSnappingToCursor = true
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.18
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            scrollView.contentView.animator().setBoundsOrigin(NSPoint(x: 0, y: targetY))
+        }, completionHandler: { [weak self] in
+            guard let self else { return }
+            self.isSnappingToCursor = false
+            // 애니메이션 동안 들어온 새 출력까지 반영해 정확히 안착.
+            if self.followingBottom, let y = self.followTargetY() {
+                self.scrollView.contentView.scroll(to: NSPoint(x: 0, y: y))
+            }
+            self.scrollView.reflectScrolledClipView(self.scrollView.contentView)
+            self.updateCursorLayer()
+        })
     }
 
     /// 마우스 이벤트를 PTY reporting으로 forward해야 하는지 판단.
@@ -1450,8 +1499,31 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
         if renderScheduled { return }
         renderScheduled = true
         DispatchQueue.main.async { [weak self] in
-            self?.renderScheduled = false
-            self?.renderNow()
+            guard let self else { return }
+            self.renderScheduled = false
+            // DEC 2026 Synchronized Output: sync frame(BSU…ESU)이 진행 중이면
+            // 부분적으로(torn) 적용된 grid를 화면에 내보내지 않는다. PTY read가 프레임
+            // 중간을 가르면 옛 내용 위에 새 내용이 절반만 그려져 "덮어쓰기/중복"처럼
+            // 보였음. ESU(\e[?2026l) 직후의 gridChanged가 완성된 프레임을 atomic하게
+            // present한다. ESU가 끝내 안 오는 비정상 앱을 대비해 안전 타이머로 강제 flush.
+            if self.session.grid.inSyncOutputMode {
+                self.armSyncFlush()
+                return
+            }
+            self.renderNow()
+        }
+    }
+
+    /// sync frame이 ESU 없이 syncFlushDeadline을 넘기면 freeze를 막기 위해 강제 present.
+    private func armSyncFlush() {
+        if syncFlushScheduled { return }
+        syncFlushScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + syncFlushDeadline) { [weak self] in
+            guard let self else { return }
+            self.syncFlushScheduled = false
+            if self.session.grid.inSyncOutputMode {
+                self.renderNow()
+            }
         }
     }
 
@@ -1571,7 +1643,6 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
         if let container = textView.textContainer {
             textView.layoutManager?.ensureLayout(for: container)
         }
-        let visHeight = scrollView.contentView.bounds.height
 
         // alt-screen 전환(primary↔alt)이 일어나면 follow를 재개한다. vim/htop 등은
         // 진입 시 그 화면을, 종료 시 셸 바닥을 항상 보여줘야 하므로 사용자가 이전에
@@ -1590,31 +1661,12 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
         lastEvictedTotal = evictedTotal
 
         if followingBottom {
-            if grid.isAltScreenActive {
-                // Alt-screen TUI (vim/htop) — 전체 viewport가 콘텐츠. viewport top anchor로
-                // alt 영역 전체가 보이도록.
-                let viewportTop = CGFloat(grid.scrollback.count) * cellMetrics.height
-                    + textView.textContainerInset.height
-                scrollView.contentView.scroll(to: NSPoint(x: 0, y: viewportTop))
-            } else {
-                // 일반 셸 + primary-screen TUI(Claude Code/Ink 등) — "cursor가 viewport
-                // 안에만 보이면 OK" 정책. cursor가 이미 보이면 scroll 안 함 → Claude Code
-                // 처럼 cursor가 UI 중간에 있을 때 cursor 아래 콘텐츠가 잘리는 회귀 방지.
-                // cursor가 viewport 위/아래로 빠지면 그쪽으로만 맞춤.
-                let cursorViewRow = grid.scrollback.count + grid.cursorRow
-                let cursorY = CGFloat(cursorViewRow) * cellMetrics.height
-                    + textView.textContainerInset.height
-                let cursorBottom = cursorY + cellMetrics.height
-                let curScroll = scrollView.contentView.bounds.origin.y
-                let visTop = curScroll
-                let visBottom = curScroll + visHeight
-                if cursorBottom > visBottom {
-                    let targetY = cursorBottom - visHeight
-                    scrollView.contentView.scroll(to: NSPoint(x: 0, y: targetY))
-                } else if cursorY < visTop {
-                    scrollView.contentView.scroll(to: NSPoint(x: 0, y: cursorY))
-                }
-                // else: cursor 이미 가시 영역 안 — scroll 안 함.
+            // 키 입력 점프 애니메이션 중엔 위치를 애니메이션이 소유 — 즉시 scroll 안 함.
+            // (안 그러면 echo 렌더가 끝 위치로 순간이동시켜 애니메이션이 안 보임.)
+            // alt 화면은 viewport top anchor, 그 외(일반 셸/Claude Code 등)는
+            // cursor-visible 정책. followTargetY()가 두 경우를 통일해 계산.
+            if !isSnappingToCursor, let targetY = followTargetY() {
+                scrollView.contentView.scroll(to: NSPoint(x: 0, y: targetY))
             }
         } else if evictedSinceLast > 0 {
             // 사용자가 위로 스크롤해 history를 보는 중 — scrollback이 evict된 만큼
