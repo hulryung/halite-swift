@@ -324,6 +324,10 @@ final class LegacyTextBackend: TerminalRenderBackend {
         }
     }
 
+    /// `NSScrollView` handles the wheel (and momentum/rubber-band) natively, so
+    /// don't consume it — let the host fall through to `super.scrollWheel`.
+    func handleScrollWheel(_ event: NSEvent) -> Bool { false }
+
     func ensureLayout() {
         if let container = textView.textContainer {
             textView.layoutManager?.ensureLayout(for: container)

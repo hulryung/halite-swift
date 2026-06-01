@@ -740,8 +740,12 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
             sendMouseEventToPTY(event: event, button: btn, pressed: true)
             return
         }
-        super.scrollWheel(with: event)
-        // scrollViewDidScroll observer가 bounds 변화로 호출되며 followingBottom 갱신.
+        // Metal backend consumes the wheel itself (applies the delta + redraws).
+        // Legacy returns false → fall through to NSScrollView's native handling,
+        // whose didLiveScroll observer updates followingBottom.
+        if !backend.handleScrollWheel(event) {
+            super.scrollWheel(with: event)
+        }
     }
 
     private func refreshFollowingBottomFlag() {

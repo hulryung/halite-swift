@@ -19,8 +19,13 @@ final class MetalTerminalBackend: TerminalRenderBackend {
     private var config: HaliteConfig
     private var metrics = CellMetrics(width: 8, height: 16)
 
-    /// Scalar vertical scroll offset (content px from top). P1 = non-animated.
-    private var scrollY: CGFloat = 0
+    /// Scalar vertical scroll position. Consumes OS wheel/momentum deltas
+    /// directly (NSScrollView-style); programmatic eases (snap-to-cursor) land in
+    /// a later increment via an animation link.
+    private var scroll = ScrollModel()
+    /// Read-only mirror of `scroll.current` (content px from top, 0 = top), kept
+    /// so the many existing `scrollY` reads (coord map, instance positions) work.
+    private var scrollY: CGFloat { scroll.current }
     /// Cached from the last render so `contentHeight` is correct between frames.
     private var lastTotalRows: Int = 0
     /// Snapshot of the last frame's inputs, so resize/backing-change redraws.
@@ -78,6 +83,13 @@ final class MetalTerminalBackend: TerminalRenderBackend {
         CoordinateMap(cellW: metrics.width, cellH: metrics.height, inset: inset, scrollY: scrollY)
     }
 
+    /// Snap a point value to the nearest device pixel, so adjacent cell quads
+    /// share an identical edge (no sub-pixel seam between fills).
+    private func snap(_ v: CGFloat) -> CGFloat {
+        let s = metalView.metalLayer.contentsScale
+        return s > 0 ? (v * s).rounded() / s : v
+    }
+
     private func redrawLast() {
         guard let grid = lastGrid else { return }
         render(grid: grid, config: config, state: lastState, metrics: metrics)
@@ -89,6 +101,9 @@ final class MetalTerminalBackend: TerminalRenderBackend {
         self.lastGrid = grid
         self.lastState = state
         self.lastTotalRows = grid.scrollback.count + grid.rows
+        // Keep the scroll clamp current as content grows/shrinks (re-clamps if the
+        // viewport now extends past the new bottom).
+        scroll.maxY = max(0, contentHeight - viewportHeight)
 
         ensureAtlas()
         let layer = metalView.metalLayer
@@ -178,10 +193,16 @@ final class MetalTerminalBackend: TerminalRenderBackend {
                 if imeActive, row == imeRow, col >= grid.cursorCol, col < imeAfterCol { continue }
                 let isCursor = (row == blockCursorRow && col == grid.cursorCol && blockCursorOn)
                 let wide = (col + 1 < cols && cells[col + 1].isContinuation)
-                let rect = map.cellRectInView(row: row, col: col)
-                let w = wide ? metrics.width * 2 : metrics.width
-                let origin = SIMD2<Float>(Float(rect.origin.x), Float(rect.origin.y))
-                let size = SIMD2<Float>(Float(w), Float(rect.height))
+                let wcells = wide ? 2 : 1
+                // Pixel-snap cell edges so adjacent cells share the exact same
+                // boundary — kills the sub-pixel dark seam between powerline /
+                // background fills caused by fractional cell width.
+                let x0 = snap(inset.width + CGFloat(col) * metrics.width)
+                let x1 = snap(inset.width + CGFloat(col + wcells) * metrics.width)
+                let y0 = snap(inset.height + CGFloat(row) * metrics.height - scrollY)
+                let y1 = snap(inset.height + CGFloat(row + 1) * metrics.height - scrollY)
+                let origin = SIMD2<Float>(Float(x0), Float(y0))
+                let size = SIMD2<Float>(Float(x1 - x0), Float(y1 - y0))
 
                 if let color = bgColor(cell: cell, col: col, sel: sel, finds: finds,
                                        activeFind: activeFind, isCursor: isCursor) {
@@ -357,10 +378,29 @@ final class MetalTerminalBackend: TerminalRenderBackend {
     var viewportHeight: CGFloat { metalView.bounds.height }
 
     func setScrollY(_ y: CGFloat, animated: Bool) {
-        let maxY = max(0, contentHeight - viewportHeight)
-        scrollY = max(0, min(y, maxY))
+        // Increment A: `animated` is not yet honored (no animation link) — jump.
+        // The ScrollModel clamps to [0, contentHeight - viewportHeight].
+        scroll.maxY = max(0, contentHeight - viewportHeight)
+        scroll.jump(to: y)
         redrawLast()
         onScrollGeometryChanged?()
+    }
+
+    /// Consume a wheel/trackpad event: apply its delta and redraw. macOS delivers
+    /// the gesture + a decaying momentum stream, so this yields smooth scroll +
+    /// momentum without simulating a spring. Always returns true (Metal owns the
+    /// wheel; the host won't fall through to a no-op `super.scrollWheel`).
+    func handleScrollWheel(_ event: NSEvent) -> Bool {
+        scroll.maxY = max(0, contentHeight - viewportHeight)
+        let moved = scroll.applyWheel(deltaY: event.scrollingDeltaY,
+                                      precise: event.hasPreciseScrollingDeltas,
+                                      lineHeight: max(metrics.height, 1))
+        if moved {
+            redrawLast()
+            onScrollGeometryChanged?()   // reposition cursor overlay
+            onUserScroll?()              // host updates followingBottom
+        }
+        return true
     }
 
     func ensureLayout() {}      // Metal has no async text layout to flush.

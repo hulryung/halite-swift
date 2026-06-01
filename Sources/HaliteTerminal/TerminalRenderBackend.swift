@@ -145,6 +145,11 @@ public protocol TerminalRenderBackend: AnyObject {
     var scrollYPixels: CGFloat { get }
     /// Scroll to a content-pixel offset; `animated` drives the smooth snap.
     func setScrollY(_ y: CGFloat, animated: Bool)
+    /// Handle a scroll-wheel/trackpad event. Returns `true` if the backend
+    /// consumed it (and scrolled). The legacy backend returns `false` so the host
+    /// falls through to `NSScrollView`'s native handling; the Metal backend
+    /// applies the delta itself. Mouse-reporting is handled by the host upstream.
+    func handleScrollWheel(_ event: NSEvent) -> Bool
     /// Total laid-out content height in pixels.
     var contentHeight: CGFloat { get }
     /// Visible viewport height in pixels.
