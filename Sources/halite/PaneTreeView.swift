@@ -17,11 +17,30 @@ final class PaneTreeView: NSView {
 
     /// Pane lifecycle animation intent threaded through `rebuild`. `.none` is the
     /// instant/legacy path; `.split` animates the newly-created pane in from the
-    /// divider edge. (`.close` is added in Task 5 — do not add it here.)
+    /// divider edge; `.close` slides the closing pane's snapshot out to its outer edge.
     private enum PaneAnimation {
         case none
         /// After rebuild, find the wrapper whose leaf === `newLeaf` and animate it in.
         case split(newLeaf: PaneNode)
+        case close(snapshot: NSImage, closingFrame: NSRect, edge: ClosingEdge)
+    }
+
+    /// 닫히는 pane이 슬라이드해 사라질 방향(바깥 edge). self는 non-flipped(y up).
+    private enum ClosingEdge {
+        case left, right, top, bottom
+
+        /// `width`/`height`(가로/세로 길이)에 0.06을 곱한 nudge 만큼의 (dx, dy) translation.
+        /// self가 y-up이므로 bottom은 -y, top은 +y.
+        func offset(forWidth width: CGFloat, height: CGFloat) -> CGSize {
+            let nudgeX = width * 0.06
+            let nudgeY = height * 0.06
+            switch self {
+            case .left:   return CGSize(width: -nudgeX, height: 0)
+            case .right:  return CGSize(width:  nudgeX, height: 0)
+            case .top:    return CGSize(width: 0, height:  nudgeY)
+            case .bottom: return CGSize(width: 0, height: -nudgeY)
+            }
+        }
     }
 
     init(rootSession: HaliteSession) {
@@ -82,6 +101,24 @@ final class PaneTreeView: NSView {
 
     func closeActive() {
         guard case .leaf = activeLeaf.kind else { return }
+
+        // --- 애니메이션 의도 계산 (트리 변경 전에). 비활성/스냅샷 실패 시 .none로 즉시 경로. ---
+        var animation: PaneAnimation = .none
+        if Motion.enabled,
+           let parent = activeLeaf.parent,
+           case .split(let dir, let first, _, _) = parent.kind,
+           let wrapper = findWrapper(for: activeLeaf, in: self),
+           let snap = Motion.snapshot(of: wrapper) {
+            let closingFrame = wrapper.convert(wrapper.bounds, to: self)
+            let isFirst = (first === activeLeaf)
+            let edge: ClosingEdge
+            switch dir {
+            case .horizontal: edge = isFirst ? .left : .right   // first=좌, second=우
+            case .vertical:   edge = isFirst ? .top  : .bottom  // first=위, second=아래
+            }
+            animation = .close(snapshot: snap, closingFrame: closingFrame, edge: edge)
+        }
+
         // session terminate.
         if case .leaf(let s, _) = activeLeaf.kind {
             s.terminate()
@@ -103,7 +140,7 @@ final class PaneTreeView: NSView {
         }
         // 새 active를 promote된 sub-tree의 첫 leaf로 설정.
         activeLeaf = firstLeaf(of: parent)
-        rebuild()
+        rebuild(animation: animation)
     }
 
     /// 마우스 클릭 등으로 외부에서 active pane 변경 호출.
@@ -165,18 +202,56 @@ final class PaneTreeView: NSView {
             window?.makeFirstResponder(surface)
         }
         needsLayout = true
-
-        // Animate the appearing pane AFTER the new hierarchy + first responder
-        // are in their final state (focus/typing already works mid-animation).
+        // 라이브 계층은 위에서 최종 상태로 재구성됨 (sibling이 full로 snap). 이제 의도별 오버레이 처리.
         switch animation {
         case .none:
             break
+
         case .split(let newLeaf):
-            // Determine which axis to nudge along from the new leaf's parent split.
+            // (Task 3) 새 pane이 divider edge에서 밀어내려 나타나는 모션 — 부모 split에서
+            // 방향 도출 후 2-arg 호출.
             guard let parent = newLeaf.parent,
                   case .split(let dir, _, _, _) = parent.kind
             else { break }
             animateSplitIn(newLeaf: newLeaf, direction: dir)
+
+        case .close(let snapshot, let closingFrame, let edge):
+            // 닫힌 pane 스냅샷을 옛 frame에 올리고, 바깥 edge로 nudge + fade out 후 제거.
+            // 라이브 계층(sibling full)은 그 아래에서 이미 최종 상태.
+            // 오버레이는 self.layer의 sublayer라 위의 subviews teardown이 건드리지 않음 →
+            // 빠른/중첩 rebuild에도 stranding 없이 done에서만 제거됨.
+            // closeTab과 같은 명시적 CABasicAnimation 관용구: delegate 없는 vanilla CALayer라
+            // bare 모델 대입은 CA의 기본 암시적 애니메이션을 유발 — add() 전후로 모델을 건드리지 않는다.
+            layoutSubtreeIfNeeded()
+            let overlay = Motion.overlay(image: snapshot, frame: closingFrame, in: self)
+            let off = edge.offset(forWidth: closingFrame.width, height: closingFrame.height)
+            let fromPos = overlay.position
+            let toPos = CGPoint(x: fromPos.x + off.width, y: fromPos.y + off.height)
+
+            let slide = CABasicAnimation(keyPath: "position")
+            slide.fromValue = NSValue(point: fromPos)
+            slide.toValue = NSValue(point: toPos)
+
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = 1.0
+            fade.toValue = 0.0
+
+            let group = CAAnimationGroup()
+            group.animations = [slide, fade]
+            group.duration = Motion.duration
+            group.timingFunction = Motion.timing
+            group.isRemovedOnCompletion = false
+            group.fillMode = .forwards
+
+            // 모델값을 따로 쓰지 않는다. fillMode = .forwards 가 종료~제거 사이 동안
+            // 슬라이드/페이드된 최종 상태를 그대로 고정하므로 모델 갱신이 불필요하다.
+            overlay.add(group, forKey: "halite.pane-close")
+
+            // 애니메이션 후 오버레이 제거. 각 close는 자기 오버레이만 캡처하므로
+            // 빠른 연속 닫기에도 공유 상태 없이 안전.
+            DispatchQueue.main.asyncAfter(deadline: .now() + Motion.duration) {
+                overlay.removeFromSuperlayer()
+            }
         }
     }
 
