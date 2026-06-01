@@ -26,6 +26,8 @@ public struct HaliteConfig {
     public var scrollbackLines: Int
     public var imeStyle: IMECompositionStyle
     public var cursorBlink: Bool
+    /// 탭/페인 라이프사이클 모션을 켤지. 기본 ON. macOS Reduce Motion은 이와 무관하게 항상 우선.
+    public var animations: Bool
     /// 기본 cursor 모양. 셸/앱이 DECSCUSR로 바꾸면 그게 우선, ps=0(reset)이면 이 값으로 복귀.
     public var cursorShape: Grid.CursorShape
 
@@ -47,6 +49,7 @@ public struct HaliteConfig {
         scrollbackLines: Int = 10_000,
         imeStyle: IMECompositionStyle = .none,
         cursorBlink: Bool = false,
+        animations: Bool = true,
         cursorShape: Grid.CursorShape = .block,
         argv: [String] = HaliteConfig.defaultArgv(),
         env: [String: String] = ProcessInfo.processInfo.environment,
@@ -59,6 +62,7 @@ public struct HaliteConfig {
         self.scrollbackLines = scrollbackLines
         self.imeStyle = imeStyle
         self.cursorBlink = cursorBlink
+        self.animations = animations
         self.cursorShape = cursorShape
         self.argv = argv
         self.env = env

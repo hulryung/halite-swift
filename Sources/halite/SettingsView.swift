@@ -12,6 +12,7 @@ struct HaliteSettingsView: View {
     @AppStorage("halite.theme") private var themeName: String = HaliteTheme.defaultDark.name
     @AppStorage("halite.autoUpdate") private var autoUpdate: Bool = false
     @AppStorage("halite.cursorBlink") private var cursorBlink: Bool = false
+    @AppStorage("halite.animations") private var animations: Bool = true
     @AppStorage("halite.cursorShape") private var cursorShapeRaw: String = Grid.CursorShape.block.rawValue
 
     private let nerdFonts = FontDiscovery.nerdFontFamilies()
@@ -97,6 +98,7 @@ struct HaliteSettingsView: View {
                     Text("Bar").tag(Grid.CursorShape.bar.rawValue)
                 }
                 Toggle("Blink", isOn: $cursorBlink)
+                Toggle("Animations", isOn: $animations)
             }
             Section("IME Composition (한글/일본어/중국어 조합 표시)") {
                 Picker("Style", selection: $imeStyleRaw) {
@@ -121,6 +123,7 @@ struct HaliteSettingsView: View {
         .onChange(of: tabBarStyleRaw) { _ in postChanged() }
         .onChange(of: imeStyleRaw) { _ in postChanged() }
         .onChange(of: cursorBlink) { _ in postChanged() }
+        .onChange(of: animations) { _ in postChanged() }
         .onChange(of: cursorShapeRaw) { _ in postChanged() }
         .onChange(of: themeName) { _ in postChanged() }
         .onChange(of: autoUpdate) { _ in
@@ -227,6 +230,7 @@ extension HaliteConfig {
             config.imeStyle = style
         }
         config.cursorBlink = d.bool(forKey: "halite.cursorBlink")
+        config.animations = d.object(forKey: "halite.animations") as? Bool ?? true
         if let raw = d.string(forKey: "halite.cursorShape"),
            let shape = Grid.CursorShape(rawValue: raw) {
             config.cursorShape = shape

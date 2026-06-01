@@ -16,5 +16,6 @@ final class HaliteTerminalTests: XCTestCase {
         XCTAssertEqual(config.fontSize, 13)
         XCTAssertGreaterThan(config.scrollbackBytes, 0)
         XCTAssertFalse(config.argv.isEmpty)
+        XCTAssertTrue(config.animations)
     }
 }
