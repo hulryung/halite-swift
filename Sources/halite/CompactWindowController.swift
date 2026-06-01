@@ -14,6 +14,17 @@ final class CompactWindowController: NSWindowController, NSWindowDelegate {
         let tree: PaneTreeView
         var titleSub: AnyCancellable
     }
+
+    /// Animation intent threaded through `selectTab` / `addTab`. `.none` = instant
+    /// (today's behavior; restore, keyboard nav, tab-bar click, close-show-next).
+    /// `.create` = a brand-new tab's content fades + scales in (Task 2).
+    /// `.switch(fromIndex:)` = the tab-switch crossfade/slide (Task 6); carries the
+    /// index we came **from** so the slide direction follows the index sign.
+    enum TabTransition {
+        case none
+        case create
+        case `switch`(fromIndex: Int)
+    }
     private var tabs: [Tab] = []
     private(set) var currentIndex: Int = 0
 
@@ -139,12 +150,12 @@ final class CompactWindowController: NSWindowController, NSWindowDelegate {
     @discardableResult
     func addNewTab() -> HaliteSession {
         let session = HaliteSession(config: HaliteConfig.fromUserDefaults())
-        addTab(tree: PaneTreeView(rootSession: session))
+        addTab(tree: PaneTreeView(rootSession: session), transition: .create)
         return session
     }
 
     /// 이미 구성된 PaneTreeView를 새 탭으로 추가 (신규 또는 복원된 트리).
-    private func addTab(tree: PaneTreeView) {
+    private func addTab(tree: PaneTreeView, transition: TabTransition = .none) {
         tree.translatesAutoresizingMaskIntoConstraints = false
         // 마지막 pane이 닫히면 이 탭을 닫음. tabs 배열의 현재 인덱스가 아니라
         // tree 참조로 찾아야 함 (탭이 재배열돼도 정확).
@@ -164,11 +175,11 @@ final class CompactWindowController: NSWindowController, NSWindowDelegate {
             titleSub = AnyCancellable {}
         }
         tabs.append(Tab(tree: tree, titleSub: titleSub))
-        selectTab(tabs.count - 1)
+        selectTab(tabs.count - 1, transition: transition)
         refreshTabBar()
     }
 
-    func selectTab(_ index: Int) {
+    func selectTab(_ index: Int, transition: TabTransition = .none) {
         guard index >= 0, index < tabs.count else { return }
         currentIndex = index
         for t in tabs { t.tree.removeFromSuperview() }
@@ -188,6 +199,76 @@ final class CompactWindowController: NSWindowController, NSWindowDelegate {
             window?.title = title.isEmpty ? "halite" : title
         }
         refreshTabBar()
+
+        // The incoming tree may carry a leftover from-state if a prior create
+        // animation on this same view was superseded. Reset to the final visual
+        // state unconditionally; the `.create` branch below re-applies the
+        // from-state. Keeps the non-animated path identical to today.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        tree.layer?.opacity = 1
+        tree.layer?.transform = CATransform3DIdentity
+        CATransaction.commit()
+
+        if case .create = transition, Motion.enabled {
+            animateTabCreate(tree)
+        }
+    }
+
+    /// Tab-create motion (Task 2): the new tab's content fades + scales in.
+    /// `opacity` 0→1 and `transform` 0.98→1.0 over `Motion.duration` easeOut.
+    /// The tree already holds its final frame (constraints active); the transform
+    /// is purely visual → zero surface reflow.
+    private func animateTabCreate(_ tree: PaneTreeView) {
+        // Final frame must exist before we read layer.bounds for the
+        // center-composed scale; force a layout pass first.
+        contentContainer.layoutSubtreeIfNeeded()
+        guard let layer = tree.layer,
+              layer.bounds.width > 0, layer.bounds.height > 0 else {
+            // Zero-size (e.g. first tab before the window is shown) — skip motion.
+            // This is NORMAL and CORRECT: the unconditional reset block above already
+            // set the tree to opacity 1 / identity transform, so the tab ends at its
+            // final visual state — just without an animation. Not a bug.
+            return
+        }
+
+        // Center-composed scale: correct for ANY layer anchorPoint (a layer-backed
+        // NSView's anchorPoint is not reliably 0.5,0.5; a plain MakeScale would
+        // drift toward a corner instead of popping from the center).
+        let s: CGFloat = 0.98
+        let w = layer.bounds.width
+        let h = layer.bounds.height
+        let ap = layer.anchorPoint
+        let v = CGPoint(x: w * (0.5 - ap.x), y: h * (0.5 - ap.y))
+        let fromTransform = CATransform3DConcat(
+            CATransform3DConcat(
+                CATransform3DMakeTranslation(-v.x, -v.y, 0),
+                CATransform3DMakeScale(s, s, 1)
+            ),
+            CATransform3DMakeTranslation(v.x, v.y, 0)
+        )
+
+        // Instantly set the FROM-state (no implicit animation here).
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.opacity = 0
+        layer.transform = fromTransform
+        CATransaction.commit()
+
+        // Animate TO the final state inside the shared 0.16s easeOut group.
+        // Motion.run sets allowsImplicitAnimation = true, so these bare layer
+        // assignments animate implicitly (see Task 1 Step 1's contract note).
+        Motion.run({
+            layer.opacity = 1
+            layer.transform = CATransform3DIdentity
+        }, done: {
+            // Guarantee the resting state even if the run was interrupted.
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            layer.opacity = 1
+            layer.transform = CATransform3DIdentity
+            CATransaction.commit()
+        })
     }
 
     /// Move a tab from one position to another (drag-to-reorder).
