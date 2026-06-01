@@ -164,4 +164,65 @@ final class ScrollModelTests: XCTestCase {
         for _ in 0..<300 { _ = m.step(dt: 1.0 / 60) }
         XCTAssertLessThanOrEqual(m.current, 100, "ease must not settle past the new bottom")
     }
+
+    // MARK: - Rubber-band (polish)
+
+    func testRubberbandResistanceIsDiminishingAndBounded() {
+        let d: CGFloat = 800
+        XCTAssertEqual(ScrollModel.rubberband(0, d), 0)
+        let r50 = ScrollModel.rubberband(50, d)
+        let r200 = ScrollModel.rubberband(200, d)
+        let r1000 = ScrollModel.rubberband(1000, d)
+        XCTAssertLessThan(r50, 50, "displacement is resisted (less than raw overshoot)")
+        XCTAssertLessThan(r50, r200, "more pull → more displacement")
+        XCTAssertLessThan(r200, r1000)
+        XCTAssertLessThan(r1000, d, "bounded below the viewport dimension")
+    }
+
+    func testRubberbandZeroDimensionIsZero() {
+        XCTAssertEqual(ScrollModel.rubberband(100, 0), 0, "no dimension → no rubber-band (hard clamp)")
+    }
+
+    func testPreciseGestureOvershootsPastTopWithResistance() {
+        var m = ScrollModel()
+        m.maxY = 500
+        m.jump(to: 0)
+        m.applyWheel(deltaY: 100, precise: true, lineHeight: 16, viewport: 800)  // pull up past top
+        XCTAssertLessThan(m.current, 0, "rubber-bands past the top edge")
+        XCTAssertGreaterThan(m.current, -100, "but resisted (less than the raw 100px)")
+        XCTAssertTrue(m.isOvershooting)
+    }
+
+    func testPreciseGestureOvershootsPastBottom() {
+        var m = ScrollModel()
+        m.maxY = 500
+        m.jump(to: 500)
+        m.applyWheel(deltaY: -100, precise: true, lineHeight: 16, viewport: 800)  // pull down past bottom
+        XCTAssertGreaterThan(m.current, 500)
+        XCTAssertLessThan(m.current, 600)
+        XCTAssertTrue(m.isOvershooting)
+    }
+
+    func testMouseWheelHardStopsNoRubberband() {
+        var m = ScrollModel()
+        m.maxY = 500
+        m.jump(to: 0)
+        m.applyWheel(deltaY: 100, precise: false, lineHeight: 16, viewport: 800)
+        XCTAssertEqual(m.current, 0, "mouse wheel does not rubber-band")
+        XCTAssertFalse(m.isOvershooting)
+    }
+
+    func testSpringBackFromOvershootSettlesAtEdge() {
+        var m = ScrollModel()
+        m.maxY = 500
+        m.jump(to: 0)
+        m.applyWheel(deltaY: 120, precise: true, lineHeight: 16, viewport: 800)
+        XCTAssertTrue(m.isOvershooting)
+        m.animate(to: m.clamp(m.current))   // backend's spring-back on gesture end
+        var settled = false
+        for _ in 0..<600 where !settled { settled = m.step(dt: 1.0 / 60) }
+        XCTAssertTrue(settled)
+        XCTAssertEqual(m.current, 0, accuracy: 0.001)
+        XCTAssertFalse(m.isOvershooting)
+    }
 }

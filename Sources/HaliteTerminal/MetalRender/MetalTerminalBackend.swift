@@ -412,18 +412,29 @@ final class MetalTerminalBackend: TerminalRenderBackend {
 
     /// Consume a wheel/trackpad event: apply its delta and redraw. macOS delivers
     /// the gesture + a decaying momentum stream, so this yields smooth scroll +
-    /// momentum without simulating a spring. Always returns true (Metal owns the
-    /// wheel; the host won't fall through to a no-op `super.scrollWheel`).
+    /// momentum without simulating a spring. A trackpad gesture past an edge
+    /// rubber-bands (overshoot with resistance) and springs back when the gesture
+    /// (and its momentum) ends. Always returns true (Metal owns the wheel; the host
+    /// won't fall through to a no-op `super.scrollWheel`).
     func handleScrollWheel(_ event: NSEvent) -> Bool {
         animLink.stop()   // direct input cancels any in-flight programmatic ease
         scroll.maxY = max(0, contentHeight - viewportHeight)
         let moved = scroll.applyWheel(deltaY: event.scrollingDeltaY,
                                       precise: event.hasPreciseScrollingDeltas,
-                                      lineHeight: max(metrics.height, 1))
+                                      lineHeight: max(metrics.height, 1),
+                                      viewport: viewportHeight)
         if moved {
             redrawLast()
             onScrollGeometryChanged?()   // reposition cursor overlay
             onUserScroll?()              // host updates followingBottom
+        }
+        // Spring a rubber-band overshoot back to the edge once the gesture ends.
+        // (A following momentum event cancels this ease via animLink.stop above and
+        // re-overshoots, so the final spring fires on momentumPhase .ended.)
+        let ended = event.phase.contains(.ended) || event.phase.contains(.cancelled)
+            || event.momentumPhase.contains(.ended)
+        if ended && scroll.isOvershooting {
+            setScrollY(scroll.clamp(scroll.current), animated: true)
         }
         return true
     }

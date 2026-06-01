@@ -79,15 +79,42 @@ struct ScrollModel {
     ///   - precise: `event.hasPreciseScrollingDeltas` (trackpad). Precise deltas are
     ///     points and applied 1:1; non-precise (mouse wheel) deltas are lines.
     ///   - lineHeight: cell height in points, used to scale non-precise deltas.
+    ///   - viewport: viewport height in points, the dimension for rubber-band
+    ///     resistance. 0 (default) disables rubber-band → hard clamp at the edges.
     /// - Returns: whether `current` actually moved (false at an edge → skip redraw).
+    ///
+    /// Past an edge, a **precise** (trackpad) gesture rubber-bands: `current` is
+    /// allowed to overshoot [0, maxY] with diminishing resistance (the backend
+    /// springs it back when the gesture ends). A mouse wheel hard-stops at the edge.
     @discardableResult
-    mutating func applyWheel(deltaY: CGFloat, precise: Bool, lineHeight: CGFloat) -> Bool {
+    mutating func applyWheel(deltaY: CGFloat, precise: Bool, lineHeight: CGFloat,
+                             viewport: CGFloat = 0) -> Bool {
         animating = false
         let pixels = precise ? deltaY : deltaY * lineHeight
-        let next = clamp(current - pixels)
-        target = next
+        let raw = current - pixels
+        let hi = max(0, maxY)
+        var next = raw
+        if raw < 0 {
+            next = precise ? -ScrollModel.rubberband(-raw, viewport) : 0
+        } else if raw > hi {
+            next = precise ? hi + ScrollModel.rubberband(raw - hi, viewport) : hi
+        }
+        target = clamp(next)            // a follow-up ease always targets the valid range
         guard next != current else { return false }
-        current = next
+        current = next                  // may be out of [0, maxY] during a rubber-band
         return true
+    }
+
+    /// True while scrolled past an edge (rubber-band overshoot in effect); the
+    /// backend springs `current` back to `clamp(current)` when this holds at
+    /// gesture end.
+    var isOvershooting: Bool { current < 0 || current > max(0, maxY) }
+
+    /// AppKit-style elastic resistance: maps an unbounded `overshoot` to a bounded,
+    /// diminishing displacement (≈ NSScrollView rubber-band). 0 if no dimension.
+    static func rubberband(_ overshoot: CGFloat, _ dimension: CGFloat) -> CGFloat {
+        guard dimension > 0, overshoot > 0 else { return 0 }
+        let c: CGFloat = 0.55
+        return (1 - 1 / (overshoot * c / dimension + 1)) * dimension
     }
 }

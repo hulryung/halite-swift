@@ -294,7 +294,9 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
         let docHeight = backend.contentHeight
         let visHeight = backend.viewportHeight
         let yMax = max(0, docHeight - visHeight)
-        let curY = backend.scrollYPixels
+        // Clamp to the valid range: the Metal backend can report a rubber-band
+        // overshoot past yMax, which must NOT flip follow-bottom off while tailing.
+        let curY = min(max(backend.scrollYPixels, 0), yMax)
         return abs(curY - yMax) <= tolerance
     }
 
