@@ -111,6 +111,23 @@ final class GridTests: XCTestCase {
         XCTAssertEqual(g.cursorCol, 2)
     }
 
+    /// Regression: a narrowing reflow re-wraps the viewport into more physical
+    /// rows than fit, pushing the overflow into scrollback — without bumping
+    /// `scrollbackPushCount` (reflow rebuilds scrollback wholesale). So
+    /// `scrollback.count` can exceed `scrollbackPushCount`, and the host's
+    /// `scrollbackPushCount - count` eviction metric used to trap on UInt64
+    /// underflow during a window resize. `linesEvictedFromTop` must clamp to 0.
+    func testNarrowingReflowDoesNotUnderflowEvictionCount() {
+        let g = makeGrid(cols: 8, rows: 2)
+        write(g, "aaaaaaaabbbbbbbb")   // 16 chars = one soft-wrapped line filling both rows
+        XCTAssertEqual(g.scrollbackPushCount, 0, "no scrollUp happened, so nothing was pushed")
+        g.resize(cols: 4, rows: 2)     // reflow → 4 physical rows, 2 overflow into scrollback
+        XCTAssertGreaterThan(g.scrollback.count, Int(g.scrollbackPushCount),
+            "precondition: reflow grew scrollback past the push count")
+        XCTAssertEqual(g.linesEvictedFromTop, 0,
+            "eviction metric must clamp to 0, not trap on UInt64 underflow")
+    }
+
     func testReflowKeepsHardNewlinesSeparate() {
         let g = makeGrid(cols: 8, rows: 4)
         write(g, "foo"); g.lineFeed(); g.carriageReturn()

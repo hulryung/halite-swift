@@ -63,6 +63,17 @@ public final class Grid {
     /// 호스트가 "그 사이 새로 추가된 줄 수" / "evict 여부"를 판단할 수 있음.
     public private(set) var scrollbackPushCount: UInt64 = 0
 
+    /// 세션 동안 scrollback 최상단에서 evict된 누적 줄 수 (`pushCount - 현재 count`).
+    ///
+    /// **언더플로 안전.** reflow(`reflowPrimary`)는 `scrollbackPushCount`를 건드리지
+    /// 않고 `scrollback`을 통째로 재구성하므로, 컬럼을 좁히면 soft-wrap이 늘어
+    /// `scrollback.count`가 `scrollbackPushCount`를 넘을 수 있다. 그 경우 evict된 게
+    /// 없으므로 `UInt64` 빼기로 트랩(크래시)하는 대신 0을 돌려준다.
+    public var linesEvictedFromTop: UInt64 {
+        let count = UInt64(scrollback.count)
+        return scrollbackPushCount > count ? scrollbackPushCount - count : 0
+    }
+
     /// scrollback 최대 줄 수. `HaliteSession`이 config에서 받아서 설정.
     public var maxScrollbackLines: Int = 10_000
 

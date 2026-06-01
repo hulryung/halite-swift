@@ -1473,7 +1473,11 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
         // 이번 렌더에서 scrollback 최상단이 몇 줄 evict 됐는지 = 사용자가 보던 콘텐츠가
         // 위로 밀린 양. (scrollback에 append는 viewport 바로 위에 쌓여 기존 history의
         // 화면 위치를 바꾸지 않으므로, content drift는 오직 top eviction에서만 발생.)
-        let evictedTotal = grid.scrollbackPushCount - UInt64(grid.scrollback.count)
+        // Underflow-safe: a narrowing reflow can grow scrollback.count past
+        // scrollbackPushCount (reflow rebuilds scrollback without bumping the push
+        // counter). `linesEvictedFromTop` clamps to 0 instead of trapping the
+        // UInt64 subtraction — the resize crash.
+        let evictedTotal = grid.linesEvictedFromTop
         let evictedSinceLast = evictedTotal >= lastEvictedTotal
             ? Int(evictedTotal - lastEvictedTotal) : 0
         lastEvictedTotal = evictedTotal
