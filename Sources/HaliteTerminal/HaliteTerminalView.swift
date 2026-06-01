@@ -31,13 +31,6 @@ public struct HaliteTerminalView: NSViewRepresentable {
     }
 }
 
-/// 내부 표시용 NSTextView. first responder도 mouse hit도 거부.
-private final class PassiveTextView: NSTextView {
-    override var acceptsFirstResponder: Bool { false }
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-    override func becomeFirstResponder() -> Bool { false }
-}
-
 /// M3 placeholder: 자식 `NSTextView`에 Grid 스냅샷을 그대로 투영.
 /// 한 번에 textStorage 전체를 갈아끼움 (run-length attrs 그룹핑).
 /// 키 이벤트는 이쪽에서 잡아 `session.write(_:)`로 전달.
@@ -51,8 +44,10 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
 
     public var onFocus: (() -> Void)?
 
-    private let scrollView: NSScrollView
-    private let textView: PassiveTextView
+    /// The render/scroll/geometry backend. Legacy NSTextView path for now; the
+    /// Metal path slots in behind the same `TerminalRenderBackend` protocol.
+    private let legacyBackend: LegacyTextBackend
+    private var backend: TerminalRenderBackend { legacyBackend }
     private var gridSubscription: AnyCancellable?
     private var configSubscription: AnyCancellable?
     private var lastReportedSize: (cols: Int, rows: Int)? = nil
@@ -68,7 +63,8 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
     /// (BS-cancel 등) 강제 재렌더링하기 위한 비교용.
     private var lastRenderedMarkedText: String = ""
     /// 캐시된 cell metrics. `reportSizeIfChanged`가 갱신, render가 paragraph style에 사용.
-    private var cellMetrics: (width: CGFloat, height: CGFloat) = (1, 1)
+    /// 폰트에서만 파생되는 단일 값 — 양 백엔드가 공유해 토글 시 SIGWINCH 방지.
+    private var cellMetrics = CellMetrics(width: 1, height: 1)
 
     /// IME 조합 중인 텍스트. 비어있지 않으면 cursor 자리에 시각적 overlay.
     /// 실제 PTY 전송은 `insertText`(commit)이 올 때만 일어남.
@@ -94,9 +90,9 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
     private var selectionAnchor: (row: Int, col: Int)?
     private var selectionHead: (row: Int, col: Int)?
 
-    /// DECSCUSR underline/bar 모양용 cursor overlay.
-    /// block 모양은 inverse-cell 렌더링으로 유지 (NSAttributedString 한 번에 처리, 더 contrast 좋음).
-    /// underline/bar는 CALayer로 그려서 cell 글자를 가리지 않음.
+    /// DECSCUSR underline/bar 모양용 cursor overlay. 호스트 레이어에 둠 — 백엔드가
+    /// 기하를 계산해 주면 여기에 위치시킨다 (좌표 basis가 원본과 일치). block 모양은
+    /// 백엔드 렌더의 inverse-cell이 처리하므로 이 레이어는 underline/bar에서만 보임.
     private let cursorLayer = CALayer()
 
     /// cursor blink — config.cursorBlink ON이면 timer로 phase 토글.
@@ -147,81 +143,29 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
     public init(session: HaliteSession) {
         self.session = session
 
-        let scroll = NSScrollView()
-        scroll.hasVerticalScroller = true
-        scroll.hasHorizontalScroller = false
-        scroll.borderType = .noBorder
-        scroll.autoresizingMask = [.width, .height]
-        // 테마 배경으로 직접 칠함. false면 textView 콘텐츠 아래 빈 영역에 window
-        // 기본 배경(다크모드 회색)이 비쳐서 검정 테마인데 회색으로 보이는 문제 발생.
-        scroll.drawsBackground = true
-        scroll.backgroundColor = session.config.backgroundColor
-        // Big Sur+ NSScrollView가 system chrome(타이틀바 등)에 맞춰 자동으로
-        // contentInsets를 추가하는데, 우리 터미널은 cell-grid 정렬이라 이 inset이
-        // 들어가면 leftmost / topmost column이 일부 가려짐. 명시적으로 끔.
-        scroll.automaticallyAdjustsContentInsets = false
-        scroll.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
-        scroll.scrollerInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
-
-        let tv = PassiveTextView(frame: .zero)
-        tv.isEditable = false
-        tv.isSelectable = false
-        tv.isRichText = true
-        tv.allowsUndo = false
-        // 초기 폰트 — config.fontFamily 우선 + cascadeList에 Nerd Font fallback
-        // 추가. Menlo 같은 일반 monospace를 선택해도 Powerline 글리프가 ?로 깨지지
-        // 않도록.
-        tv.font = fontWithNerdFallback(
-            family: session.config.fontFamily,
-            size: session.config.fontSize
-        )
-        tv.textColor = session.config.foregroundColor
-        tv.backgroundColor = session.config.backgroundColor
-        tv.drawsBackground = true
-        tv.autoresizingMask = [.width]
-        tv.textContainerInset = NSSize(width: 4, height: 4)
-
-        // textView 너비를 scrollView의 가시 영역에 묶고, wrap 없이 초과분은 clip.
-        // 트랙패드 좌우 스와이프로 빈 공간이 드러나는 문제 방지.
-        tv.isHorizontallyResizable = false
-        tv.textContainer?.widthTracksTextView = true
-        tv.textContainer?.heightTracksTextView = false
-        // 기본 5pt의 line fragment padding을 제거. 이게 있으면 모든 줄의 시작이
-        // textContainerInset 너머로 추가 5pt 들여 써져서 cell 정렬과 어긋남.
-        tv.textContainer?.lineFragmentPadding = 0
-
-        scroll.documentView = tv
-
-        self.scrollView = scroll
-        self.textView = tv
+        self.legacyBackend = LegacyTextBackend(config: session.config)
 
         super.init(frame: .zero)
         wantsLayer = true
         layer?.backgroundColor = session.config.backgroundColor.cgColor
 
-        addSubview(scroll)
-        scroll.frame = bounds
+        let content = backend.contentView
+        content.autoresizingMask = [.width, .height]
+        addSubview(content)
+        content.frame = bounds
 
-        // Cursor overlay layer — underline/bar 모양용. block은 별도 처리.
+        // underline/bar cursor overlay layer — 호스트 레이어에 둠 (원본과 동일).
         cursorLayer.zPosition = 100
         cursorLayer.isHidden = true
-        cursorLayer.backgroundColor = session.config.cursorColor.cgColor
         layer?.addSublayer(cursorLayer)
 
-        // 사용자 스크롤 시 cursor 위치 추적 (auto-scroll 외에도 변동될 수 있음).
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(scrollViewDidScroll(_:)),
-            name: NSScrollView.didLiveScrollNotification,
-            object: scroll
-        )
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(scrollViewDidScroll(_:)),
-            name: NSView.boundsDidChangeNotification,
-            object: scroll.contentView
-        )
-        scroll.contentView.postsBoundsChangedNotifications = true
+        // 백엔드가 스크롤 변동을 콜백 — boundsDidChange(programmatic 포함)는 cursor
+        // overlay 재배치, didLiveScroll(사용자 인터랙션)은 follow-bottom 갱신.
+        // (원래 scrollViewDidScroll의 두 역할을 그대로 분리.)
+        legacyBackend.onScrollGeometryChanged = { [weak self] in self?.refreshCursorOverlayNow() }
+        legacyBackend.onUserScroll = { [weak self] in
+            DispatchQueue.main.async { self?.refreshFollowingBottomFlag() }
+        }
 
         gridSubscription = session.gridChanged
             .receive(on: RunLoop.main)
@@ -302,14 +246,7 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
 
     /// Settings 변경 → session.updateConfig → 여기로 들어와서 textView/색상/스크롤백 적용.
     private func applyConfig(_ config: HaliteConfig) {
-        let font = fontWithNerdFallback(family: config.fontFamily, size: config.fontSize)
-        textView.font = font
-        textView.backgroundColor = config.backgroundColor
-        scrollView.backgroundColor = config.backgroundColor
-        // ⚠️ textView.textColor = ... 는 rich-text 모드에서 textStorage 전체의
-        // .foregroundColor 어트리뷰트를 flat하게 덮어쓴다 → per-cell SGR 색이
-        // 다 흰색으로 사라지는 회귀가 발생함. 우리 render는 per-cell .foregroundColor
-        // 를 명시적으로 set 하므로 default textColor를 건드릴 필요 자체가 없음.
+        backend.applyConfig(config)
         layer?.backgroundColor = config.backgroundColor.cgColor
         lastReportedSize = nil
         // dedupe key 무력화 후 동기 re-render — grid.version 변화 없이도 새 폰트/색이
@@ -325,13 +262,10 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
 
     public override func layout() {
         super.layout()
-        scrollView.frame = bounds
-        // 라이브 리사이즈 중에도 textView/textContainer가 새 너비로 즉시 re-layout 되도록
-        // 강제. 이게 없으면 드래그 중엔 옛 layout이 유지되어 사용자가 보는 화면이
-        // 안 갱신되어 보임.
-        if let container = textView.textContainer {
-            textView.layoutManager?.ensureLayout(for: container)
-        }
+        backend.contentView.frame = bounds
+        // 라이브 리사이즈 중에도 콘텐츠가 새 너비로 즉시 re-layout 되도록 강제.
+        // 이게 없으면 드래그 중엔 옛 layout이 유지되어 화면이 안 갱신되어 보임.
+        backend.ensureLayout()
         reportSizeIfChanged()
         // 사용자가 위로 스크롤한 상태(followingBottom == false)면 layout 패스(리사이즈
         // 등)에서도 위치를 건드리지 않는다 — 보던 history가 강제로 바닥으로 튀지 않게.
@@ -350,10 +284,10 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
     }
 
     private func isScrolledToBottom(tolerance: CGFloat = 2.0) -> Bool {
-        let docHeight = textView.frame.height
-        let visHeight = scrollView.contentView.bounds.height
+        let docHeight = backend.contentHeight
+        let visHeight = backend.viewportHeight
         let yMax = max(0, docHeight - visHeight)
-        let curY = scrollView.contentView.bounds.origin.y
+        let curY = backend.scrollYPixels
         return abs(curY - yMax) <= tolerance
     }
 
@@ -362,37 +296,32 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
     ///  안 스크롤하면 textStorage 최상단=primary scrollback이 보이고 alt 콘텐츠는
     ///  그 아래에 그려져 사용자가 위로 스크롤해야 보는 회귀가 있었음.)
     private func scrollViewportToAltTop() {
-        if let container = textView.textContainer {
-            textView.layoutManager?.ensureLayout(for: container)
-        }
+        backend.ensureLayout()
         let viewportTop = CGFloat(session.grid.scrollback.count) * cellMetrics.height
-            + textView.textContainerInset.height
-        scrollView.contentView.scroll(to: NSPoint(x: 0, y: viewportTop))
-        scrollView.reflectScrolledClipView(scrollView.contentView)
+            + backend.contentInset.height
+        backend.setScrollY(viewportTop, animated: false)
     }
 
     private func scrollViewportToBottom() {
-        if let container = textView.textContainer {
-            textView.layoutManager?.ensureLayout(for: container)
-        }
-        let visHeight = scrollView.contentView.bounds.height
+        backend.ensureLayout()
+        let visHeight = backend.viewportHeight
         // "cursor visible" 정책 — cursor가 가시 영역 밖이면 들어오게만, 안이면 안 건드림.
         // layout(window resize 등)에서 followingBottom 일 때 호출되므로 사용자가 바닥에
         // 머물 의도면 그쪽으로 잡아주되, cursor 위 영역이 살아 있다면 그대로 둠.
         let cursorViewRow = session.grid.scrollback.count + session.grid.cursorRow
         let cursorY = CGFloat(cursorViewRow) * cellMetrics.height
-            + textView.textContainerInset.height
+            + backend.contentInset.height
         let cursorBottom = cursorY + cellMetrics.height
-        let curScroll = scrollView.contentView.bounds.origin.y
+        let curScroll = backend.scrollYPixels
         let visTop = curScroll
         let visBottom = curScroll + visHeight
         if cursorBottom > visBottom {
-            let targetY = cursorBottom - visHeight
-            scrollView.contentView.scroll(to: NSPoint(x: 0, y: targetY))
+            backend.setScrollY(cursorBottom - visHeight, animated: false)
         } else if cursorY < visTop {
-            scrollView.contentView.scroll(to: NSPoint(x: 0, y: cursorY))
+            backend.setScrollY(cursorY, animated: false)
+        } else {
+            backend.reflectScroll()
         }
-        scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 
     /// NSTextView가 실제 layout에서 사용하는 1줄 높이를 측정. `defaultLineHeight`보다
@@ -424,18 +353,18 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
         //  드래그가 끝날 때까지 한 번도 fire 안 됨. 일반 셸의 prompt 누적은 SIGWINCH
         //  자체의 표준 동작. TUI 세션은 redraw가 대부분 in-place(net-zero scroll)라
         //  resize 중에도 scrollback 잔재가 거의 안 쌓임.)
-        let font = textView.font ?? NSFont.userFixedPitchFont(ofSize: session.config.fontSize)
-            ?? NSFont.systemFont(ofSize: session.config.fontSize)
+        // 메트릭은 백엔드의 렌더 폰트에서 파생 — 메트릭과 렌더가 절대 어긋나지 않게.
+        let font = backend.renderFont
         let glyphSize = ("M" as NSString).size(withAttributes: [.font: font])
         let cellW = max(glyphSize.width, 1)
         // NSLayoutManager().defaultLineHeight는 NSTextView가 실제 쓰는 line height와
         // 미세하게 다른 경우가 있어 rows가 over-report됨. 실제 layout 결과로 측정.
         let cellH = max(measuredLineHeight(font: font), 1)
-        cellMetrics = (cellW, cellH)
-        let inset = textView.textContainerInset
-        // width: bounds.width 대신 scrollView.contentSize.width — vertical scroller가
+        cellMetrics = CellMetrics(width: cellW, height: cellH)
+        let inset = backend.contentInset
+        // width: bounds.width 대신 backend.contentSize.width — vertical scroller가
         // 항상 보이는 시스템 설정에서 ~15pt 차지하기 때문.
-        let usableW = max(scrollView.contentSize.width - inset.width * 2, 1)
+        let usableW = max(backend.contentSize.width - inset.width * 2, 1)
 
         // height: bounds.height는 macOS 네이티브 탭 바 출현/사라짐(2탭↔1탭 토글)에
         // 따라 ~36pt가 들락날락한다. window.contentRect도 마찬가지로 변함 (윈도우
@@ -707,14 +636,8 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
             clearHoveredURL()
             return
         }
-        let inTV = textView.convert(inSelf, from: self)
-        let inset = textView.textContainerInset
-        let cellW = max(cellMetrics.width, 1)
-        let cellH = max(cellMetrics.height, 1)
-        let row = max(0, Int(floor((inTV.y - inset.height) / cellH)))
-        let col = max(0, Int(floor((inTV.x - inset.width) / cellW)))
-        let maxRow = session.grid.scrollback.count + session.grid.rows - 1
-        updateHoverFromCell((min(row, maxRow), min(col, session.grid.cols)))
+        let pos = backend.cell(at: winPt, grid: session.grid, metrics: cellMetrics)
+        updateHoverFromCell((pos.row, pos.col))
     }
 
     private func updateHoverFromCell(_ pos: (row: Int, col: Int)) {
@@ -801,12 +724,6 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
         return nil
     }
 
-    /// 렌더 시 사용 — 주어진 textViewRow에 hovered URL이 있으면 그 col range.
-    private func hoveredURLRangeForRow(_ textViewRow: Int) -> Range<Int>? {
-        guard let h = hoveredURL, h.row == textViewRow else { return nil }
-        return h.colRange
-    }
-
     public override func scrollWheel(with event: NSEvent) {
         // Mouse reporting 활성 시 휠은 button 64/65 코드로 PTY 전달 (tmux 등이 사용).
         if isMouseReportingEvent(event) {
@@ -829,7 +746,7 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
     /// nil(스크롤 불필요).
     private func followTargetY() -> CGFloat? {
         let grid = session.grid
-        let inset = textView.textContainerInset.height
+        let inset = backend.contentInset.height
         if grid.isAltScreenActive || grid.hasUsedSyncOutput {
             // Alt-screen / primary-screen TUI(Claude Code 등) — 라이브 grid 전체가
             // 보이도록 grid-top을 viewport-top에 anchor. (rows*cellH ≤ visHeight라
@@ -843,11 +760,11 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
             return CGFloat(grid.scrollback.count) * cellMetrics.height + inset
         }
         // 일반 셸 — cursor-visible 정책.
-        let visHeight = scrollView.contentView.bounds.height
+        let visHeight = backend.viewportHeight
         let cursorViewRow = grid.scrollback.count + grid.cursorRow
         let cursorY = CGFloat(cursorViewRow) * cellMetrics.height + inset
         let cursorBottom = cursorY + cellMetrics.height
-        let curY = scrollView.contentView.bounds.origin.y
+        let curY = backend.scrollYPixels
         if cursorBottom > curY + visHeight {
             return cursorBottom - visHeight
         } else if cursorY < curY {
@@ -861,22 +778,23 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
     private func snapToCursorOnUserInput() {
         followingBottom = true
         guard let targetY = followTargetY() else { return }
-        let curY = scrollView.contentView.bounds.origin.y
+        let curY = backend.scrollYPixels
         guard abs(targetY - curY) > 0.5 else { return }
         isSnappingToCursor = true
-        NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.18
-            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            scrollView.contentView.animator().setBoundsOrigin(NSPoint(x: 0, y: targetY))
+        NSAnimationContext.runAnimationGroup({ [weak self] _ in
+            NSAnimationContext.current.duration = 0.18
+            NSAnimationContext.current.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            self?.backend.setScrollY(targetY, animated: true)
         }, completionHandler: { [weak self] in
             guard let self else { return }
             self.isSnappingToCursor = false
             // 애니메이션 동안 들어온 새 출력까지 반영해 정확히 안착.
             if self.followingBottom, let y = self.followTargetY() {
-                self.scrollView.contentView.scroll(to: NSPoint(x: 0, y: y))
+                self.backend.setScrollY(y, animated: false)
+            } else {
+                self.backend.reflectScroll()
             }
-            self.scrollView.reflectScrolledClipView(self.scrollView.contentView)
-            self.updateCursorLayer()
+            self.refreshCursorOverlayNow()
         })
     }
 
@@ -972,16 +890,8 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
     /// `event.locationInWindow`를 textView 콘텐츠 좌표계의 (row, col)로 변환.
     /// row는 scrollback과 viewport 통합 인덱스 (= `scrollback.count + viewportRow`).
     private func convertEventToCell(_ event: NSEvent) -> (row: Int, col: Int) {
-        let pInView = convert(event.locationInWindow, from: nil)
-        let pInTextView = textView.convert(pInView, from: self)
-        let inset = textView.textContainerInset
-        let cellW = max(cellMetrics.width, 1)
-        let cellH = max(cellMetrics.height, 1)
-        let row = max(0, Int(floor((pInTextView.y - inset.height) / cellH)))
-        let col = max(0, Int(floor((pInTextView.x - inset.width) / cellW)))
-        let maxRow = session.grid.scrollback.count + session.grid.rows - 1
-        let maxCol = session.grid.cols
-        return (min(row, maxRow), min(col, maxCol))
+        let pos = backend.cell(at: event.locationInWindow, grid: session.grid, metrics: cellMetrics)
+        return (pos.row, pos.col)
     }
 
     /// anchor/head를 row-major 순으로 정규화한 (start, end). end는 exclusive.
@@ -1191,24 +1101,11 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
     private func scrollToActiveMatch() {
         guard activeMatchIndex >= 0, activeMatchIndex < findMatchesOrdered.count else { return }
         let row = findMatchesOrdered[activeMatchIndex].row
-        let visHeight = scrollView.contentView.bounds.height
-        let rowY = CGFloat(row) * cellMetrics.height + textView.textContainerInset.height
+        let visHeight = backend.viewportHeight
+        let rowY = CGFloat(row) * cellMetrics.height + backend.contentInset.height
         // 매치를 viewport 1/3 지점에 두어 위아래 맥락이 보이게.
         let targetY = max(0, rowY - visHeight / 3)
-        scrollView.contentView.scroll(to: NSPoint(x: 0, y: targetY))
-        scrollView.reflectScrolledClipView(scrollView.contentView)
-    }
-
-    /// 한 줄에서 find 매치가 차지하는 col 범위들.
-    private func findRangesForRow(_ row: Int) -> [Range<Int>] {
-        findMatchesByRow[row] ?? []
-    }
-
-    /// 그 row에 현재 활성(Cmd+G로 선택된) 매치가 있으면 그 col range. 없으면 nil.
-    private func activeFindRangeForRow(_ row: Int) -> Range<Int>? {
-        guard activeMatchIndex >= 0, activeMatchIndex < findMatchesOrdered.count else { return nil }
-        let m = findMatchesOrdered[activeMatchIndex]
-        return m.row == row ? m.range : nil
+        backend.setScrollY(targetY, animated: false)
     }
 
     @objc public func zoomIn(_ sender: Any?) {
@@ -1229,7 +1126,7 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
         let newSize = max(6, baseSize * fontSizeMultiplier)
         // zoom도 cascade 포함된 폰트 사용 — Menlo 등에서도 Nerd glyph fallback 유지.
         let font = fontWithNerdFallback(family: session.config.fontFamily, size: newSize)
-        textView.font = font
+        backend.setRenderFont(font)
         // zoom은 **순수 시각 변경**으로 취급. session.grid 차원은 그대로 두고
         // cellMetrics만 새 폰트 기준으로 갱신 — SIGWINCH 안 발사 → 셸이 prompt를
         // 재출력하지 않음 (이전엔 매 Cmd+= 마다 새 prompt 라인이 추가돼서
@@ -1238,7 +1135,7 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
         let glyphSize = ("M" as NSString).size(withAttributes: [.font: font])
         let newCellW = max(glyphSize.width, 1)
         let newCellH = max(measuredLineHeight(font: font), 1)
-        cellMetrics = (newCellW, newCellH)
+        cellMetrics = CellMetrics(width: newCellW, height: newCellH)
         // dedupe 무력화 후 새 cellMetrics로 textStorage 재구성.
         lastRenderedVersion = .max
         renderNow()
@@ -1476,22 +1373,7 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
         actualRange: NSRangePointer?
     ) -> NSRect {
         guard let window = window else { return .zero }
-        let grid = session.grid
-        let cellW = cellMetrics.width
-        let cellH = cellMetrics.height
-        let inset = textView.textContainerInset
-
-        // textView 좌표계에서 cursor 셀의 origin
-        let rowInTextView = grid.scrollback.count + grid.cursorRow
-        let cellOrigin = CGPoint(
-            x: inset.width + CGFloat(grid.cursorCol) * cellW,
-            y: inset.height + CGFloat(rowInTextView) * cellH
-        )
-        let cellRectInTextView = NSRect(origin: cellOrigin, size: NSSize(width: cellW, height: cellH))
-
-        // textView → window → screen
-        let cellRectInWindow = textView.convert(cellRectInTextView, to: nil)
-        return window.convertToScreen(cellRectInWindow)
+        return backend.cursorScreenRect(grid: session.grid, metrics: cellMetrics, window: window)
     }
 
     private static func unwrapString(_ value: Any) -> String {
@@ -1565,92 +1447,13 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
         lastRenderedHoverKey = hoverKey
         lastRenderedBlinkKey = blinkKey
 
-        guard let storage = textView.textStorage else { return }
-        let baseFont = textView.font
-            ?? NSFont.userFixedPitchFont(ofSize: session.config.fontSize)
-            ?? NSFont.systemFont(ofSize: session.config.fontSize)
-
-        // 줄 높이를 정확히 cellH로 강제 (NSTextView 기본 spacing이 우리 cellH와
-        // 어긋나면 전체 컨텐츠가 viewport보다 커져 scroll이 발생).
-        let lineHeight = max(cellMetrics.height, 1)
-        let paragraphStyle = NSMutableParagraphStyle()
-        paragraphStyle.minimumLineHeight = lineHeight
-        paragraphStyle.maximumLineHeight = lineHeight
-        paragraphStyle.lineSpacing = 0
-        paragraphStyle.lineBreakMode = .byClipping
-
-        let result = NSMutableAttributedString()
-        result.beginEditing()
-
-        let scrollbackCount = grid.scrollback.count
-
-        // Scrollback. cursor는 안 그림.
-        for (i, line) in grid.scrollback.enumerated() {
-            let sel = selectedColumnsForRow(i, cols: line.count)
-            let finds = findRangesForRow(i)
-            let hover = hoveredURLRangeForRow(i)
-            let active = activeFindRangeForRow(i)
-            appendLine(
-                line.cells, cols: line.count, cursorCol: nil,
-                selectedCols: sel, findRanges: finds, activeFindRange: active,
-                hoveredURLRange: hover,
-                baseFont: baseFont, paragraphStyle: paragraphStyle, into: result
-            )
-            result.append(NSAttributedString(string: "\n"))
-        }
-
-        // block-cursor inverse 렌더링은 cursorVisible 따라가지만,
-        // IME 조합 overlay는 cursor가 숨김 처리되어 있어도(TUI 앱들이 DECTCEM ?25l로
-        // 흔히 함, 예: claude code, vim 일부 모드, htop) 사용자가 입력 중이면 보여야 함.
-        let blockCursorRow = grid.cursorVisible ? grid.cursorRow : -1
-        let imeOverlayRow = grid.cursorRow   // cursor 가시성과 무관하게 항상 그 자리
-        // blink ON이고 현재 blink off phase면 block cursor를 안 그림(깜빡임).
-        let blinkOff = session.config.cursorBlink && !cursorBlinkVisible
-        let blockCursorActive = (grid.cursorShape == .block) && markedText.isEmpty && !blinkOff
-        let mt = markedText
-        for r in 0..<grid.rows {
-            let textViewRow = scrollbackCount + r
-            let sel = selectedColumnsForRow(textViewRow, cols: grid.cols)
-            let finds = findRangesForRow(textViewRow)
-            let hover = hoveredURLRangeForRow(textViewRow)
-            let active = activeFindRangeForRow(textViewRow)
-            if r == imeOverlayRow && !mt.isEmpty {
-                appendCursorRowWithMarkedText(
-                    grid.row(r),
-                    cols: grid.cols,
-                    cursorCol: grid.cursorCol,
-                    markedText: mt,
-                    baseFont: baseFont,
-                    paragraphStyle: paragraphStyle,
-                    into: result
-                )
-            } else {
-                let cc: Int? = (r == blockCursorRow && blockCursorActive) ? grid.cursorCol : nil
-                appendLine(
-                    grid.row(r), cols: grid.cols, cursorCol: cc,
-                    selectedCols: sel, findRanges: finds, activeFindRange: active,
-                    hoveredURLRange: hover,
-                    baseFont: baseFont, paragraphStyle: paragraphStyle, into: result
-                )
-            }
-            if r < grid.rows - 1 {
-                result.append(NSAttributedString(string: "\n"))
-            }
-        }
-        result.endEditing()
-
-        storage.beginEditing()
-        storage.setAttributedString(result)
-        storage.endEditing()
+        // 백엔드가 한 프레임을 그림(ensureLayout까지 끝냄). dedupe는 위에서 완료.
+        backend.render(grid: grid, config: session.config, state: currentRenderState(),
+                       metrics: cellMetrics)
 
         // 자동 follow 스크롤은 followingBottom일 때만. 사용자가 위로 스크롤해
         // history를 보는 중이면 새 출력/커서 이동이 와도 위치를 건드리지 않는다
         // (단 scrollback evict 시 content-anchor 보정은 아래에서 따로 처리).
-        // NSTextView는 setAttributedString 직후에도 frame.height 갱신이 비동기적
-        // 일 수 있어서, 강제 동기 layout 후 frame.height 읽음.
-        if let container = textView.textContainer {
-            textView.layoutManager?.ensureLayout(for: container)
-        }
 
         // alt-screen 전환(primary↔alt)이 일어나면 follow를 재개한다. vim/htop 등은
         // 진입 시 그 화면을, 종료 시 셸 바닥을 항상 보여줘야 하므로 사용자가 이전에
@@ -1668,412 +1471,59 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
             ? Int(evictedTotal - lastEvictedTotal) : 0
         lastEvictedTotal = evictedTotal
 
+        var scrolled = false
         if followingBottom {
             // 키 입력 점프 애니메이션 중엔 위치를 애니메이션이 소유 — 즉시 scroll 안 함.
-            // (안 그러면 echo 렌더가 끝 위치로 순간이동시켜 애니메이션이 안 보임.)
             // alt 화면은 viewport top anchor, 그 외(일반 셸/Claude Code 등)는
             // cursor-visible 정책. followTargetY()가 두 경우를 통일해 계산.
             if !isSnappingToCursor, let targetY = followTargetY() {
-                scrollView.contentView.scroll(to: NSPoint(x: 0, y: targetY))
+                backend.setScrollY(targetY, animated: false)
+                scrolled = true
             }
         } else if evictedSinceLast > 0 {
             // 사용자가 위로 스크롤해 history를 보는 중 — scrollback이 evict된 만큼
             // 스크롤도 따라 올려서 보던 줄이 화면 같은 위치에 머물게(content-anchor).
-            // 전제: setAttributedString이 top에서 E줄 줄여도 clipView.origin.y는
-            // 그대로 유지된다(AppKit이 content를 semantic하게 따라가지 않음). 이 전제가
-            // 깨지면 이중 보정으로 화면이 튈 수 있음 — 그 경우 이 else-if 블록만 지우면
-            // 핵심 수정(강제 바닥 고정 제거)은 그대로 유지됨. >10k 줄 + 위로 스크롤 시에만 관여.
-            let curY = scrollView.contentView.bounds.origin.y
+            let curY = backend.scrollYPixels
             let adjusted = max(0, curY - CGFloat(evictedSinceLast) * cellMetrics.height)
-            scrollView.contentView.scroll(to: NSPoint(x: 0, y: adjusted))
+            backend.setScrollY(adjusted, animated: false)
+            scrolled = true
         }
         // else: 사용자가 스크롤로 올려둔 위치를 그대로 둔다 (강제 바닥 고정 안 함).
-        scrollView.reflectScrolledClipView(scrollView.contentView)
+        if !scrolled { backend.reflectScroll() }
 
-        updateCursorLayer()
+        refreshCursorOverlayNow()
     }
 
-    /// underline/bar 모양 cursor를 CALayer로 위치/크기 갱신. block은 inverse-cell로 처리.
-    @objc private func scrollViewDidScroll(_ note: Notification) {
-        updateCursorLayer()
-        // followingBottom 갱신은 **사용자 인터랙션 scroll** (`didLiveScrollNotification`)
-        // 에만 반응. boundsDidChangeNotification은 programmatic scroll
-        // (scrollViewportToBottom)이나 윈도우 리사이즈로 인한 transient도 발사하는데,
-        // 그때 isScrolledToBottom이 stale 값으로 잘못 false를 돌려 followingBottom이
-        // 깨지고 → 이후 layout이 bottom anchor를 안 해서 마지막 줄이 뷰포트 밖으로
-        // 밀리는 회귀를 만들었음.
-        if note.name == NSScrollView.didLiveScrollNotification {
-            DispatchQueue.main.async { [weak self] in
-                self?.refreshFollowingBottomFlag()
-            }
-        }
-    }
-
-    private func updateCursorLayer() {
-        let grid = session.grid
-        let shape = grid.cursorShape
-
-        // 숨겨야 할 조건들:
-        // - cursor invisible (DECTCEM ?25l)
-        // - block 모양 (inverse-cell이 처리)
-        // - IME 조합 중 (marked text overlay가 cursor 자리를 대체)
-        // - blink ON이고 현재 off phase (underline/bar 깜빡임)
-        let blinkOff = session.config.cursorBlink && !cursorBlinkVisible
-        guard grid.cursorVisible, shape != .block, markedText.isEmpty, !blinkOff else {
-            cursorLayer.isHidden = true
-            return
-        }
-
-        let cellW = max(cellMetrics.width, 1)
-        let cellH = max(cellMetrics.height, 1)
-        let inset = textView.textContainerInset
-
-        // textView 콘텐츠 좌표계의 cursor cell origin
-        let textViewRow = grid.scrollback.count + grid.cursorRow
-        let tvX = inset.width + CGFloat(grid.cursorCol) * cellW
-        let tvY = inset.height + CGFloat(textViewRow) * cellH
-
-        // textView 좌표 → HaliteSurfaceView 좌표 (scroll offset 자동 반영됨)
-        let originInSelf = textView.convert(NSPoint(x: tvX, y: tvY), to: self)
-
-        // wide cell이면 2 cols 폭
-        var cursorW = cellW
-        if grid.cursorCol + 1 < grid.cols
-            && grid.cursorRow < grid.rows {
-            let row = grid.row(grid.cursorRow)
-            if grid.cursorCol + 1 < row.count && row[grid.cursorCol + 1].isContinuation {
-                cursorW = cellW * 2
-            }
-        }
-
-        // self는 non-flipped(bottom-left origin), textView는 flipped(top-left origin).
-        // convert(_:to:)는 셀의 시각적 top-left를 self 좌표로 돌려주므로,
-        // 셀 박스의 rect.origin(bottom-left) y = originInSelf.y - cellH.
-        let cellBottomY = originInSelf.y - cellH
-
-        // 가시 영역 밖이면 숨김 (사용자가 history 위로 스크롤한 상태 등)
-        let visibleRect = bounds
-        let cursorRectInSelf = NSRect(x: originInSelf.x, y: cellBottomY, width: cursorW, height: cellH)
-        if !visibleRect.intersects(cursorRectInSelf) {
-            cursorLayer.isHidden = true
-            return
-        }
-
-        let frame: NSRect
-        switch shape {
-        case .underline:
-            // 셀 시각적 바닥에 얇은 strip — non-flipped이므로 rect의 y가 바닥.
-            let thickness = max(1.5, cellH * 0.1)
-            frame = NSRect(
-                x: originInSelf.x,
-                y: cellBottomY,
-                width: cursorW,
-                height: thickness
-            )
-        case .bar:
-            // 셀 시각적 좌측 변에 얇은 column — 셀 전체 높이.
-            let thickness = max(1.5, cellW * 0.15)
-            frame = NSRect(
-                x: originInSelf.x,
-                y: cellBottomY,
-                width: thickness,
-                height: cellH
-            )
-        case .block:
-            // 도달 안 함 (위에서 guard로 빠짐)
-            cursorLayer.isHidden = true
-            return
-        }
-
-        CATransaction.begin()
-        CATransaction.setDisableActions(true) // animation 끔
-        cursorLayer.frame = frame
-        cursorLayer.backgroundColor = session.config.cursorColor.cgColor
-        cursorLayer.isHidden = false
-        CATransaction.commit()
-    }
-
-    /// 한 줄(Cell 배열)을 run-length attribute 그룹으로 묶어서 attributed string에 append.
-    /// `cursorCol`이 주어지면 그 위치의 한 셀은 단독으로 inverse 처리해서 그림.
-    /// `selectedCols`가 주어지면 해당 범위의 셀들은 selection background로 칠함.
-    /// `findRanges`가 주어지면 그 범위들의 셀은 find-highlight 색으로 칠함.
-    private func appendLine(
-        _ line: [Cell],
-        cols: Int,
-        cursorCol: Int?,
-        selectedCols: Range<Int>?,
-        findRanges: [Range<Int>],
-        activeFindRange: Range<Int>?,
-        hoveredURLRange: Range<Int>?,
-        baseFont: NSFont,
-        paragraphStyle: NSParagraphStyle,
-        into result: NSMutableAttributedString
-    ) {
-        guard cols > 0 else { return }
-        let cc = cursorCol ?? -1
-        if cc >= 0 && cc < cols {
-            if cc > 0 {
-                appendRunGroup(
-                    line, range: 0..<cc, selectedCols: selectedCols, findRanges: findRanges,
-                    activeFindRange: activeFindRange, hoveredURLRange: hoveredURLRange,
-                    baseFont: baseFont, paragraphStyle: paragraphStyle, into: result
-                )
-            }
-            var inverseCell = line[cc]
-            inverseCell.attrs.inverse.toggle()
-            let cursorSelected = selectedCols?.contains(cc) ?? false
-            let cursorIsWide = (cc + 1 < cols && line[cc + 1].isContinuation)
-            if cursorIsWide {
-                appendWideCell(
-                    inverseCell,
-                    isSelected: cursorSelected,
-                    baseFont: baseFont,
-                    paragraphStyle: paragraphStyle,
-                    into: result
-                )
-            } else {
-                let nsAttrs = makeAttributes(
-                    for: inverseCell.attrs, baseFont: baseFont,
-                    paragraphStyle: paragraphStyle,
-                    isSelected: cursorSelected, hyperlink: inverseCell.hyperlink
-                )
-                result.append(NSAttributedString(string: String(inverseCell.char), attributes: nsAttrs))
-            }
-            if cc + 1 < cols {
-                appendRunGroup(
-                    line, range: (cc + 1)..<cols, selectedCols: selectedCols, findRanges: findRanges,
-                    activeFindRange: activeFindRange, hoveredURLRange: hoveredURLRange,
-                    baseFont: baseFont, paragraphStyle: paragraphStyle, into: result
-                )
-            }
-        } else {
-            appendRunGroup(
-                line, range: 0..<cols, selectedCols: selectedCols, findRanges: findRanges,
-                activeFindRange: activeFindRange, hoveredURLRange: hoveredURLRange,
-                baseFont: baseFont, paragraphStyle: paragraphStyle, into: result
-            )
-        }
-    }
-
-    /// cursor 자리에 IME 조합 중 텍스트를 시각적 overlay로 그림.
-    /// grid 자체는 mutate 안 함 (commit이 오면 PTY echo로 grid 갱신).
-    private func appendCursorRowWithMarkedText(
-        _ line: [Cell],
-        cols: Int,
-        cursorCol: Int,
-        markedText: String,
-        baseFont: NSFont,
-        paragraphStyle: NSParagraphStyle,
-        into result: NSMutableAttributedString
-    ) {
-        // cursor 이전 셀들 — 평소처럼
-        if cursorCol > 0 {
-            appendRunGroup(
-                line, range: 0..<cursorCol, selectedCols: nil, findRanges: [],
-                activeFindRange: nil, hoveredURLRange: nil,
-                baseFont: baseFont, paragraphStyle: paragraphStyle, into: result
-            )
-        }
-
-        // 조합 텍스트 — config.imeStyle에 따라 시각 단서 결정.
-        var imeAttrs: [NSAttributedString.Key: Any] = [
-            .font: baseFont,
-            .foregroundColor: session.config.foregroundColor,
-            .paragraphStyle: paragraphStyle,
-        ]
-        switch session.config.imeStyle {
-        case .underline:
-            imeAttrs[.underlineStyle] = NSUnderlineStyle.single.rawValue
-            imeAttrs[.underlineColor] = session.config.foregroundColor
-                .withAlphaComponent(0.7)
-        case .thickUnderline:
-            imeAttrs[.underlineStyle] = NSUnderlineStyle.thick.rawValue
-            imeAttrs[.underlineColor] = session.config.foregroundColor
-        case .background:
-            imeAttrs[.backgroundColor] = NSColor.systemBlue.withAlphaComponent(0.45)
-            imeAttrs[.foregroundColor] = NSColor.white
-        case .both:
-            imeAttrs[.underlineStyle] = NSUnderlineStyle.thick.rawValue
-            imeAttrs[.backgroundColor] = NSColor.systemBlue.withAlphaComponent(0.65)
-            imeAttrs[.foregroundColor] = NSColor.white
-        case .none:
-            break // 텍스트만 출력
-        }
-        result.append(NSAttributedString(string: markedText, attributes: imeAttrs))
-
-        // 조합 텍스트가 가린 만큼 row의 나머지 셀을 건너뜀.
-        // markedText.count로 대략의 cell 폭 산정 (CJK wide는 M5에서 처리).
-        let overlayCols = markedText.count
-        let afterCol = min(cursorCol + overlayCols, cols)
-        if afterCol < cols {
-            appendRunGroup(
-                line, range: afterCol..<cols, selectedCols: nil, findRanges: [],
-                activeFindRange: nil, hoveredURLRange: nil,
-                baseFont: baseFont, paragraphStyle: paragraphStyle, into: result
-            )
-        }
-    }
-
-    private func appendRunGroup(
-        _ line: [Cell],
-        range: Range<Int>,
-        selectedCols: Range<Int>?,
-        findRanges: [Range<Int>],
-        activeFindRange: Range<Int>?,
-        hoveredURLRange: Range<Int>?,
-        baseFont: NSFont,
-        paragraphStyle: NSParagraphStyle,
-        into result: NSMutableAttributedString
-    ) {
-        func isFindMatch(_ col: Int) -> Bool {
-            findRanges.contains { $0.contains(col) }
-        }
-        func isActiveFind(_ col: Int) -> Bool {
-            activeFindRange?.contains(col) ?? false
-        }
-        func isHovered(_ col: Int) -> Bool {
-            hoveredURLRange?.contains(col) ?? false
-        }
-
-        var c = range.lowerBound
-        while c < range.upperBound {
-            if line[c].isContinuation {
-                c += 1
-                continue
-            }
-            let isWide = (c + 1 < line.count && line[c + 1].isContinuation)
-            if isWide {
-                let runSelected = selectedCols?.contains(c) ?? false
-                let runFind = isFindMatch(c)
-                let runActive = isActiveFind(c)
-                let runHover = isHovered(c)
-                appendWideCell(
-                    line[c],
-                    isSelected: runSelected,
-                    isFindMatch: runFind,
-                    isActiveFindMatch: runActive,
-                    isHoveredURL: runHover,
-                    baseFont: baseFont,
-                    paragraphStyle: paragraphStyle,
-                    into: result
-                )
-                c += 1
-                continue
-            }
-
-            let runAttrs = line[c].attrs
-            let runHyperlink = line[c].hyperlink
-            let runSelected = selectedCols?.contains(c) ?? false
-            let runFind = isFindMatch(c)
-            let runActive = isActiveFind(c)
-            let runHover = isHovered(c)
-            var endC = c + 1
-            while endC < range.upperBound,
-                  !line[endC].isContinuation,
-                  !(endC + 1 < line.count && line[endC + 1].isContinuation),
-                  line[endC].attrs == runAttrs,
-                  line[endC].hyperlink == runHyperlink,
-                  (selectedCols?.contains(endC) ?? false) == runSelected,
-                  isFindMatch(endC) == runFind,
-                  isActiveFind(endC) == runActive,
-                  isHovered(endC) == runHover {
-                endC += 1
-            }
-            var runChars = ""
-            runChars.reserveCapacity(endC - c)
-            for i in c..<endC { runChars.append(line[i].char) }
-            let nsAttrs = makeAttributes(
-                for: runAttrs, baseFont: baseFont,
-                paragraphStyle: paragraphStyle,
-                isSelected: runSelected, isFindMatch: runFind,
-                isActiveFindMatch: runActive,
-                isHoveredURL: runHover, hyperlink: runHyperlink
-            )
-            result.append(NSAttributedString(string: runChars, attributes: nsAttrs))
-            c = endC
-        }
-    }
-
-    /// Wide cell 한 개를 단독 NSAttributedString run으로 emit + kern으로 2*cellW 강제.
-    private func appendWideCell(
-        _ cell: Cell,
-        isSelected: Bool,
-        isFindMatch: Bool = false,
-        isActiveFindMatch: Bool = false,
-        isHoveredURL: Bool = false,
-        baseFont: NSFont,
-        paragraphStyle: NSParagraphStyle,
-        into result: NSMutableAttributedString
-    ) {
-        var nsAttrs = makeAttributes(
-            for: cell.attrs, baseFont: baseFont,
-            paragraphStyle: paragraphStyle,
-            isSelected: isSelected, isFindMatch: isFindMatch,
-            isActiveFindMatch: isActiveFindMatch,
-            isHoveredURL: isHoveredURL, hyperlink: cell.hyperlink
+    private func currentRenderState() -> RenderState {
+        let active: (row: Int, range: Range<Int>)? =
+            (activeMatchIndex >= 0 && activeMatchIndex < findMatchesOrdered.count)
+            ? findMatchesOrdered[activeMatchIndex] : nil
+        return RenderState(
+            markedText: markedText,
+            selectionAnchor: selectionAnchor.map { GridPos(row: $0.row, col: $0.col) },
+            selectionHead: selectionHead.map { GridPos(row: $0.row, col: $0.col) },
+            findMatchesByRow: findMatchesByRow,
+            activeFindRow: active?.row,
+            activeFindRange: active?.range,
+            hoveredRow: hoveredURL?.row,
+            hoveredRange: hoveredURL?.colRange,
+            cursorBlinkEnabled: session.config.cursorBlink,
+            cursorBlinkVisible: cursorBlinkVisible
         )
-        let font = (nsAttrs[.font] as? NSFont) ?? baseFont
-        let char = String(cell.char) as NSString
-        let naturalW = char.size(withAttributes: [.font: font]).width
-        let targetW = cellMetrics.width * 2
-        let kern = targetW - naturalW
-        if kern > 0.01 {
-            nsAttrs[.kern] = kern
-        }
-        result.append(NSAttributedString(string: String(cell.char), attributes: nsAttrs))
     }
 
-    private func makeAttributes(
-        for cellAttrs: CellAttrs,
-        baseFont: NSFont,
-        paragraphStyle: NSParagraphStyle,
-        isSelected: Bool = false,
-        isFindMatch: Bool = false,
-        isActiveFindMatch: Bool = false,
-        isHoveredURL: Bool = false,
-        hyperlink: String? = nil
-    ) -> [NSAttributedString.Key: Any] {
-        let (fg, bg) = cellAttrs.resolvedColors(theme: session.config.theme)
-        let font: NSFont
-        if cellAttrs.bold {
-            font = NSFontManager.shared.convert(baseFont, toHaveTrait: .boldFontMask)
+    private func refreshCursorOverlayNow() {
+        if let overlay = backend.cursorOverlay(grid: session.grid, config: session.config,
+                                               state: currentRenderState(), metrics: cellMetrics) {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            cursorLayer.frame = overlay.frame
+            cursorLayer.backgroundColor = overlay.color.cgColor
+            cursorLayer.isHidden = false
+            CATransaction.commit()
         } else {
-            font = baseFont
+            cursorLayer.isHidden = true
         }
-        var attrs: [NSAttributedString.Key: Any] = [
-            .font: font,
-            .foregroundColor: fg,
-            .paragraphStyle: paragraphStyle,
-        ]
-        // 우선순위: selection > activeFindMatch > findMatch > cell bg
-        if isSelected {
-            attrs[.backgroundColor] = NSColor.selectedTextBackgroundColor
-        } else if isActiveFindMatch {
-            // 현재 활성(Cmd+G로 선택된) 매치 — 주황색으로 다른 매치와 구분.
-            attrs[.backgroundColor] = NSColor.systemOrange.withAlphaComponent(0.85)
-            attrs[.foregroundColor] = NSColor.black
-        } else if isFindMatch {
-            attrs[.backgroundColor] = NSColor.systemYellow.withAlphaComponent(0.6)
-            attrs[.foregroundColor] = NSColor.black
-        } else if let bg = bg {
-            attrs[.backgroundColor] = bg
-        }
-        if cellAttrs.underline {
-            attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue
-        }
-        // OSC 8 hyperlink — underline + 약간 옅은 색으로 시각 단서. (클릭 핸들링은 후속.)
-        if let uri = hyperlink, let url = URL(string: uri) {
-            attrs[.link] = url
-            attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue
-            attrs[.underlineColor] = fg.withAlphaComponent(0.5)
-        }
-        // Cmd-hover 표시 — 평소엔 plain text URL에 아무 표시 없다가 Cmd 누르고
-        // URL 위에 마우스 올리면 그 글자들만 밝은 파란색 + 또렷한 underline.
-        if isHoveredURL {
-            attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue
-            attrs[.underlineColor] = NSColor.systemBlue
-            attrs[.foregroundColor] = NSColor.systemBlue
-        }
-        return attrs
     }
+
 }
