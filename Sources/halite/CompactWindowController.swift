@@ -120,6 +120,8 @@ final class CompactWindowController: NSWindowController, NSWindowDelegate {
         // 세션 surface가 들어가는 컨테이너 — 탭 바 아래 채움.
         contentContainer = NSView()
         contentContainer.translatesAutoresizingMaskIntoConstraints = false
+        // 탭 닫기 애니메이션 오버레이(스냅샷 레이어)의 호스트 — 미리 layer-backed로.
+        contentContainer.wantsLayer = true
         contentView.addSubview(contentContainer)
 
         // titlebar 높이 측정 (대략 28pt). styleMask + fullSizeContentView 상태에서
@@ -292,15 +294,77 @@ final class CompactWindowController: NSWindowController, NSWindowDelegate {
 
     func closeTab(_ index: Int) {
         guard index >= 0, index < tabs.count else { return }
+
+        // 닫는 탭이 "현재 보이는" 탭이고, 닫은 뒤에도 탭이 남고, 애니메이션이 켜졌고,
+        // 스냅샷이 떠질 때만 모션. 그 외(백그라운드 탭 닫기 / 마지막 탭 / 스냅샷 실패 /
+        // Reduce Motion / 토글 off)는 기존 즉시 경로 그대로.
+        //
+        // tabs.count > 1 가드는 remove(at:) "이전"에 검사한다 — 즉 다음 탭이 존재함을 보장.
+        // remove(at:) 후 tabs.isEmpty면 그 경로는 여기서 끝(윈도우 종료, 정리할 오버레이 없음).
+        // 그렇지 않으면 오버레이 정리 + 다음 탭 선택이 이어진다.
+        //
+        // 오버레이는 teardown 이전에, 아직 살아있는 닫히는 트리 위에 픽셀 동일하게 올린다.
+        // 그래야 selectTab으로 다음 트리를 즉시 교체해도 깜빡임 없이 오버레이가 위를 덮는다.
+        var overlay: CALayer?
+        if Motion.enabled,
+           index == currentIndex,
+           tabs.count > 1,
+           let image = Motion.snapshot(of: tabs[index].tree) {
+            overlay = Motion.overlay(
+                image: image,
+                frame: contentContainer.bounds,
+                in: contentContainer
+            )
+        }
+
         tabs[index].tree.root.terminateAll()
         tabs.remove(at: index)
 
         if tabs.isEmpty {
+            // 마지막 탭이 닫힘 — 윈도우 종료(스코프 밖). 위 가드(tabs.count > 1)로 여기엔
+            // 오버레이가 절대 만들어지지 않으므로 정리할 것이 없다.
             window?.performClose(nil)
             return
         }
         if currentIndex >= tabs.count { currentIndex = tabs.count - 1 }
+        // 다음 탭을 즉시(.none) 라이브로 보여줌. 오버레이가 그 위에서 슬라이드/페이드.
         selectTab(currentIndex)
+
+        guard let overlay else { return }
+        // 닫히는 콘텐츠 스냅샷: 아래로(~6% 높이) 미끄러지며 페이드아웃 → 제거.
+        // 비-flipped 좌표계라 "아래"는 -y. 분리된 CALayer이므로 (뷰의 .animator()가
+        // 없으므로) bell-flash와 동일한 명시적 CABasicAnimation 관용구를 쓴다.
+        let dy = overlay.bounds.height * 0.06
+        let fromPos = overlay.position
+        let toPos = CGPoint(x: fromPos.x, y: fromPos.y - dy)
+
+        let slide = CABasicAnimation(keyPath: "position")
+        slide.fromValue = NSValue(point: fromPos)
+        slide.toValue = NSValue(point: toPos)
+
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 1.0
+        fade.toValue = 0.0
+
+        let group = CAAnimationGroup()
+        group.animations = [slide, fade]
+        group.duration = Motion.duration
+        group.timingFunction = Motion.timing
+        group.isRemovedOnCompletion = false
+        group.fillMode = .forwards
+
+        // 최종 상태를 모델 레이어에도 반영(애니메이션 add 후에 모델값을 최종으로 둬서
+        // 애니메이션 종료/제거 시 레이어가 최종 위치/투명도에서 쉰다). 곧 done에서 제거되므로
+        // 남은 모델 상태는 무의미하지만, 일관성을 위해 명시.
+        overlay.position = toPos
+        overlay.opacity = 0
+        overlay.add(group, forKey: "tabClose")
+
+        // 애니메이션 후 오버레이 제거. 각 close는 자기 오버레이만 캡처하므로
+        // (self를 캡처하지 않음) 빠른 연속 닫기에도 공유 상태 없이 안전.
+        DispatchQueue.main.asyncAfter(deadline: .now() + Motion.duration) {
+            overlay.removeFromSuperlayer()
+        }
     }
 
     func closeCurrentTab() {
