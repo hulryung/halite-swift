@@ -15,6 +15,15 @@ final class PaneTreeView: NSView {
     /// 마지막 leaf가 닫혔을 때 호출 (호스트 — 탭 컨트롤러 — 가 탭/윈도우를 닫음).
     var onAllPanesClosed: (() -> Void)?
 
+    /// Pane lifecycle animation intent threaded through `rebuild`. `.none` is the
+    /// instant/legacy path; `.split` animates the newly-created pane in from the
+    /// divider edge. (`.close` is added in Task 5 — do not add it here.)
+    private enum PaneAnimation {
+        case none
+        /// After rebuild, find the wrapper whose leaf === `newLeaf` and animate it in.
+        case split(newLeaf: PaneNode)
+    }
+
     init(rootSession: HaliteSession) {
         let leaf = PaneNode.leaf(rootSession)
         self.root = leaf
@@ -65,7 +74,10 @@ final class PaneTreeView: NSView {
             ratio: 0.5
         )
         activeLeaf = newLeaf
-        rebuild()
+        // Animate the new pane in only when motion is enabled (live transform,
+        // no snapshot → the only gate is Motion.enabled). Otherwise the instant
+        // path (rebuild(animation: .none)) — identical end state to today.
+        rebuild(animation: Motion.enabled ? .split(newLeaf: newLeaf) : .none)
     }
 
     func closeActive() {
@@ -145,7 +157,7 @@ final class PaneTreeView: NSView {
 
     // MARK: - Tree → NSView 재구성
 
-    private func rebuild() {
+    private func rebuild(animation: PaneAnimation = .none) {
         for sub in subviews { sub.removeFromSuperview() }
         addSubviewsForNode(root, into: self)
         updateBorderColors()
@@ -153,6 +165,19 @@ final class PaneTreeView: NSView {
             window?.makeFirstResponder(surface)
         }
         needsLayout = true
+
+        // Animate the appearing pane AFTER the new hierarchy + first responder
+        // are in their final state (focus/typing already works mid-animation).
+        switch animation {
+        case .none:
+            break
+        case .split(let newLeaf):
+            // Determine which axis to nudge along from the new leaf's parent split.
+            guard let parent = newLeaf.parent,
+                  case .split(let dir, _, _, _) = parent.kind
+            else { break }
+            animateSplitIn(newLeaf: newLeaf, direction: dir)
+        }
     }
 
     private func addSubviewsForNode(_ node: PaneNode, into container: NSView) {
@@ -185,6 +210,83 @@ final class PaneTreeView: NSView {
             addSubviewsForNode(first, into: splitContainer.firstContainer)
             addSubviewsForNode(second, into: splitContainer.secondContainer)
         }
+    }
+
+    // MARK: - Split/Close animation helpers
+
+    /// Recursively find the `PaneLeafWrapper` whose `leaf` is identical (===) to
+    /// `target`. Walks the freshly-rebuilt subtree; returns nil if not found.
+    /// Used by both the split-in (Task 3) and close (Task 5) animations.
+    private func findWrapper(for target: PaneNode, in view: NSView) -> PaneLeafWrapper? {
+        if let w = view as? PaneLeafWrapper, w.leaf === target {
+            return w
+        }
+        for sub in view.subviews {
+            if let found = findWrapper(for: target, in: sub) { return found }
+        }
+        return nil
+    }
+
+    /// Animate the new pane "opening from the split line": its wrapper is already
+    /// at the final half-frame, so we animate the wrapper's `layer.transform` from
+    /// a small nudge toward the divider back to identity, plus opacity 0→1.
+    /// Pure visual layer animation — the live surface is never resized (no reflow).
+    private func animateSplitIn(newLeaf: PaneNode, direction: SplitDirection) {
+        // The wrapper's final half-frame is computed by SplitContainer.layout(),
+        // which only runs during a layout pass. Force it now so wrapper.bounds is
+        // final before we read it.
+        layoutSubtreeIfNeeded()
+
+        guard let wrapper = findWrapper(for: newLeaf, in: self),
+              let layer = wrapper.layer,
+              wrapper.bounds.width > 0, wrapper.bounds.height > 0
+        else { return }
+
+        // Small "nudge", not a full traverse, to keep the motion subtle.
+        // The new pane is always `second`: right of the divider (horizontal) or
+        // below it (vertical). All views here are non-flipped (y grows upward),
+        // matching SplitContainer.layout()'s bottom-up coordinate comments.
+        let fromTransform: CATransform3D
+        switch direction {
+        case .horizontal:
+            // New pane sits to the RIGHT of the divider → start nudged LEFT
+            // (toward the divider, -x) and settle right into place.
+            let dx = -min(24, wrapper.bounds.width * 0.06)
+            fromTransform = CATransform3DMakeTranslation(dx, 0, 0)
+        case .vertical:
+            // New pane sits BELOW the divider (lower y in bottom-up coords) →
+            // start nudged UP toward the divider (+y) and settle down into place.
+            let dy = min(24, wrapper.bounds.height * 0.06)
+            fromTransform = CATransform3DMakeTranslation(0, dy, 0)
+        }
+
+        // Set the final state on the MODEL layer first, then add explicit
+        // "from → identity" animations (same idiom as the bell-flash
+        // CABasicAnimation in HaliteTerminalView). The model values are at their
+        // final identity/1.0 state BEFORE add(), so when the animation finishes
+        // (or is removed) the layer rests where it already is. Driven by
+        // Motion.duration / Motion.timing only.
+        layer.transform = CATransform3DIdentity
+        layer.opacity = 1.0
+
+        let move = CABasicAnimation(keyPath: "transform")
+        move.fromValue = NSValue(caTransform3D: fromTransform)
+        move.toValue = NSValue(caTransform3D: CATransform3DIdentity)
+
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 0.0
+        fade.toValue = 1.0
+
+        let group = CAAnimationGroup()
+        group.animations = [move, fade]
+        group.duration = Motion.duration
+        group.timingFunction = Motion.timing
+        // No removal/cleanup needed: animations are non-additive and the layer's
+        // model values are already at their final identity/1.0 state, so when the
+        // animation finishes the wrapper simply rests where it already is. Safe
+        // under rapid splits — a later rebuild() nukes & rebuilds the subtree,
+        // discarding any in-flight animation with its (removed) wrapper.
+        layer.add(group, forKey: "halite.split-in")
     }
 
     // MARK: - Border 색 갱신
