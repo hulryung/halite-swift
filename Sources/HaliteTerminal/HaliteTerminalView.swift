@@ -44,10 +44,10 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
 
     public var onFocus: (() -> Void)?
 
-    /// The render/scroll/geometry backend. Legacy NSTextView path for now; the
-    /// Metal path slots in behind the same `TerminalRenderBackend` protocol.
-    private let legacyBackend: LegacyTextBackend
-    private var backend: TerminalRenderBackend { legacyBackend }
+    /// The render/scroll/geometry backend — legacy NSTextView path or the Metal
+    /// path, selected once at init by `MetalRenderConfig` (HALITE_METAL=1 /
+    /// UserDefaults). Both conform to the same protocol; the host is identical.
+    private let backend: TerminalRenderBackend
     private var gridSubscription: AnyCancellable?
     private var configSubscription: AnyCancellable?
     private var lastReportedSize: (cols: Int, rows: Int)? = nil
@@ -143,7 +143,14 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
     public init(session: HaliteSession) {
         self.session = session
 
-        self.legacyBackend = LegacyTextBackend(config: session.config)
+        // Pick the backend from the toggle; Metal falls back to legacy if the
+        // device/shader is unavailable.
+        if MetalRenderConfig.resolved() == .metal,
+           let metal = MetalTerminalBackend(config: session.config) {
+            self.backend = metal
+        } else {
+            self.backend = LegacyTextBackend(config: session.config)
+        }
 
         super.init(frame: .zero)
         wantsLayer = true
@@ -162,8 +169,8 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
         // 백엔드가 스크롤 변동을 콜백 — boundsDidChange(programmatic 포함)는 cursor
         // overlay 재배치, didLiveScroll(사용자 인터랙션)은 follow-bottom 갱신.
         // (원래 scrollViewDidScroll의 두 역할을 그대로 분리.)
-        legacyBackend.onScrollGeometryChanged = { [weak self] in self?.refreshCursorOverlayNow() }
-        legacyBackend.onUserScroll = { [weak self] in
+        backend.onScrollGeometryChanged = { [weak self] in self?.refreshCursorOverlayNow() }
+        backend.onUserScroll = { [weak self] in
             DispatchQueue.main.async { self?.refreshFollowingBottomFlag() }
         }
 
