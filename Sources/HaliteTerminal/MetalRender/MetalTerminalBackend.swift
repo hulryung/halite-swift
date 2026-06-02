@@ -518,4 +518,91 @@ final class MetalTerminalBackend: TerminalRenderBackend {
         return SIMD4<Float>(Float(s.redComponent), Float(s.greenComponent),
                             Float(s.blueComponent), Float(s.alphaComponent))
     }
+
+    #if DEBUG
+    /// Headless, permission-free capture of the real render pipeline: render
+    /// `grid` to an offscreen texture (no window, no `CAMetalLayer` drawable, no
+    /// Screen Recording) and read it back as a `CGImage`. Drives the same
+    /// `buildInstances` + shader passes as `render(...)`, so the bitmap is a
+    /// faithful sample of on-screen output. Backs the render smoke test.
+    func renderToCGImage(grid: Grid, config: HaliteConfig, state: RenderState,
+                         metrics: CellMetrics, cols: Int, rows: Int, scale: CGFloat) -> CGImage? {
+        self.config = config
+        self.metrics = metrics
+        let wPts = inset.width * 2 + CGFloat(cols) * metrics.width
+        let hPts = inset.height * 2 + CGFloat(rows) * metrics.height
+        // Size the window-less content view so buildInstances + uniforms agree.
+        metalView.frame = NSRect(x: 0, y: 0, width: wPts, height: hPts)
+        metalView.metalLayer.contentsScale = scale
+        self.lastGrid = grid
+        self.lastState = state
+        self.lastTotalRows = grid.scrollback.count + grid.rows
+        ensureAtlas()
+
+        let pw = max(1, Int((wPts * scale).rounded()))
+        let ph = max(1, Int((hPts * scale).rounded()))
+        let td = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: MetalDevice.pixelFormat, width: pw, height: ph, mipmapped: false)
+        td.usage = [.renderTarget, .shaderRead]
+        td.storageMode = .shared
+        guard let tex = md.device.makeTexture(descriptor: td) else { return nil }
+
+        let (bg, glyphs, colorGlyphs, overlay) = buildInstances(grid: grid, state: state)
+
+        let pass = MTLRenderPassDescriptor()
+        pass.colorAttachments[0].texture = tex
+        pass.colorAttachments[0].loadAction = .clear
+        pass.colorAttachments[0].clearColor = clearColor(config.theme.background)
+        pass.colorAttachments[0].storeAction = .store
+        guard let cmd = md.queue.makeCommandBuffer(),
+              let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else { return nil }
+        var uniforms = Uniforms(viewportSize: SIMD2<Float>(Float(wPts), Float(hPts)))
+
+        func drawBg(_ insts: [BgInstance]) {
+            guard !insts.isEmpty,
+                  let buf = md.device.makeBuffer(bytes: insts,
+                                                 length: MemoryLayout<BgInstance>.stride * insts.count,
+                                                 options: .storageModeShared) else { return }
+            enc.setRenderPipelineState(md.bgPipeline)
+            enc.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 0)
+            enc.setVertexBuffer(buf, offset: 0, index: 1)
+            enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4,
+                               instanceCount: insts.count)
+        }
+        func drawGlyphs(_ insts: [GlyphInstance], pipeline: MTLRenderPipelineState, texture: MTLTexture?) {
+            guard !insts.isEmpty, let texture,
+                  let buf = md.device.makeBuffer(bytes: insts,
+                                                 length: MemoryLayout<GlyphInstance>.stride * insts.count,
+                                                 options: .storageModeShared) else { return }
+            enc.setRenderPipelineState(pipeline)
+            enc.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 0)
+            enc.setVertexBuffer(buf, offset: 0, index: 1)
+            enc.setFragmentTexture(texture, index: 0)
+            enc.setFragmentSamplerState(md.glyphSampler, index: 0)
+            enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4,
+                               instanceCount: insts.count)
+        }
+        drawBg(bg)
+        drawGlyphs(glyphs, pipeline: md.glyphPipeline, texture: atlas?.texture)
+        drawGlyphs(colorGlyphs, pipeline: md.colorGlyphPipeline, texture: atlas?.colorTexture)
+        drawBg(overlay)
+        enc.endEncoding()
+        cmd.commit()
+        cmd.waitUntilCompleted()
+
+        let bytesPerRow = pw * 4
+        var raw = [UInt8](repeating: 0, count: bytesPerRow * ph)
+        tex.getBytes(&raw, bytesPerRow: bytesPerRow,
+                     from: MTLRegionMake2D(0, 0, pw, ph), mipmapLevel: 0)
+        guard let provider = CGDataProvider(data: Data(raw) as CFData),
+              let space = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+        // bgra8Unorm in memory == little-endian 32-bit with alpha first → BGRA.
+        let info = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue
+                                | CGBitmapInfo.byteOrder32Little.rawValue)
+        return CGImage(width: pw, height: ph, bitsPerComponent: 8, bitsPerPixel: 32,
+                       bytesPerRow: bytesPerRow, space: space, bitmapInfo: info,
+                       provider: provider, decode: nil, shouldInterpolate: false,
+                       intent: .defaultIntent)
+    }
+    #endif
 }
