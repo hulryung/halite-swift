@@ -31,10 +31,9 @@ public struct HaliteTerminalView: NSViewRepresentable {
     }
 }
 
-/// M3 placeholder: 자식 `NSTextView`에 Grid 스냅샷을 그대로 투영.
-/// 한 번에 textStorage 전체를 갈아끼움 (run-length attrs 그룹핑).
+/// 입력(키/IME/마우스)·선택·find·follow 정책의 소유자. 그리기/스크롤/좌표 변환은
+/// `MetalTerminalBackend`(`CAMetalLayer` 인스턴스드 렌더러)에 위임한다.
 /// 키 이벤트는 이쪽에서 잡아 `session.write(_:)`로 전달.
-/// M4 이후 `CAMetalLayer` + 자체 렌더러로 교체.
 public final class HaliteSurfaceView: NSView, NSTextInputClient {
     public let session: HaliteSession
 
@@ -44,9 +43,9 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
 
     public var onFocus: (() -> Void)?
 
-    /// The render/scroll/geometry backend — legacy NSTextView path or the Metal
-    /// path, selected once at init by `MetalRenderConfig` (HALITE_METAL=1 /
-    /// UserDefaults). Both conform to the same protocol; the host is identical.
+    /// The render/scroll/geometry backend (the Metal renderer). Behind the
+    /// `TerminalRenderBackend` protocol so the host never touches Metal directly
+    /// and the seam stays open for future backends.
     private let backend: TerminalRenderBackend
     private var gridSubscription: AnyCancellable?
     private var configSubscription: AnyCancellable?
@@ -143,14 +142,14 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
     public init(session: HaliteSession) {
         self.session = session
 
-        // Pick the backend from the toggle; Metal falls back to legacy if the
-        // device/shader is unavailable.
-        if MetalRenderConfig.resolved() == .metal,
-           let metal = MetalTerminalBackend(config: session.config) {
-            self.backend = metal
-        } else {
-            self.backend = LegacyTextBackend(config: session.config)
+        // The Metal backend is the only render path. (The legacy NSTextView
+        // backend was retired at P6 once the Metal path reached parity.) Metal is
+        // available on every Mac this app supports; a nil device means a broken
+        // GPU stack, which is unrecoverable for a GPU terminal.
+        guard let metal = MetalTerminalBackend(config: session.config) else {
+            fatalError("HaliteSurfaceView: no Metal device available — cannot create the renderer.")
         }
+        self.backend = metal
 
         super.init(frame: .zero)
         wantsLayer = true

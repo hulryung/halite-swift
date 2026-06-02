@@ -77,9 +77,9 @@ public struct RenderState: Equatable {
 }
 
 /// The seam between `HaliteSurfaceView` (input/IME/selection owner) and the
-/// mechanism that actually draws the grid and owns scroll geometry. The legacy
-/// `NSTextView` path and the upcoming Metal path both conform; the host swaps
-/// between them behind a toggle without changing its public API.
+/// mechanism that actually draws the grid and owns scroll geometry. The Metal
+/// renderer conforms today; the protocol stays as the open seam for any future
+/// backend, keeping Metal out of the host's public API.
 ///
 /// The host stays the source of truth for: keyboard/IME/mouse input, the render
 /// dedupe key, the follow-bottom/anchor *policy*, and the single shared
@@ -88,8 +88,7 @@ public struct RenderState: Equatable {
 /// work against whatever surface is live).
 public protocol TerminalRenderBackend: AnyObject {
     /// The view inserted into `HaliteSurfaceView` that hosts this backend's
-    /// content (the `NSScrollView` for legacy, a `CAMetalLayer`-backed view for
-    /// Metal). The host frames it to its bounds.
+    /// content (a `CAMetalLayer`-backed view). The host frames it to its bounds.
     var contentView: NSView { get }
 
     /// Fired on any scroll-geometry change (programmatic or user). The host
@@ -146,9 +145,9 @@ public protocol TerminalRenderBackend: AnyObject {
     /// Scroll to a content-pixel offset; `animated` drives the smooth snap.
     func setScrollY(_ y: CGFloat, animated: Bool)
     /// Handle a scroll-wheel/trackpad event. Returns `true` if the backend
-    /// consumed it (and scrolled). The legacy backend returns `false` so the host
-    /// falls through to `NSScrollView`'s native handling; the Metal backend
-    /// applies the delta itself. Mouse-reporting is handled by the host upstream.
+    /// consumed it (and scrolled), so the host won't fall through to a no-op
+    /// `super.scrollWheel`. The Metal backend applies the delta itself.
+    /// Mouse-reporting is handled by the host upstream.
     func handleScrollWheel(_ event: NSEvent) -> Bool
     /// Total laid-out content height in pixels.
     var contentHeight: CGFloat { get }

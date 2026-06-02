@@ -2,15 +2,14 @@ import AppKit
 import Metal
 import simd
 
-/// Phase 1 Metal backend: a `CAMetalLayer` renderer that draws cell backgrounds,
-/// selection/find highlights, and the block cursor as instanced filled quads —
-/// proving layer hosting, the shader pipeline, grid reading, the coordinate map
-/// (mouse hit + IME cursor-rect), scalar scroll, and stable cellMetrics. Glyph
-/// text is the next step; until then characters are invisible (backgrounds and
-/// the block cursor are visible).
+/// The `CAMetalLayer` renderer: draws cell backgrounds, selection/find
+/// highlights, glyphs (mask + color-emoji pages), line overlays
+/// (underline/strikethrough/hyperlink/hover), the block/bar/underline cursor,
+/// and the IME preedit overlay as instanced quads. Owns scroll geometry
+/// (wheel/momentum/rubber-band + smooth programmatic eases) and host↔cell
+/// coordinate mapping (mouse hit-testing + IME cursor-rect).
 ///
-/// Selected behind the `HALITE_METAL=1` toggle; the legacy backend is the default
-/// and the live fallback.
+/// The sole render backend (the legacy `NSTextView` path was retired at P6).
 final class MetalTerminalBackend: TerminalRenderBackend {
     private let metalView = MetalContentView(frame: .zero)
     private let md: MetalDevice
