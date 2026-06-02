@@ -146,6 +146,13 @@ public final class Grid {
     /// xterm-style deferred wrap: 마지막 열에서는 wrap을 다음 평문까지 미룸.
     /// East Asian Wide char는 2 cell 점유 (선행 cell + continuation marker).
     public func putChar(_ ch: Character) {
+        // Grapheme reassembly: the shell can echo one grapheme's scalars across
+        // separate writes during line editing (👍 then 🏽, 🇰 then 🇷), so a
+        // combining mark / skin-tone modifier / ZWJ continuation / regional-
+        // indicator pair must merge into the preceding cell instead of starting a
+        // new one. (printf's single write already clusters via Swift's grapheme
+        // breaking; this catches the split-write case.)
+        if mergeGraphemeExtender(ch) { return }
         if pendingWrap {
             pendingWrap = false
             // Soft wrap: the row we're leaving filled to the margin and the text
@@ -191,6 +198,52 @@ public final class Grid {
             cursorCol += advance
         }
         bumpVersion()
+    }
+
+    /// Try to merge `ch` into the cell preceding the cursor (a grapheme that the
+    /// shell echoed split across writes). Returns true if merged (cursor unchanged).
+    private func mergeGraphemeExtender(_ ch: Character) -> Bool {
+        guard cursorRow >= 0, cursorRow < rows else { return false }
+        // The char this extender attaches to: when parked at the margin
+        // (pendingWrap) it's the cell at the cursor; otherwise the cell to the left.
+        var col = pendingWrap ? cursorCol : cursorCol - 1
+        if col >= 0, col < cols, cells[cursorRow][col].isContinuation { col -= 1 }  // wide lead
+        guard col >= 0, col < cols else { return false }
+        let prev = cells[cursorRow][col].char
+        guard prev != " " else { return false }
+
+        let prevEndsZWJ = (prev.unicodeScalars.last?.value == 0x200D)
+        let merge = prevEndsZWJ
+            || Grid.isGraphemeExtender(ch)
+            || (Grid.isRegionalIndicator(ch) && Grid.isRegionalIndicator(prev))
+        guard merge else { return false }
+
+        var s = String(prev)
+        s.unicodeScalars.append(contentsOf: ch.unicodeScalars)
+        guard s.count == 1, let combined = s.first else { return false }  // must stay one grapheme
+        cells[cursorRow][col].char = combined
+        bumpVersion()
+        return true
+    }
+
+    /// A scalar that extends the preceding grapheme: ZWJ, variation selector,
+    /// emoji skin-tone modifier, or a combining mark.
+    private static func isGraphemeExtender(_ ch: Character) -> Bool {
+        guard let s = ch.unicodeScalars.first else { return false }
+        let v = s.value
+        if v == 0x200D || (0xFE00...0xFE0F).contains(v) || (0x1F3FB...0x1F3FF).contains(v) {
+            return true
+        }
+        if v < 0x300 { return false }   // below the first combining block — skip the lookup
+        switch s.properties.generalCategory {
+        case .nonspacingMark, .enclosingMark, .spacingMark: return true
+        default: return false
+        }
+    }
+
+    private static func isRegionalIndicator(_ ch: Character) -> Bool {
+        guard ch.unicodeScalars.count == 1, let v = ch.unicodeScalars.first?.value else { return false }
+        return (0x1F1E6...0x1F1FF).contains(v)
     }
 
     /// LF (`\n`): cursor를 한 줄 아래로.

@@ -129,7 +129,8 @@ public struct Cell: Equatable {
     /// 포함. ZWJ/스킨톤/플래그 시퀀스는 첫 스칼라의 속성으로 잡힌다.
     public static func isEmojiPresentation(_ ch: Character) -> Bool {
         for s in ch.unicodeScalars {
-            if s.value == 0xFE0F { return true }              // emoji variation selector
+            if s.value == 0xFE0F { return true }                       // emoji variation selector
+            if (0x1F1E6...0x1F1FF).contains(s.value) { return true }   // regional indicators (flags)
             if s.properties.isEmojiPresentation { return true }
         }
         return false

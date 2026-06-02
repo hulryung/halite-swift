@@ -365,6 +365,39 @@ final class GridTests: XCTestCase {
         XCTAssertFalse(g.pen.strikethrough)
     }
 
+    func testSkinToneModifierMergesIntoPreviousCell() {
+        let g = makeGrid(cols: 10, rows: 2)
+        g.putChar("👍")                  // wide base emoji
+        g.putChar("\u{1F3FD}")           // skin-tone modifier echoed separately
+        XCTAssertEqual(String(g.cell(row: 0, col: 0).char), "👍🏽", "modifier merged into the emoji")
+        XCTAssertEqual(g.cursorCol, 2, "extender does not advance the cursor")
+    }
+
+    func testRegionalIndicatorsPairIntoFlag() {
+        let g = makeGrid(cols: 10, rows: 2)
+        g.putChar("\u{1F1F0}")           // 🇰
+        g.putChar("\u{1F1F7}")           // 🇷 echoed separately
+        XCTAssertEqual(String(g.cell(row: 0, col: 0).char), "🇰🇷", "two regional indicators form one flag")
+        // A third RI starts a new flag rather than extending the first.
+        g.putChar("\u{1F1EF}"); g.putChar("\u{1F1F5}")   // 🇯🇵
+        XCTAssertEqual(String(g.cell(row: 0, col: 2).char), "🇯🇵")
+    }
+
+    func testZWJSequenceMergesAcrossWrites() {
+        let g = makeGrid(cols: 12, rows: 2)
+        for s in ["👨", "\u{200D}", "👩", "\u{200D}", "👧"] { g.putChar(Character(s)) }
+        XCTAssertEqual(String(g.cell(row: 0, col: 0).char), "👨‍👩‍👧", "ZWJ family stays one grapheme")
+        XCTAssertEqual(g.cursorCol, 2)
+    }
+
+    func testCombiningAccentMergesIntoLetter() {
+        let g = makeGrid(cols: 10, rows: 2)
+        g.putChar("e")
+        g.putChar("\u{0301}")            // combining acute accent
+        XCTAssertEqual(String(g.cell(row: 0, col: 0).char), "é")
+        XCTAssertEqual(g.cursorCol, 1)
+    }
+
     func testEmojiIsWideTwoCells() {
         XCTAssertTrue(Cell.isWide("😀"), "emoji presentation → 2-cell")
         XCTAssertTrue(Cell.isEmojiPresentation("😀"))
