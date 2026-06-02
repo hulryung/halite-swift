@@ -373,11 +373,24 @@ final class GridTests: XCTestCase {
         XCTAssertEqual(g.cursorCol, 2, "extender does not advance the cursor")
     }
 
+    func testVS16NarrowEmojiIsOneCell() {
+        // ❤️ = U+2764 + VS16; macOS wcwidth(U+2764)=1 → 1 cell (shell-consistent,
+        // so deleting it doesn't leave a stray continuation cell).
+        XCTAssertFalse(Cell.isWide("❤️"), "VS16-on-narrow-base emoji is 1-cell")
+        let g = makeGrid(cols: 10, rows: 2)
+        g.putChar("\u{2764}")
+        g.putChar("\u{FE0F}")
+        XCTAssertEqual(String(g.cell(row: 0, col: 0).char), "❤️")
+        XCTAssertEqual(g.cursorCol, 1, "cursor advances only 1 for a 1-cell emoji")
+    }
+
     func testRegionalIndicatorsPairIntoFlag() {
         let g = makeGrid(cols: 10, rows: 2)
-        g.putChar("\u{1F1F0}")           // 🇰
-        g.putChar("\u{1F1F7}")           // 🇷 echoed separately
+        g.putChar("\u{1F1F0}")           // 🇰 (lone RI = 1 cell)
+        g.putChar("\u{1F1F7}")           // 🇷 echoed separately → flag
         XCTAssertEqual(String(g.cell(row: 0, col: 0).char), "🇰🇷", "two regional indicators form one flag")
+        XCTAssertTrue(g.cell(row: 0, col: 1).isContinuation, "flag widened to 2 cells")
+        XCTAssertEqual(g.cursorCol, 2, "flag occupies 2 cells (matches shell summing the two RIs)")
         // A third RI starts a new flag rather than extending the first.
         g.putChar("\u{1F1EF}"); g.putChar("\u{1F1F5}")   // 🇯🇵
         XCTAssertEqual(String(g.cell(row: 0, col: 2).char), "🇯🇵")

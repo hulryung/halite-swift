@@ -222,6 +222,17 @@ public final class Grid {
         s.unicodeScalars.append(contentsOf: ch.unicodeScalars)
         guard s.count == 1, let combined = s.first else { return false }  // must stay one grapheme
         cells[cursorRow][col].char = combined
+
+        // If the merge widened the grapheme (e.g. two 1-cell regional indicators →
+        // a 2-cell flag), claim the next cell as a continuation and advance the
+        // cursor, so width matches the shell (which counts both code points).
+        if Cell.isWide(combined),
+           !(col + 1 < cols && cells[cursorRow][col + 1].isContinuation),
+           col + 1 < cols, !pendingWrap {
+            let lead = cells[cursorRow][col]
+            cells[cursorRow][col + 1] = Cell.continuation(attrs: lead.attrs, hyperlink: lead.hyperlink)
+            if cursorCol + 1 < cols { cursorCol += 1 } else { pendingWrap = true; cursorCol = cols - 1 }
+        }
         bumpVersion()
         return true
     }

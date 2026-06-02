@@ -1,5 +1,14 @@
 import AppKit
 import Foundation
+import Darwin
+
+/// Set a UTF-8 ctype once so libc `wcwidth` returns real widths (the "C" locale
+/// reports 1 for everything). Cell width is matched to `wcwidth` so the grid's
+/// column accounting agrees with the shell's (cursor/erase stay in sync).
+private let _wcwidthLocale: Int = {
+    setlocale(LC_CTYPE, "en_US.UTF-8")
+    return 0
+}()
 
 /// 셀의 의미론적 색. NSColor를 직접 저장하지 않고 "무슨 색인지"만 보관한 뒤
 /// 렌더 시점에 현재 테마로 resolve한다 → 테마를 바꾸면 이미 그려진 ANSI 색까지
@@ -136,14 +145,24 @@ public struct Cell: Equatable {
         return false
     }
 
-    /// 이 문자가 동아시아 wide (cell 2개 점유)인지 판정.
-    /// Unicode East Asian Width 표의 "W" 카테고리의 흔한 블록만 단순 range check.
-    /// 정밀 wcwidth는 M5 본격에서.
+    /// True if `ch` occupies 2 terminal cells. Matched to the shell's width model:
+    /// a regional-indicator pair (flag) is 2; other emoji/VS16 graphemes use libc
+    /// `wcwidth` of the base scalar (so 😀 = 2 but ❤️ via VS16 = 1, lone RI = 1 —
+    /// agreeing with the shell so cursor/erase don't desync); everything else uses
+    /// the East-Asian-Wide range table.
     public static func isWide(_ ch: Character) -> Bool {
-        // Emoji-presentation graphemes occupy 2 cells (matches modern wcwidth /
-        // Unicode TR51 and keeps the square emoji glyph from being squished).
-        if isEmojiPresentation(ch) { return true }
-        for scalar in ch.unicodeScalars {
+        let scalars = Array(ch.unicodeScalars)
+        // Regional-indicator pair → flag → 2 cells.
+        if scalars.count == 2,
+           (0x1F1E6...0x1F1FF).contains(scalars[0].value),
+           (0x1F1E6...0x1F1FF).contains(scalars[1].value) {
+            return true
+        }
+        // Emoji / VS16: defer to wcwidth of the base scalar (shell-consistent).
+        if isEmojiPresentation(ch) {
+            return scalars.first.map { scalarIsWide($0.value) } ?? false
+        }
+        for scalar in scalars {
             let v = scalar.value
             switch v {
             case 0x1100...0x115F: return true   // Hangul Jamo (choseong)
@@ -163,5 +182,12 @@ public struct Cell: Equatable {
             }
         }
         return false
+    }
+
+    /// libc `wcwidth` of a scalar == 2 (the shell's notion of "wide").
+    private static func scalarIsWide(_ v: UInt32) -> Bool {
+        _ = _wcwidthLocale
+        guard v <= 0x10FFFF else { return false }
+        return wcwidth(wchar_t(Int32(v))) == 2
     }
 }
