@@ -98,9 +98,6 @@ final class GlyphRasterizer {
 
         let line = CTLineCreateWithAttributedString(
             NSAttributedString(string: String(ch), attributes: [.font: emojiFont]))
-        var ascent: CGFloat = 0, descent: CGFloat = 0, leading: CGFloat = 0
-        let lineW = CGFloat(CTLineGetTypographicBounds(line, &ascent, &descent, &leading))
-        guard lineW > 0 else { return nil }
 
         // BGRA premultiplied — matches the Metal .bgra8Unorm color atlas and the
         // colour pipeline's premultiplied (.one) blend. Keep these two in sync.
@@ -113,11 +110,19 @@ final class GlyphRasterizer {
                 bytesPerRow: pw * 4, space: rgb, bitmapInfo: info
             ) else { return false }
             ctx.setShouldAntialias(true)
-            ctx.scaleBy(x: scale, y: scale)   // work in points
-            // Centre the emoji box in the cell, horizontally and vertically.
-            let x = max(0, (glyphCellW - lineW) / 2)
-            let y = max(0, (cellH - (ascent + descent)) / 2) + descent
-            ctx.textPosition = CGPoint(x: x, y: y)
+            ctx.scaleBy(x: scale, y: scale)   // work in points; cell box = glyphCellW × cellH
+
+            // Fit the emoji's actual INK box into the cell (emoji ink overflows the
+            // em box, so typographic bounds would clip top/right). Scale to fit and
+            // centre using the real image bounds.
+            let ib = CTLineGetImageBounds(line, ctx)
+            guard ib.width > 0, ib.height > 0 else { return false }
+            let fit = min(glyphCellW / ib.width, cellH / ib.height)
+            let drawnW = ib.width * fit, drawnH = ib.height * fit
+            ctx.translateBy(x: (glyphCellW - drawnW) / 2 - fit * ib.minX,
+                            y: (cellH - drawnH) / 2 - fit * ib.minY)
+            ctx.scaleBy(x: fit, y: fit)
+            ctx.textPosition = .zero
             CTLineDraw(line, ctx)
             return true
         }
