@@ -111,7 +111,8 @@ final class MetalTerminalBackend: TerminalRenderBackend {
         let layer = metalView.metalLayer
         guard layer.drawableSize.width > 0, let drawable = layer.nextDrawable() else { return }
 
-        let (bgInstances, glyphInstances, overlayInstances) = buildInstances(grid: grid, state: state)
+        let (bgInstances, glyphInstances, colorGlyphInstances, overlayInstances) =
+            buildInstances(grid: grid, state: state)
 
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = drawable.texture
@@ -150,6 +151,20 @@ final class MetalTerminalBackend: TerminalRenderBackend {
                                instanceCount: glyphInstances.count)
         }
 
+        // Pass 2b: color emoji (premultiplied BGRA color page, fg ignored).
+        if !colorGlyphInstances.isEmpty, let colorTex = atlas?.colorTexture,
+           let buf = md.device.makeBuffer(bytes: colorGlyphInstances,
+                                          length: MemoryLayout<GlyphInstance>.stride * colorGlyphInstances.count,
+                                          options: .storageModeShared) {
+            enc.setRenderPipelineState(md.colorGlyphPipeline)
+            enc.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 0)
+            enc.setVertexBuffer(buf, offset: 0, index: 1)
+            enc.setFragmentTexture(colorTex, index: 0)
+            enc.setFragmentSamplerState(md.glyphSampler, index: 0)
+            enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4,
+                               instanceCount: colorGlyphInstances.count)
+        }
+
         // Pass 3: line overlays (underline / strikethrough / hyperlink / hover) —
         // same filled-quad pipeline as bg, drawn ON TOP so strikethrough shows.
         if !overlayInstances.isEmpty,
@@ -172,17 +187,18 @@ final class MetalTerminalBackend: TerminalRenderBackend {
     /// the visible rows in one pass over cells. Overlay lines draw AFTER the glyph
     /// pass so a strikethrough sits on top of the text.
     private func buildInstances(grid: Grid, state: RenderState)
-        -> (bg: [BgInstance], glyph: [GlyphInstance], overlay: [BgInstance]) {
+        -> (bg: [BgInstance], glyph: [GlyphInstance], colorGlyph: [GlyphInstance], overlay: [BgInstance]) {
         let map = coordMap()
         let cellH = max(metrics.height, 1)
         let totalRows = grid.scrollback.count + grid.rows
         let h = metalView.bounds.height
         let first = max(0, Int(floor((scrollY - inset.height) / cellH)))
         let last = min(totalRows - 1, Int(ceil((scrollY + h - inset.height) / cellH)))
-        guard first <= last else { return ([], [], []) }
+        guard first <= last else { return ([], [], [], []) }
 
         var bg: [BgInstance] = []
         var glyphs: [GlyphInstance] = []
+        var colorGlyphs: [GlyphInstance] = []   // emoji (sampled from the BGRA page)
         var overlay: [BgInstance] = []   // underline / strikethrough / hyperlink / hover lines
         bg.reserveCapacity((last - first + 1) * max(grid.cols, 1))
         glyphs.reserveCapacity(bg.capacity)
@@ -229,9 +245,11 @@ final class MetalTerminalBackend: TerminalRenderBackend {
                 }
                 let fg = fgColor(cell: cell, col: col, sel: sel, finds: finds,
                                  activeFind: activeFind, hover: hover, isCursor: isCursor)
-                if cell.char != " ", let uv = atlas?.region(for: cell.char, bold: cell.attrs.bold, wide: wide) {
-                    glyphs.append(GlyphInstance(origin: origin, size: size,
-                                                uvOrigin: uv.origin, uvSize: uv.size, color: rgba(fg)))
+                if cell.char != " ", let region = atlas?.region(for: cell.char, bold: cell.attrs.bold, wide: wide) {
+                    let inst = GlyphInstance(origin: origin, size: size,
+                                             uvOrigin: region.uv.origin, uvSize: region.uv.size,
+                                             color: rgba(fg))
+                    if region.isColor { colorGlyphs.append(inst) } else { glyphs.append(inst) }
                 }
 
                 // Line overlays. Underline color precedence (matching legacy):
@@ -264,16 +282,17 @@ final class MetalTerminalBackend: TerminalRenderBackend {
         if imeActive {
             appendIMEComposition(markedText: state.markedText, row: imeRow,
                                  startCol: grid.cursorCol, gridCols: grid.cols,
-                                 map: map, bg: &bg, glyphs: &glyphs)
+                                 map: map, bg: &bg, glyphs: &glyphs, colorGlyphs: &colorGlyphs)
         }
-        return (bg, glyphs, overlay)
+        return (bg, glyphs, colorGlyphs, overlay)
     }
 
     /// Draw the IME composing text at the cursor, cell-aligned, with the
     /// configured style (underline / background). Mirrors the legacy overlay.
     private func appendIMEComposition(markedText: String, row: Int, startCol: Int,
                                       gridCols: Int, map: CoordinateMap,
-                                      bg: inout [BgInstance], glyphs: inout [GlyphInstance]) {
+                                      bg: inout [BgInstance], glyphs: inout [GlyphInstance],
+                                      colorGlyphs: inout [GlyphInstance]) {
         let style = config.imeStyle
         var col = startCol
         for ch in markedText {
@@ -299,9 +318,11 @@ final class MetalTerminalBackend: TerminalRenderBackend {
                 break
             }
 
-            if ch != " ", let uv = atlas?.region(for: ch, bold: false, wide: wide) {
-                glyphs.append(GlyphInstance(origin: origin, size: size,
-                                            uvOrigin: uv.origin, uvSize: uv.size, color: rgba(fg)))
+            if ch != " ", let region = atlas?.region(for: ch, bold: false, wide: wide) {
+                let inst = GlyphInstance(origin: origin, size: size,
+                                         uvOrigin: region.uv.origin, uvSize: region.uv.size,
+                                         color: rgba(fg))
+                if region.isColor { colorGlyphs.append(inst) } else { glyphs.append(inst) }
             }
 
             let underline: (color: NSColor, thickness: CGFloat)?

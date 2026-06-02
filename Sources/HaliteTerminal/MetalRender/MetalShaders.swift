@@ -74,5 +74,13 @@ enum MetalShaders {
         float coverage = atlas.sample(samp, in.uv).r;
         return float4(in.color.rgb, in.color.a * coverage);
     }
+
+    // Color emoji: sample the premultiplied BGRA color page as-is, ignoring fg.
+    // Paired with a premultiplied (.one / .oneMinusSourceAlpha) blend.
+    fragment float4 glyph_color_fragment(GlyphVOut in [[stage_in]],
+                                         texture2d<float> atlas [[texture(0)]],
+                                         sampler samp [[sampler(0)]]) {
+        return atlas.sample(samp, in.uv);
+    }
     """
 }

@@ -24,17 +24,23 @@ final class GlyphRasterizer {
     /// installed. Used solely for East-Asian glyphs the base font lacks.
     private let cjkFont: NSFont?
     private let boldCJKFont: NSFont?
+    /// Color-emoji fallback face (Apple Color Emoji), sized to fit a cell.
+    private let emojiFont: NSFont?
     private let cellW: CGFloat
     private let cellH: CGFloat
     private let scale: CGFloat
     /// Baseline distance from the cell's top, in points.
     private let baseline: CGFloat
     private let gray = CGColorSpaceCreateDeviceGray()
+    private let rgb = CGColorSpaceCreateDeviceRGB()
 
     struct Bitmap {
         var bytes: [UInt8]
         var width: Int
         var height: Int
+        /// false = R8 coverage mask (modulated by fg); true = premultiplied BGRA
+        /// color (emoji), drawn as-is ignoring fg.
+        var isColor: Bool = false
     }
 
     init(font: NSFont, cellW: CGFloat, cellH: CGFloat, scale: CGFloat) {
@@ -43,6 +49,8 @@ final class GlyphRasterizer {
         let cjk = cjkFallbackFont(size: font.pointSize)
         self.cjkFont = cjk
         self.boldCJKFont = cjk.map { NSFontManager.shared.convert($0, toHaveTrait: .boldFontMask) }
+        // Size the emoji face to fit the cell box (emoji glyphs are ~1em square).
+        self.emojiFont = NSFont(name: "Apple Color Emoji", size: min(cellH, cellW * 2))
         self.cellW = cellW
         self.cellH = cellH
         self.scale = max(scale, 1)
@@ -54,13 +62,20 @@ final class GlyphRasterizer {
         self.baseline = (topGap + ascent).rounded()
     }
 
-    /// Coverage bitmap for `ch`, or nil for blanks / unrenderable glyphs.
+    /// Coverage bitmap (mask) or color bitmap for `ch`, or nil for blanks /
+    /// unrenderable glyphs.
     ///
-    /// Base font first; the only fallback is the CJK face for East-Asian glyphs
-    /// the base font lacks (gated on `Cell.isWide`). Any other missing glyph stays
-    /// blank (tofu) — see the type doc for the minimal-fallback rationale.
+    /// Tiers: (1) emoji-presentation chars → Apple Color Emoji as a **color** BGRA
+    /// bitmap; (2) base font mask; (3) CJK fallback mask (East-Asian only). A
+    /// non-CJK, non-emoji char the base font lacks stays blank (tofu) — see the
+    /// type doc for the minimal-fallback rationale.
     func raster(_ ch: Character, bold: Bool, wide: Bool) -> Bitmap? {
         if ch == " " || ch == "\u{00A0}" { return nil }
+        // Emoji first: emoji-presentation chars (incl. VS16 / ZWJ sequences) render
+        // in colour, not as a base-font monochrome glyph.
+        if Cell.isEmojiPresentation(ch), let bmp = drawColor(ch, wide: wide) {
+            return bmp
+        }
         if let bmp = draw(ch, in: bold ? boldFont : font, wide: wide) {
             return bmp
         }
@@ -69,6 +84,45 @@ final class GlyphRasterizer {
             return draw(ch, in: cjk, wide: wide)
         }
         return nil
+    }
+
+    /// Rasterize a color-emoji grapheme via CoreText (CTLine shapes ZWJ/flag/
+    /// skin-tone sequences and renders the colour tables) into a premultiplied
+    /// BGRA bitmap, centred in the cell box. nil if no emoji face or empty result.
+    private func drawColor(_ ch: Character, wide: Bool) -> Bitmap? {
+        guard let emojiFont else { return nil }
+        let glyphCellW = wide ? cellW * 2 : cellW
+        let pw = Int(ceil(glyphCellW * scale))
+        let ph = Int(ceil(cellH * scale))
+        guard pw > 0, ph > 0 else { return nil }
+
+        let line = CTLineCreateWithAttributedString(
+            NSAttributedString(string: String(ch), attributes: [.font: emojiFont]))
+        var ascent: CGFloat = 0, descent: CGFloat = 0, leading: CGFloat = 0
+        let lineW = CGFloat(CTLineGetTypographicBounds(line, &ascent, &descent, &leading))
+        guard lineW > 0 else { return nil }
+
+        // BGRA premultiplied — matches the Metal .bgra8Unorm color atlas and the
+        // colour pipeline's premultiplied (.one) blend. Keep these two in sync.
+        let info = CGImageAlphaInfo.premultipliedFirst.rawValue
+            | CGBitmapInfo.byteOrder32Little.rawValue
+        var data = [UInt8](repeating: 0, count: pw * ph * 4)
+        let ok = data.withUnsafeMutableBytes { raw -> Bool in
+            guard let ctx = CGContext(
+                data: raw.baseAddress, width: pw, height: ph, bitsPerComponent: 8,
+                bytesPerRow: pw * 4, space: rgb, bitmapInfo: info
+            ) else { return false }
+            ctx.setShouldAntialias(true)
+            ctx.scaleBy(x: scale, y: scale)   // work in points
+            // Centre the emoji box in the cell, horizontally and vertically.
+            let x = max(0, (glyphCellW - lineW) / 2)
+            let y = max(0, (cellH - (ascent + descent)) / 2) + descent
+            ctx.textPosition = CGPoint(x: x, y: y)
+            CTLineDraw(line, ctx)
+            return true
+        }
+        guard ok, data.contains(where: { $0 != 0 }) else { return nil }
+        return Bitmap(bytes: data, width: pw, height: ph, isColor: true)
     }
 
     /// Rasterize `ch` with `f`, or nil if `f`'s own cmap lacks the glyph (a direct

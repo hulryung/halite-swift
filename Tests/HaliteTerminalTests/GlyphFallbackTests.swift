@@ -122,6 +122,25 @@ final class GlyphFallbackTests: XCTestCase {
         }
     }
 
+    /// Emoji rasterize to the COLOR page (premultiplied BGRA) with actual chroma —
+    /// not a monochrome silhouette on the mask page.
+    func testEmojiRastersAsColor() throws {
+        guard NSFont(name: "Apple Color Emoji", size: 17) != nil else { throw XCTSkip("no emoji font") }
+        let base = NSFont(name: "JetBrainsMono Nerd Font Mono", size: 17) ?? NSFont(name: "Menlo", size: 17)!
+        let cellW = ("M" as NSString).size(withAttributes: [.font: base]).width
+        let r = GlyphRasterizer(font: base, cellW: cellW, cellH: cellW * 2, scale: 2)
+        let bmp = try XCTUnwrap(r.raster("😀", bold: false, wide: true), "emoji must rasterize")
+        XCTAssertTrue(bmp.isColor, "emoji uses the BGRA color page")
+        // BGRA premultiplied: a colored pixel has B (i) != R (i+2) somewhere.
+        var hasChroma = false
+        var i = 0
+        while i + 3 < bmp.bytes.count {
+            if bmp.bytes[i + 3] > 0 && bmp.bytes[i] != bmp.bytes[i + 2] { hasChroma = true; break }
+            i += 4
+        }
+        XCTAssertTrue(hasChroma, "emoji bitmap must contain color, not be monochrome")
+    }
+
     func testNonCJKMissingGlyphStaysBlank() throws {
         let size: CGFloat = 17
         guard let base = font("JetBrainsMono Nerd Font", size) else {

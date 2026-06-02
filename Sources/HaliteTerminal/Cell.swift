@@ -124,6 +124,17 @@ public struct Cell: Equatable {
         Cell(char: " ", attrs: attrs, isContinuation: true, hyperlink: hyperlink)
     }
 
+    /// 이 grapheme이 컬러 이모지(emoji presentation)로 그려져야 하는지.
+    /// 기본 emoji-presentation 문자(😀 등) + VS16(U+FE0F)로 강제된 시퀀스(ℹ️ 등)를
+    /// 포함. ZWJ/스킨톤/플래그 시퀀스는 첫 스칼라의 속성으로 잡힌다.
+    public static func isEmojiPresentation(_ ch: Character) -> Bool {
+        for s in ch.unicodeScalars {
+            if s.value == 0xFE0F { return true }              // emoji variation selector
+            if s.properties.isEmojiPresentation { return true }
+        }
+        return false
+    }
+
     /// 이 문자가 동아시아 wide (cell 2개 점유)인지 판정.
     /// Unicode East Asian Width 표의 "W" 카테고리의 흔한 블록만 단순 range check.
     /// 정밀 wcwidth는 M5 본격에서.

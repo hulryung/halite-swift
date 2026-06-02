@@ -14,6 +14,9 @@ final class MetalDevice {
     let bgPipeline: MTLRenderPipelineState
     /// glyph pipeline (instanced quads sampling the coverage atlas, src-over).
     let glyphPipeline: MTLRenderPipelineState
+    /// color-emoji pipeline: samples the premultiplied BGRA color page, premult
+    /// (.one) blend. Same vertex/instance layout as `glyphPipeline`.
+    let colorGlyphPipeline: MTLRenderPipelineState
     /// Linear-clamp sampler for the glyph atlas.
     let glyphSampler: MTLSamplerState
 
@@ -83,6 +86,31 @@ final class MetalDevice {
             return nil
         }
 
+        // Color-emoji pipeline — glyph vertex + color fragment, PREMULTIPLIED
+        // blend (the BGRA color page is premultiplied, so source factor is .one,
+        // not .sourceAlpha). Must stay in sync with the rasterizer's premultiplied
+        // BGRA context.
+        guard let cf = library.makeFunction(name: "glyph_color_fragment") else {
+            NSLog("Halite: Metal color glyph shader function missing")
+            return nil
+        }
+        let cdesc = MTLRenderPipelineDescriptor()
+        cdesc.vertexFunction = gv
+        cdesc.fragmentFunction = cf
+        let ca = cdesc.colorAttachments[0]!
+        ca.pixelFormat = Self.pixelFormat
+        ca.isBlendingEnabled = true
+        ca.rgbBlendOperation = .add
+        ca.alphaBlendOperation = .add
+        ca.sourceRGBBlendFactor = .one
+        ca.sourceAlphaBlendFactor = .one
+        ca.destinationRGBBlendFactor = .oneMinusSourceAlpha
+        ca.destinationAlphaBlendFactor = .oneMinusSourceAlpha
+        guard let cpipeline = try? device.makeRenderPipelineState(descriptor: cdesc) else {
+            NSLog("Halite: Metal color glyph pipeline creation failed")
+            return nil
+        }
+
         let samp = MTLSamplerDescriptor()
         samp.minFilter = .linear
         samp.magFilter = .linear
@@ -98,6 +126,7 @@ final class MetalDevice {
         self.library = library
         self.bgPipeline = pipeline
         self.glyphPipeline = gpipeline
+        self.colorGlyphPipeline = cpipeline
         self.glyphSampler = sampler
     }
 }
