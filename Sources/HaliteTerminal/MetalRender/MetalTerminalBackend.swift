@@ -315,6 +315,7 @@ final class MetalTerminalBackend: TerminalRenderBackend {
                                  startCol: grid.cursorCol, gridCols: grid.cols,
                                  map: map, bg: &bg, glyphs: &glyphs, colorGlyphs: &colorGlyphs)
         }
+        if config.showScrollbar { appendScrollbar(into: &overlay) }
         return (bg, glyphs, colorGlyphs, overlay)
     }
 
@@ -373,6 +374,31 @@ final class MetalTerminalBackend: TerminalRenderBackend {
             }
             col += w
         }
+    }
+
+    /// Append a right-edge scroll-position indicator (thumb) to the overlay pass.
+    /// Overlay-style: thumb only, shown only when content exceeds the viewport;
+    /// height ∝ visible fraction, position ∝ scroll offset. Display-only (not yet
+    /// draggable).
+    private func appendScrollbar(into overlay: inout [BgInstance]) {
+        let viewportH = metalView.bounds.height
+        let contentH = contentHeight
+        guard viewportH > 1, contentH > viewportH + 1 else { return }   // nothing to scroll
+
+        let barW: CGFloat = 6, rightInset: CGFloat = 2
+        let trackTop = inset.height
+        let trackH = max(viewportH - inset.height * 2, 1)
+        let visibleFraction = min(viewportH / contentH, 1)
+        let thumbH = max(24, trackH * visibleFraction)
+        let maxScroll = max(contentH - viewportH, 1)
+        let t = min(max(scrollY / maxScroll, 0), 1)
+        let thumbY = snap(trackTop + (trackH - thumbH) * t)
+        let x = snap(metalView.bounds.width - barW - rightInset)
+
+        let color = config.foregroundColor.withAlphaComponent(0.35)
+        overlay.append(BgInstance(origin: SIMD2<Float>(Float(x), Float(thumbY)),
+                                  size: SIMD2<Float>(Float(barW), Float(snap(thumbH))),
+                                  color: rgba(color)))
     }
 
     /// Resolved glyph foreground, mirroring the legacy fg rules.

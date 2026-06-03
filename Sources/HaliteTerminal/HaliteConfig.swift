@@ -34,6 +34,9 @@ public struct HaliteConfig {
     /// 폰트 자체의 OpenType liga/calt 테이블에 의존 — 리가처 없는 폰트(Menlo 등)는
     /// 켜도 변화 없음. Fira Code / JetBrains Mono / D2CodingLigature 등에서 보임.
     public var ligatures: Bool
+    /// 오른쪽 가장자리에 스크롤 위치 인디케이터(thumb)를 표시할지. 기본 OFF.
+    /// 스크롤백이 viewport보다 길 때만 보인다.
+    public var showScrollbar: Bool
 
     // 색은 theme에서 파생 — 기존 호출처 호환용 computed property.
     public var backgroundColor: NSColor { theme.background }
@@ -56,6 +59,7 @@ public struct HaliteConfig {
         animations: Bool = true,
         cursorShape: Grid.CursorShape = .block,
         ligatures: Bool = false,
+        showScrollbar: Bool = false,
         argv: [String] = HaliteConfig.defaultArgv(),
         env: [String: String] = ProcessInfo.processInfo.environment,
         cwd: String? = nil
@@ -70,6 +74,7 @@ public struct HaliteConfig {
         self.animations = animations
         self.cursorShape = cursorShape
         self.ligatures = ligatures
+        self.showScrollbar = showScrollbar
         self.argv = argv
         self.env = env
         self.cwd = cwd
