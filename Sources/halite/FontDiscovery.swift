@@ -6,15 +6,42 @@ import AppKit
 /// Nerd Font가 설치돼 있으면 우선 사용 (Starship/Powerlevel10k의 powerline 글리프가
 /// 깨지지 않음). 없으면 Menlo로 폴백.
 enum FontDiscovery {
-    /// 모든 fixed-pitch 폰트 가족 (sorted alphabetically).
+    /// 터미널에 쓸 만한(고정폭) 폰트 가족 (sorted alphabetically).
+    ///
+    /// `NSFont.isFixedPitch`만 보면 **한글/CJK 병합 폰트가 빠진다**: 반각 Latin +
+    /// 전각 한글의 두 advance 폭(dual-width)을 가져 시스템이 monospace 플래그를
+    /// false로 달기 때문(예: JetBrainsMonoHangul, D2Coding, NanumGothicCoding).
+    /// 이런 폰트야말로 한국 개발자가 원하는 것이므로, 플래그가 없어도 **Latin
+    /// advance가 균일하면**(한글이 2배 폭인 건 터미널이 wide-cell로 처리) 포함한다.
     static func allMonospaceFamilies() -> [String] {
         let fm = NSFontManager.shared
         return fm.availableFontFamilies
             .filter { family in
                 guard let font = NSFont(name: family, size: 12) else { return false }
-                return font.isFixedPitch
+                return font.isFixedPitch || isLatinMonospaced(family)
             }
             .sorted()
+    }
+
+    /// 대표 ASCII 글자들의 advance가 균일하면 true. `isFixedPitch` 플래그가 false인
+    /// dual-width(Latin+한글) 폰트를 터미널용으로 인정하기 위함. 비례 폰트
+    /// (Helvetica 등)는 좁은/넓은 글자 advance가 달라 걸러진다.
+    private static func isLatinMonospaced(_ family: String) -> Bool {
+        guard let font = NSFont(name: family, size: 100) else { return false }
+        let ct = font as CTFont
+        // narrow(i,l,.) + wide-ink(M,W,@,m) ASCII를 섞어 비례 폰트와 확실히 구분.
+        var advances: [CGFloat] = []
+        for scalar in "ilMW@m.".unicodeScalars {
+            var unichars = Array(String(scalar).utf16)
+            var glyph = CGGlyph(0)
+            guard CTFontGetGlyphsForCharacters(ct, &unichars, &glyph, unichars.count),
+                  glyph != 0 else { continue }
+            var advance = CGSize.zero
+            CTFontGetAdvancesForGlyphs(ct, .horizontal, &glyph, &advance, 1)
+            advances.append(advance.width)
+        }
+        guard advances.count >= 4, let lo = advances.min(), let hi = advances.max() else { return false }
+        return hi - lo < 0.5   // 100pt에서 0.5pt 미만 편차 = 균일폭
     }
 
     /// Nerd Font (이름에 "Nerd Font", "NF", "NFM" 포함)만.
