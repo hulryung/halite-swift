@@ -51,7 +51,7 @@ final class CompactWindowController: NSWindowController, NSWindowDelegate, TabSw
     // finger; on release past a threshold the switch commits, else it snaps back.
     private var swipeActive = false
     private var swipeAnimating = false
-    private var swipeNeighborTree: PaneTreeView?
+    private var swipeNeighborLayer: CALayer?   // neighbor shown as a snapshot (no hit-test)
     private var swipeNeighborIndex = -1
     private var swipeFromRight = false   // neighbor (next tab) enters from the right
 
@@ -414,9 +414,11 @@ final class CompactWindowController: NSWindowController, NSWindowDelegate, TabSw
 
     // MARK: - Interactive 2-finger swipe (TabSwipeHandler)
 
-    /// Live finger-tracking: on the first horizontal movement, lock direction and
-    /// add the neighbor tab's live tree beside the current one; thereafter both
-    /// trees follow the accumulated translation.
+    /// Live finger-tracking. The current tab stays a live view (it remains the sole
+    /// scroll/event target — its layer transform is visual-only and doesn't move
+    /// its hit-test frame), while the neighbor is shown as a **snapshot layer**
+    /// (a CALayer, so it never intercepts events or steals first responder the way
+    /// a live sibling view would). Both follow the accumulated translation.
     func tabSwipeUpdate(translation dx: CGFloat) {
         guard !swipeAnimating, tabs.count > 1 else { return }
         let width = contentContainer.bounds.width
@@ -431,90 +433,82 @@ final class CompactWindowController: NSWindowController, NSWindowDelegate, TabSw
             swipeActive = true
             swipeFromRight = !goPrev            // next tab enters from the right
             swipeNeighborIndex = neighborIndex
-            let neighbor = tabs[neighborIndex].tree
-            swipeNeighborTree = neighbor
-            if neighbor.superview !== contentContainer {
-                neighbor.translatesAutoresizingMaskIntoConstraints = false
-                contentContainer.addSubview(neighbor)
-                NSLayoutConstraint.activate([
-                    neighbor.topAnchor.constraint(equalTo: contentContainer.topAnchor),
-                    neighbor.bottomAnchor.constraint(equalTo: contentContainer.bottomAnchor),
-                    neighbor.leadingAnchor.constraint(equalTo: contentContainer.leadingAnchor),
-                    neighbor.trailingAnchor.constraint(equalTo: contentContainer.trailingAnchor),
-                ])
-                contentContainer.layoutSubtreeIfNeeded()
+
+            // Snapshot the neighbor (detached). Size it to the content area first so
+            // its Metal surfaces lay out and render at the right resolution.
+            let neighborTree = tabs[neighborIndex].tree
+            if neighborTree.superview == nil {
+                neighborTree.frame = contentContainer.bounds
+                neighborTree.layoutSubtreeIfNeeded()
+            }
+            if let img = Motion.snapshot(of: neighborTree) {
+                swipeNeighborLayer = Motion.overlay(image: img, frame: contentContainer.bounds,
+                                                    in: contentContainer)
             }
         }
-        guard let neighbor = swipeNeighborTree else { return }
+
         let neighborStart = swipeFromRight ? width : -width
         setSwipeTranslation(tabs[currentIndex].tree.layer, dx)
-        setSwipeTranslation(neighbor.layer, neighborStart + dx)
+        setSwipeTranslation(swipeNeighborLayer, neighborStart + dx)
     }
 
     /// Release: commit the switch if dragged past ~20% of the width in the locked
-    /// direction, otherwise snap back. Both finish with a short settle animation.
+    /// direction, otherwise snap back. Commit hands off to the normal `selectTab`
+    /// path (same as keyboard) once the slide finishes, so focus + tab-bar stay
+    /// consistent; the snapshot layer is removed after the live tab is in place.
     func tabSwipeEnd(translation dx: CGFloat) {
-        guard swipeActive, let neighbor = swipeNeighborTree else { swipeActive = false; return }
+        guard swipeActive else { return }
         let width = contentContainer.bounds.width
-        let active = tabs[currentIndex].tree
+        let activeLayer = tabs[currentIndex].tree.layer
         let neighborStart = swipeFromRight ? width : -width
         let threshold = width * 0.2
         let commit = swipeFromRight ? (dx < -threshold) : (dx > threshold)
+        let neighborIndex = swipeNeighborIndex
         swipeActive = false
         swipeAnimating = true
 
         if commit {
             let activeEnd = swipeFromRight ? -width : width
-            animateSwipeTranslation(active.layer, to: activeEnd)
-            animateSwipeTranslation(neighbor.layer, to: 0) { [weak self] in
+            animateSwipeTranslation(activeLayer, to: activeEnd)
+            animateSwipeTranslation(swipeNeighborLayer, to: 0) { [weak self] in
                 guard let self else { return }
-                active.removeFromSuperview()
-                self.setSwipeTranslation(active.layer, 0)
-                self.currentIndex = self.swipeNeighborIndex
-                self.setSwipeTranslation(neighbor.layer, 0)
-                if case .leaf(_, let surface) = neighbor.activeLeaf.kind {
-                    self.window?.makeFirstResponder(surface)
-                }
-                if let title = neighbor.root.leaves().first?.session.title {
-                    self.window?.title = title.isEmpty ? "halite" : title
-                }
-                self.refreshTabBar()
+                self.setSwipeTranslation(self.tabs[self.currentIndex].tree.layer, 0)
                 self.endSwipe()
+                // Real switch (instant) — same path as keyboard nav, so first
+                // responder, title, and tab-bar selection are all correct. The live
+                // neighbor lands at center under the snapshot; then drop the snapshot.
+                self.selectTab(neighborIndex, transition: .none)
+                self.swipeNeighborLayer?.removeFromSuperlayer()
+                self.swipeNeighborLayer = nil
             }
         } else {
-            animateSwipeTranslation(active.layer, to: 0)
-            animateSwipeTranslation(neighbor.layer, to: neighborStart) { [weak self] in
+            animateSwipeTranslation(activeLayer, to: 0)
+            animateSwipeTranslation(swipeNeighborLayer, to: neighborStart) { [weak self] in
                 guard let self else { return }
-                neighbor.removeFromSuperview()
-                self.setSwipeTranslation(neighbor.layer, 0)
-                self.setSwipeTranslation(active.layer, 0)
+                self.setSwipeTranslation(self.tabs[self.currentIndex].tree.layer, 0)
+                self.swipeNeighborLayer?.removeFromSuperlayer()
+                self.swipeNeighborLayer = nil
                 self.endSwipe()
             }
         }
     }
 
     private func endSwipe() {
-        swipeNeighborTree = nil
         swipeNeighborIndex = -1
+        swipeActive = false
         swipeAnimating = false
     }
 
     /// Tear down an in-flight swipe before a non-swipe path (keyboard/click switch)
-    /// takes over, so no tree is left offset or doubly-added.
+    /// takes over, so nothing is left offset.
     private func abortSwipe() {
-        if let n = swipeNeighborTree {
-            n.layer?.removeAnimation(forKey: "swipeSettle")
-            if n.superview === contentContainer, swipeNeighborIndex != currentIndex {
-                n.removeFromSuperview()
-            }
-            setSwipeTranslation(n.layer, 0)
-        }
+        swipeNeighborLayer?.removeFromSuperlayer()
+        swipeNeighborLayer = nil
         if currentIndex >= 0, currentIndex < tabs.count {
             let a = tabs[currentIndex].tree
             a.layer?.removeAnimation(forKey: "swipeSettle")
             setSwipeTranslation(a.layer, 0)
         }
-        swipeActive = false
         endSwipe()
     }
 
