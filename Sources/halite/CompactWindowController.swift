@@ -7,7 +7,7 @@ import HaliteTerminal
 /// 커스텀 CompactTabBarView를 contentView 최상단에 둬서 신호등과 같은 row에 탭.
 ///
 /// hiterm(`~/dev/hiterm`)의 MainWindowController 구조 차용.
-final class CompactWindowController: NSWindowController, NSWindowDelegate {
+final class CompactWindowController: NSWindowController, NSWindowDelegate, TabSwipeHandler {
     /// 탭 = (PaneTreeView, 그 트리의 첫 leaf 세션의 title 구독).
     /// 한 탭 안에서 Cmd+D / Cmd+Shift+D 로 split하면 그 탭의 트리에 leaf 추가됨.
     private struct Tab {
@@ -45,6 +45,15 @@ final class CompactWindowController: NSWindowController, NSWindowDelegate {
     private var tabBar: CompactTabBarView!
     private var tabBarBackground: NSVisualEffectView!
     private var contentContainer: NSView!
+
+    // Interactive 2-finger swipe (TabSwipeHandler). During a horizontal swipe the
+    // neighbor tab's live tree is added beside the current one and both follow the
+    // finger; on release past a threshold the switch commits, else it snaps back.
+    private var swipeActive = false
+    private var swipeAnimating = false
+    private var swipeNeighborTree: PaneTreeView?
+    private var swipeNeighborIndex = -1
+    private var swipeFromRight = false   // neighbor (next tab) enters from the right
 
     var hasTabs: Bool { !tabs.isEmpty }
 
@@ -186,6 +195,7 @@ final class CompactWindowController: NSWindowController, NSWindowDelegate {
 
     func selectTab(_ index: Int, transition: TabTransition = .none) {
         guard index >= 0, index < tabs.count else { return }
+        if swipeActive || swipeAnimating { abortSwipe() }
 
         // Capture the outgoing tab's pixels BEFORE removeFromSuperview() tears it down.
         // Only for a real switch between two distinct, animation-enabled tabs.
@@ -399,6 +409,138 @@ final class CompactWindowController: NSWindowController, NSWindowDelegate {
         oGroup.fillMode = .forwards
         overlay.add(oGroup, forKey: "switchOut")
 
+        CATransaction.commit()
+    }
+
+    // MARK: - Interactive 2-finger swipe (TabSwipeHandler)
+
+    /// Live finger-tracking: on the first horizontal movement, lock direction and
+    /// add the neighbor tab's live tree beside the current one; thereafter both
+    /// trees follow the accumulated translation.
+    func tabSwipeUpdate(translation dx: CGFloat) {
+        guard !swipeAnimating, tabs.count > 1 else { return }
+        let width = contentContainer.bounds.width
+        guard width > 1 else { return }
+
+        if !swipeActive {
+            guard abs(dx) > 1 else { return }   // wait for a clear direction
+            let goPrev = dx > 0                 // swipe fingers right → previous tab
+            let neighborIndex = goPrev ? (currentIndex - 1 + tabs.count) % tabs.count
+                                       : (currentIndex + 1) % tabs.count
+            guard neighborIndex != currentIndex else { return }
+            swipeActive = true
+            swipeFromRight = !goPrev            // next tab enters from the right
+            swipeNeighborIndex = neighborIndex
+            let neighbor = tabs[neighborIndex].tree
+            swipeNeighborTree = neighbor
+            if neighbor.superview !== contentContainer {
+                neighbor.translatesAutoresizingMaskIntoConstraints = false
+                contentContainer.addSubview(neighbor)
+                NSLayoutConstraint.activate([
+                    neighbor.topAnchor.constraint(equalTo: contentContainer.topAnchor),
+                    neighbor.bottomAnchor.constraint(equalTo: contentContainer.bottomAnchor),
+                    neighbor.leadingAnchor.constraint(equalTo: contentContainer.leadingAnchor),
+                    neighbor.trailingAnchor.constraint(equalTo: contentContainer.trailingAnchor),
+                ])
+                contentContainer.layoutSubtreeIfNeeded()
+            }
+        }
+        guard let neighbor = swipeNeighborTree else { return }
+        let neighborStart = swipeFromRight ? width : -width
+        setSwipeTranslation(tabs[currentIndex].tree.layer, dx)
+        setSwipeTranslation(neighbor.layer, neighborStart + dx)
+    }
+
+    /// Release: commit the switch if dragged past ~20% of the width in the locked
+    /// direction, otherwise snap back. Both finish with a short settle animation.
+    func tabSwipeEnd(translation dx: CGFloat) {
+        guard swipeActive, let neighbor = swipeNeighborTree else { swipeActive = false; return }
+        let width = contentContainer.bounds.width
+        let active = tabs[currentIndex].tree
+        let neighborStart = swipeFromRight ? width : -width
+        let threshold = width * 0.2
+        let commit = swipeFromRight ? (dx < -threshold) : (dx > threshold)
+        swipeActive = false
+        swipeAnimating = true
+
+        if commit {
+            let activeEnd = swipeFromRight ? -width : width
+            animateSwipeTranslation(active.layer, to: activeEnd)
+            animateSwipeTranslation(neighbor.layer, to: 0) { [weak self] in
+                guard let self else { return }
+                active.removeFromSuperview()
+                self.setSwipeTranslation(active.layer, 0)
+                self.currentIndex = self.swipeNeighborIndex
+                self.setSwipeTranslation(neighbor.layer, 0)
+                if case .leaf(_, let surface) = neighbor.activeLeaf.kind {
+                    self.window?.makeFirstResponder(surface)
+                }
+                if let title = neighbor.root.leaves().first?.session.title {
+                    self.window?.title = title.isEmpty ? "halite" : title
+                }
+                self.refreshTabBar()
+                self.endSwipe()
+            }
+        } else {
+            animateSwipeTranslation(active.layer, to: 0)
+            animateSwipeTranslation(neighbor.layer, to: neighborStart) { [weak self] in
+                guard let self else { return }
+                neighbor.removeFromSuperview()
+                self.setSwipeTranslation(neighbor.layer, 0)
+                self.setSwipeTranslation(active.layer, 0)
+                self.endSwipe()
+            }
+        }
+    }
+
+    private func endSwipe() {
+        swipeNeighborTree = nil
+        swipeNeighborIndex = -1
+        swipeAnimating = false
+    }
+
+    /// Tear down an in-flight swipe before a non-swipe path (keyboard/click switch)
+    /// takes over, so no tree is left offset or doubly-added.
+    private func abortSwipe() {
+        if let n = swipeNeighborTree {
+            n.layer?.removeAnimation(forKey: "swipeSettle")
+            if n.superview === contentContainer, swipeNeighborIndex != currentIndex {
+                n.removeFromSuperview()
+            }
+            setSwipeTranslation(n.layer, 0)
+        }
+        if currentIndex >= 0, currentIndex < tabs.count {
+            let a = tabs[currentIndex].tree
+            a.layer?.removeAnimation(forKey: "swipeSettle")
+            setSwipeTranslation(a.layer, 0)
+        }
+        swipeActive = false
+        endSwipe()
+    }
+
+    private func setSwipeTranslation(_ layer: CALayer?, _ x: CGFloat) {
+        guard let layer else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.transform = CATransform3DMakeTranslation(x, 0, 0)
+        CATransaction.commit()
+    }
+
+    /// Animate a live tree's backing-layer translation to `x` via an EXPLICIT
+    /// animation (model set to the final value first) — an implicit animation on a
+    /// constrained view's layer gets clobbered by layout (see `animateTabSwitch`).
+    private func animateSwipeTranslation(_ layer: CALayer?, to x: CGFloat, done: (() -> Void)? = nil) {
+        guard let layer else { done?(); return }
+        let from = layer.presentation()?.transform.m41 ?? layer.transform.m41
+        setSwipeTranslation(layer, x)   // model = final
+        let anim = CABasicAnimation(keyPath: "transform.translation.x")
+        anim.fromValue = from
+        anim.toValue = x
+        anim.duration = Motion.duration
+        anim.timingFunction = Motion.timing
+        CATransaction.begin()
+        CATransaction.setCompletionBlock { done?() }
+        layer.add(anim, forKey: "swipeSettle")
         CATransaction.commit()
     }
 

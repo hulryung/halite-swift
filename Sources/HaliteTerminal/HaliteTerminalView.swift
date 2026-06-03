@@ -31,6 +31,15 @@ public struct HaliteTerminalView: NSViewRepresentable {
     }
 }
 
+/// 2-finger 가로 스와이프 탭 전환의 호스트 측 수신자. 터미널 surface는 라이브러리라
+/// 탭/윈도우를 모르므로, 제스처를 이 프로토콜로 호스트(윈도우 컨트롤러)에 중계한다.
+/// `translation`은 누적 가로 이동량(pt, 오른쪽=양수). 호스트가 이웃 탭 트리를
+/// 실시간으로 끌고, end에서 임계값에 따라 commit/cancel 한다.
+public protocol TabSwipeHandler: AnyObject {
+    func tabSwipeUpdate(translation: CGFloat)
+    func tabSwipeEnd(translation: CGFloat)
+}
+
 /// 입력(키/IME/마우스)·선택·find·follow 정책의 소유자. 그리기/스크롤/좌표 변환은
 /// `MetalTerminalBackend`(`CAMetalLayer` 인스턴스드 렌더러)에 위임한다.
 /// 키 이벤트는 이쪽에서 잡아 `session.write(_:)`로 전달.
@@ -732,7 +741,19 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
         return nil
     }
 
+    // 2-finger 가로 스와이프 → 탭 전환 제스처 상태 (제스처당 1회 결정).
+    private var swipeDecided = false
+    private var swipeHorizontal = false
+    private var swipeAccumX: CGFloat = 0
+
     public override func scrollWheel(with event: NSEvent) {
+        // 2-finger 가로 스와이프 → 탭 전환 (트랙패드 한정, 앱이 마우스를 캡처 중이 아닐 때).
+        // 가로 제스처는 여기서 소비한다(터미널은 가로 스크롤이 없음). 세로 스크롤은
+        // 그대로 backend로 흘려보낸다.
+        if event.hasPreciseScrollingDeltas, session.mouseReportingMode == 0,
+           handleTabSwipe(event) {
+            return
+        }
         // Mouse reporting 활성 시 휠은 button 64/65 코드로 PTY 전달 (tmux 등이 사용).
         if isMouseReportingEvent(event) {
             let delta = event.scrollingDeltaY
@@ -746,6 +767,40 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
         // whose didLiveScroll observer updates followingBottom.
         if !backend.handleScrollWheel(event) {
             super.scrollWheel(with: event)
+        }
+    }
+
+    /// Part of a horizontal tab-swipe gesture? Decides horizontal-vs-vertical once
+    /// per gesture; accumulates dx; on release past a threshold switches tab via
+    /// the responder chain (same cross-slide as ⌘← / ⌘→). Returns true when the
+    /// event belongs to a horizontal swipe (and is consumed); false lets the
+    /// caller fall through to vertical scrollback.
+    private func handleTabSwipe(_ event: NSEvent) -> Bool {
+        guard let handler = window?.windowController as? TabSwipeHandler else { return false }
+        switch event.phase {
+        case .began:
+            swipeDecided = false
+            swipeHorizontal = false
+            swipeAccumX = 0
+            return false   // .began carries ~0 delta; decide on the first .changed
+        case .changed:
+            if !swipeDecided {
+                let dx = abs(event.scrollingDeltaX), dy = abs(event.scrollingDeltaY)
+                guard dx > 0.1 || dy > 0.1 else { return false }   // no movement yet
+                swipeDecided = true
+                swipeHorizontal = dx > dy
+            }
+            guard swipeHorizontal else { return false }
+            swipeAccumX += event.scrollingDeltaX
+            handler.tabSwipeUpdate(translation: swipeAccumX)   // live: host drags neighbor in
+            return true
+        case .ended, .cancelled:
+            defer { swipeDecided = false; swipeHorizontal = false; swipeAccumX = 0 }
+            guard swipeHorizontal else { return false }
+            handler.tabSwipeEnd(translation: swipeAccumX)       // host commits or snaps back
+            return true
+        default:
+            return swipeHorizontal   // consume trailing/momentum events of a horizontal swipe
         }
     }
 
