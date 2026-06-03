@@ -1199,6 +1199,21 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
             }
             return super.performKeyEquivalent(with: event)
         }
+        // ⌘← / ⌘→ — previous / next tab. Arrow keys carry .function + .numericPad
+        // in their modifier flags, so test command-only AFTER stripping those (a
+        // plain `mods == .command` check fails for arrows). Matched by keyCode
+        // (123/124, layout-independent); routed through the responder chain like
+        // ⌘⇧[ / ⌘⇧]. (⌘+arrow is otherwise a no-op — not forwarded to the PTY.)
+        if mods.contains(.command), mods.isDisjoint(with: [.shift, .control, .option]) {
+            switch event.keyCode {
+            case 123:
+                if NSApp.sendAction(Selector(("selectPreviousTab:")), to: nil, from: self) { return true }
+            case 124:
+                if NSApp.sendAction(Selector(("selectNextTab:")), to: nil, from: self) { return true }
+            default:
+                break
+            }
+        }
         guard mods == .command else {
             return super.performKeyEquivalent(with: event)
         }
