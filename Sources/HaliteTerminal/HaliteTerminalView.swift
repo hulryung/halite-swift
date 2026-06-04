@@ -37,7 +37,9 @@ public struct HaliteTerminalView: NSViewRepresentable {
 /// 실시간으로 끌고, end에서 임계값에 따라 commit/cancel 한다.
 public protocol TabSwipeHandler: AnyObject {
     func tabSwipeUpdate(translation: CGFloat)
-    func tabSwipeEnd(translation: CGFloat)
+    /// `velocity`: recent horizontal speed at release (pt per event, ~per frame),
+    /// so a fast flick commits even if it didn't travel the distance threshold.
+    func tabSwipeEnd(translation: CGFloat, velocity: CGFloat)
 }
 
 /// 입력(키/IME/마우스)·선택·find·follow 정책의 소유자. 그리기/스크롤/좌표 변환은
@@ -745,6 +747,7 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
     private var swipeDecided = false
     private var swipeHorizontal = false
     private var swipeAccumX: CGFloat = 0
+    private var swipeVelocity: CGFloat = 0   // smoothed recent dx/event for flick detection
 
     public override func scrollWheel(with event: NSEvent) {
         // 2-finger 가로 스와이프 → 탭 전환 (트랙패드 한정, 앱이 마우스를 캡처 중이 아닐 때).
@@ -782,6 +785,7 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
             swipeDecided = false
             swipeHorizontal = false
             swipeAccumX = 0
+            swipeVelocity = 0
             return false   // .began carries ~0 delta; decide on the first .changed
         case .changed:
             if !swipeDecided {
@@ -792,12 +796,14 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
             }
             guard swipeHorizontal else { return false }
             swipeAccumX += event.scrollingDeltaX
+            // Exponentially-smoothed recent speed → distinguishes a flick from a drag.
+            swipeVelocity = swipeVelocity * 0.6 + event.scrollingDeltaX * 0.4
             handler.tabSwipeUpdate(translation: swipeAccumX)   // live: host drags neighbor in
             return true
         case .ended, .cancelled:
-            defer { swipeDecided = false; swipeHorizontal = false; swipeAccumX = 0 }
+            defer { swipeDecided = false; swipeHorizontal = false; swipeAccumX = 0; swipeVelocity = 0 }
             guard swipeHorizontal else { return false }
-            handler.tabSwipeEnd(translation: swipeAccumX)       // host commits or snaps back
+            handler.tabSwipeEnd(translation: swipeAccumX, velocity: swipeVelocity)
             return true
         default:
             return swipeHorizontal   // consume trailing/momentum events of a horizontal swipe

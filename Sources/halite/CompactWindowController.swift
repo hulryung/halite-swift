@@ -54,6 +54,8 @@ final class CompactWindowController: NSWindowController, NSWindowDelegate, TabSw
     private var swipeNeighborLayer: CALayer?   // neighbor shown as a snapshot (no hit-test)
     private var swipeNeighborIndex = -1
     private var swipeFromRight = false   // neighbor (next tab) enters from the right
+    private var settleTimer: Timer?
+    private var settleDx: CGFloat = 0
 
     var hasTabs: Bool { !tabs.isEmpty }
 
@@ -456,22 +458,28 @@ final class CompactWindowController: NSWindowController, NSWindowDelegate, TabSw
     /// direction, otherwise snap back. Commit hands off to the normal `selectTab`
     /// path (same as keyboard) once the slide finishes, so focus + tab-bar stay
     /// consistent; the snapshot layer is removed after the live tab is in place.
-    func tabSwipeEnd(translation dx: CGFloat) {
+    func tabSwipeEnd(translation dx: CGFloat, velocity: CGFloat) {
         guard swipeActive else { return }
         let width = contentContainer.bounds.width
-        let activeLayer = tabs[currentIndex].tree.layer
         let neighborStart = swipeFromRight ? width : -width
-        let threshold = width * 0.2
-        let commit = swipeFromRight ? (dx < -threshold) : (dx > threshold)
+        // Commit on distance OR a fast flick. swipeFromRight (next) commits on a
+        // negative drag/flick; prev on positive. The flick check makes a quick
+        // short swipe switch immediately instead of needing to drag 1/8 of the width.
+        let distThreshold = width * 0.12
+        let velThreshold: CGFloat = 6
+        let commit = swipeFromRight ? (dx < -distThreshold || velocity < -velThreshold)
+                                    : (dx > distThreshold || velocity > velThreshold)
         let neighborIndex = swipeNeighborIndex
         swipeActive = false
         swipeAnimating = true
 
-        if commit {
-            let activeEnd = swipeFromRight ? -width : width
-            animateSwipeTranslation(activeLayer, to: activeEnd)
-            animateSwipeTranslation(swipeNeighborLayer, to: 0) { [weak self] in
-                guard let self else { return }
+        // Settle both layers from the release offset to the target: commit →
+        // dx = -neighborStart (neighbor reaches 0, current slides fully off);
+        // cancel → dx = 0 (current back, neighbor back off-screen).
+        let targetDx: CGFloat = commit ? -neighborStart : 0
+        startSwipeSettle(from: dx, to: targetDx, neighborStart: neighborStart) { [weak self] in
+            guard let self else { return }
+            if commit {
                 self.setSwipeTranslation(self.tabs[self.currentIndex].tree.layer, 0)
                 self.endSwipe()
                 // Real switch (instant) — same path as keyboard nav, so first
@@ -480,16 +488,40 @@ final class CompactWindowController: NSWindowController, NSWindowDelegate, TabSw
                 self.selectTab(neighborIndex, transition: .none)
                 self.swipeNeighborLayer?.removeFromSuperlayer()
                 self.swipeNeighborLayer = nil
-            }
-        } else {
-            animateSwipeTranslation(activeLayer, to: 0)
-            animateSwipeTranslation(swipeNeighborLayer, to: neighborStart) { [weak self] in
-                guard let self else { return }
-                self.setSwipeTranslation(self.tabs[self.currentIndex].tree.layer, 0)
+            } else {
                 self.swipeNeighborLayer?.removeFromSuperlayer()
                 self.swipeNeighborLayer = nil
+                self.setSwipeTranslation(self.tabs[self.currentIndex].tree.layer, 0)
                 self.endSwipe()
             }
+        }
+    }
+
+    /// hiterm-style settle: each frame move 15% of the remaining distance toward
+    /// `targetDx`, so it eases out — fast at first, slowing as it nears the target,
+    /// then snaps crisply once within 1pt. Drives both the current tree layer and
+    /// the neighbor snapshot from the single shared offset (`dx`).
+    private func startSwipeSettle(from dx: CGFloat, to targetDx: CGFloat,
+                                  neighborStart: CGFloat, done: @escaping () -> Void) {
+        settleTimer?.invalidate()
+        settleDx = dx
+        let apply: () -> Void = { [weak self] in
+            guard let self else { return }
+            self.setSwipeTranslation(self.tabs[self.currentIndex].tree.layer, self.settleDx)
+            self.setSwipeTranslation(self.swipeNeighborLayer, neighborStart + self.settleDx)
+        }
+        settleTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] t in
+            guard let self else { t.invalidate(); return }
+            let dist = targetDx - self.settleDx
+            if abs(dist) < 1.0 {
+                self.settleDx = targetDx
+                apply()
+                t.invalidate(); self.settleTimer = nil
+                done()
+                return
+            }
+            self.settleDx += dist * 0.15
+            apply()
         }
     }
 
@@ -502,12 +534,12 @@ final class CompactWindowController: NSWindowController, NSWindowDelegate, TabSw
     /// Tear down an in-flight swipe before a non-swipe path (keyboard/click switch)
     /// takes over, so nothing is left offset.
     private func abortSwipe() {
+        settleTimer?.invalidate()
+        settleTimer = nil
         swipeNeighborLayer?.removeFromSuperlayer()
         swipeNeighborLayer = nil
         if currentIndex >= 0, currentIndex < tabs.count {
-            let a = tabs[currentIndex].tree
-            a.layer?.removeAnimation(forKey: "swipeSettle")
-            setSwipeTranslation(a.layer, 0)
+            setSwipeTranslation(tabs[currentIndex].tree.layer, 0)
         }
         endSwipe()
     }
@@ -517,24 +549,6 @@ final class CompactWindowController: NSWindowController, NSWindowDelegate, TabSw
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         layer.transform = CATransform3DMakeTranslation(x, 0, 0)
-        CATransaction.commit()
-    }
-
-    /// Animate a live tree's backing-layer translation to `x` via an EXPLICIT
-    /// animation (model set to the final value first) — an implicit animation on a
-    /// constrained view's layer gets clobbered by layout (see `animateTabSwitch`).
-    private func animateSwipeTranslation(_ layer: CALayer?, to x: CGFloat, done: (() -> Void)? = nil) {
-        guard let layer else { done?(); return }
-        let from = layer.presentation()?.transform.m41 ?? layer.transform.m41
-        setSwipeTranslation(layer, x)   // model = final
-        let anim = CABasicAnimation(keyPath: "transform.translation.x")
-        anim.fromValue = from
-        anim.toValue = x
-        anim.duration = Motion.duration
-        anim.timingFunction = Motion.timing
-        CATransaction.begin()
-        CATransaction.setCompletionBlock { done?() }
-        layer.add(anim, forKey: "swipeSettle")
         CATransaction.commit()
     }
 
