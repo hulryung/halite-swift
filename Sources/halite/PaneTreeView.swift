@@ -11,6 +11,9 @@ enum PaneFocusDirection {
 final class PaneTreeView: NSView {
     private(set) var root: PaneNode
     private(set) var activeLeaf: PaneNode
+    /// True while `rebuild()` re-creates the view tree — onFocus callbacks from
+    /// surfaces being re-added are ignored so they don't clobber the active pane.
+    private var rebuilding = false
 
     /// 마지막 leaf가 닫혔을 때 호출 (호스트 — 탭 컨트롤러 — 가 탭/윈도우를 닫음).
     var onAllPanesClosed: (() -> Void)?
@@ -198,6 +201,11 @@ final class PaneTreeView: NSView {
     // MARK: - Tree → NSView 재구성
 
     private func rebuild(animation: PaneAnimation = .none) {
+        // Re-adding surfaces fires their viewDidMoveToWindow → makeFirstResponder →
+        // onFocus, which would set the active pane to a stale node mid-rebuild.
+        // Suppress onFocus during the rebuild; we set the correct active explicitly.
+        rebuilding = true
+        defer { rebuilding = false }
         for sub in subviews { sub.removeFromSuperview() }
         addSubviewsForNode(root, into: self)
         updateBorderColors()
@@ -249,7 +257,7 @@ final class PaneTreeView: NSView {
             // that into the active-pane state (and indicator) since the surface now
             // fills the wrapper, so the wrapper no longer gets the click itself.
             surface.onFocus = { [weak self, weak node] in
-                guard let self, let node else { return }
+                guard let self, let node, !self.rebuilding else { return }
                 self.setActive(node)
             }
 
