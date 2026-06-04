@@ -145,10 +145,13 @@ final class PaneTreeView: NSView {
 
     /// 마우스 클릭 등으로 외부에서 active pane 변경 호출.
     func setActive(_ leaf: PaneNode) {
-        guard case .leaf = leaf.kind else { return }
+        guard case .leaf(_, let surface) = leaf.kind else { return }
+        let changed = activeLeaf !== leaf
         activeLeaf = leaf
         updateBorderColors()
-        if case .leaf(_, let surface) = leaf.kind {
+        // Only re-grab first responder on an actual change — onFocus→setActive
+        // calls back in here when a pane is clicked, so re-asserting would loop.
+        if changed, window?.firstResponder !== surface {
             window?.makeFirstResponder(surface)
         }
     }
@@ -231,15 +234,24 @@ final class PaneTreeView: NSView {
             wrapper.autoresizingMask = [.width, .height]
             wrapper.frame = container.bounds
             container.addSubview(wrapper)
-            // surface는 autolayout으로 wrapper를 1pt border 안쪽으로 fill.
+            // surface가 wrapper를 꽉 채움 — 활성 표시(dim/테두리)는 위에 얹은
+            // overlay 레이어로 그리므로 inset 불필요. 인접 pane끼리 맞붙어 seam은
+            // divider 1px 선만 보인다.
             surface.translatesAutoresizingMaskIntoConstraints = false
             wrapper.addSubview(surface)
             NSLayoutConstraint.activate([
-                surface.topAnchor.constraint(equalTo: wrapper.topAnchor, constant: 1),
-                surface.bottomAnchor.constraint(equalTo: wrapper.bottomAnchor, constant: -1),
-                surface.leadingAnchor.constraint(equalTo: wrapper.leadingAnchor, constant: 1),
-                surface.trailingAnchor.constraint(equalTo: wrapper.trailingAnchor, constant: -1),
+                surface.topAnchor.constraint(equalTo: wrapper.topAnchor),
+                surface.bottomAnchor.constraint(equalTo: wrapper.bottomAnchor),
+                surface.leadingAnchor.constraint(equalTo: wrapper.leadingAnchor),
+                surface.trailingAnchor.constraint(equalTo: wrapper.trailingAnchor),
             ])
+            // Clicking a pane's content makes its surface first responder; mirror
+            // that into the active-pane state (and indicator) since the surface now
+            // fills the wrapper, so the wrapper no longer gets the click itself.
+            surface.onFocus = { [weak self, weak node] in
+                guard let self, let node else { return }
+                self.setActive(node)
+            }
 
         case .split(_, let first, let second, _):
             // split — 두 sub-area + divider. SplitContainer의 layout()이 frame 계산
@@ -390,6 +402,15 @@ final class PaneTreeView: NSView {
         walk(self)
     }
 
+    /// 활성 pane 표시 설정이 바뀌었을 때 모든 wrapper를 다시 적용 (active 여부는 그대로).
+    func refreshIndicators() {
+        func walk(_ view: NSView) {
+            (view as? PaneLeafWrapper)?.applyIndicator()
+            for sub in view.subviews { walk(sub) }
+        }
+        walk(self)
+    }
+
     /// node가 leaf면 그대로, split이면 첫 leaf까지 내려감.
     private func firstLeaf(of node: PaneNode) -> PaneNode {
         switch node.kind {
@@ -399,12 +420,16 @@ final class PaneTreeView: NSView {
     }
 }
 
-/// Leaf wrapper view — 1px border로 active 표시.
+/// Leaf wrapper view — 활성 pane을 설정된 방식(dim / 테두리)으로 표시.
 private final class PaneLeafWrapper: NSView {
     let leaf: PaneNode
     weak var owner: PaneTreeView?
+    /// 터미널 Metal 레이어 위에 올라가는 오버레이들 (zPosition 높게).
+    /// dimLayer = 비활성 pane scrim, borderLayer = 활성 pane 테두리.
+    private let dimLayer = CALayer()
+    private let borderLayer = CALayer()
     var isActive: Bool = false {
-        didSet { needsDisplay = true }
+        didSet { applyIndicator() }
     }
 
     init(leaf: PaneNode, owner: PaneTreeView) {
@@ -412,16 +437,55 @@ private final class PaneLeafWrapper: NSView {
         self.owner = owner
         super.init(frame: .zero)
         wantsLayer = true
+        dimLayer.backgroundColor = NSColor.black.cgColor
+        dimLayer.zPosition = 100
+        dimLayer.isHidden = true
+        borderLayer.zPosition = 101
+        borderLayer.borderWidth = 0
+        layer?.addSublayer(dimLayer)
+        layer?.addSublayer(borderLayer)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    override func draw(_ dirtyRect: NSRect) {
-        let path = NSBezierPath(rect: bounds.insetBy(dx: 0.5, dy: 0.5))
-        path.lineWidth = 1
-        (isActive ? NSColor.systemBlue.withAlphaComponent(0.6) : NSColor.clear).setStroke()
-        path.stroke()
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        dimLayer.frame = bounds
+        borderLayer.frame = bounds
+        CATransaction.commit()
+    }
+
+    /// 설정값을 다시 읽어 표시를 갱신 (active 변경 또는 설정 변경 시).
+    func applyIndicator() {
+        let mode = ActivePaneIndicator.current
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        dimLayer.isHidden = !(mode == .dimInactive && !isActive)
+        dimLayer.opacity = 0.4
+        if isActive, mode == .accentBorder || mode == .subtleBorder {
+            let color = (mode == .accentBorder) ? NSColor.controlAccentColor
+                                                : Self.subtleBorderColor(leaf: leaf)
+            borderLayer.borderColor = color.cgColor
+            borderLayer.borderWidth = 1
+        } else {
+            borderLayer.borderWidth = 0
+        }
+        CATransaction.commit()
+    }
+
+    /// 배경색에서 살짝 이동한 은은한 테두리색 (어두운 테마 → 약간 밝게, 밝은 테마 → 약간 어둡게).
+    private static func subtleBorderColor(leaf: PaneNode) -> NSColor {
+        guard case .leaf(let session, _) = leaf.kind else { return .clear }
+        let bg = (session.config.backgroundColor.usingColorSpace(.sRGB)) ?? .black
+        let lum = 0.299 * bg.redComponent + 0.587 * bg.greenComponent + 0.114 * bg.blueComponent
+        let target: CGFloat = lum < 0.5 ? 1.0 : 0.0
+        let t: CGFloat = 0.25
+        func mix(_ a: CGFloat) -> CGFloat { a + (target - a) * t }
+        return NSColor(srgbRed: mix(bg.redComponent), green: mix(bg.greenComponent),
+                       blue: mix(bg.blueComponent), alpha: 1.0)
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -437,16 +501,19 @@ private final class SplitContainer: NSView {
     let firstContainer = NSView()
     let secondContainer = NSView()
     private let divider = DividerView()
-    private let dividerThickness: CGFloat = 4
+    /// 드래그를 잡기 쉬운 hit zone 폭. divider는 이만큼 넓지만 가운데 1px 선만 그린다.
+    private let dividerDrag: CGFloat = 10
 
     init(node: PaneNode, owner: PaneTreeView) {
         self.node = node
         self.owner = owner
         super.init(frame: .zero)
-        for v in [firstContainer, secondContainer, divider] {
+        for v in [firstContainer, secondContainer] {
             v.wantsLayer = true
             addSubview(v)
         }
+        divider.wantsLayer = true
+        addSubview(divider)   // 패널 위에 올려 경계의 drag zone을 차지
         divider.onDrag = { [weak self] delta in self?.applyDrag(delta) }
     }
 
@@ -456,29 +523,24 @@ private final class SplitContainer: NSView {
     override func layout() {
         super.layout()
         guard case .split(let dir, _, _, let ratio) = node.kind else { return }
+        // 패널을 맞붙이고(틈 없음) divider를 경계에 겹쳐 둔다 → 가는 1px 선만 보이고
+        // 넓은 hit zone으로 드래그는 쉬움.
         switch dir {
         case .horizontal:  // 좌우 분할
             let total = bounds.width
-            let firstW = max(0, total * ratio - dividerThickness / 2)
-            let secondW = max(0, total - firstW - dividerThickness)
+            let firstW = (total * ratio).rounded()
             firstContainer.frame = NSRect(x: 0, y: 0, width: firstW, height: bounds.height)
-            divider.frame = NSRect(x: firstW, y: 0, width: dividerThickness, height: bounds.height)
-            secondContainer.frame = NSRect(
-                x: firstW + dividerThickness, y: 0,
-                width: secondW, height: bounds.height
-            )
+            secondContainer.frame = NSRect(x: firstW, y: 0, width: total - firstW, height: bounds.height)
+            divider.frame = NSRect(x: firstW - dividerDrag / 2, y: 0, width: dividerDrag, height: bounds.height)
             divider.orientation = .vertical
         case .vertical:    // 위아래 분할
             let total = bounds.height
-            let secondH = max(0, total * (1 - ratio) - dividerThickness / 2)
-            let firstH = max(0, total - secondH - dividerThickness)
+            let secondH = (total * (1 - ratio)).rounded()
+            let firstH = total - secondH
             // bottom-up 좌표계 — first가 위, second가 아래로 보이도록.
             secondContainer.frame = NSRect(x: 0, y: 0, width: bounds.width, height: secondH)
-            divider.frame = NSRect(x: 0, y: secondH, width: bounds.width, height: dividerThickness)
-            firstContainer.frame = NSRect(
-                x: 0, y: secondH + dividerThickness,
-                width: bounds.width, height: firstH
-            )
+            firstContainer.frame = NSRect(x: 0, y: secondH, width: bounds.width, height: firstH)
+            divider.frame = NSRect(x: 0, y: secondH - dividerDrag / 2, width: bounds.width, height: dividerDrag)
             divider.orientation = .horizontal
         }
     }
@@ -505,20 +567,30 @@ private final class SplitContainer: NSView {
 private final class DividerView: NSView {
     enum Orientation { case horizontal, vertical }
     var orientation: Orientation = .vertical {
-        didSet { updateCursor() }
+        didSet { updateCursor(); needsDisplay = true }
     }
     var onDrag: ((CGFloat) -> Void)?
     private var dragStart: NSPoint?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
-        wantsLayer = true
-        layer?.backgroundColor = NSColor.gridColor.withAlphaComponent(0.4).cgColor
+        wantsLayer = true   // 배경은 clear — drag zone은 넓지만 가운데 1px 선만 그림.
         updateCursor()
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+
+    /// 넓은 hit zone 가운데에 가는 1px 구분선만 그린다 (얇고 은은하게).
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.separatorColor.setFill()
+        switch orientation {
+        case .vertical:
+            NSRect(x: bounds.midX - 0.5, y: 0, width: 1, height: bounds.height).fill()
+        case .horizontal:
+            NSRect(x: 0, y: bounds.midY - 0.5, width: bounds.width, height: 1).fill()
+        }
+    }
 
     private func updateCursor() {
         // 트래킹 영역 + cursor — 마우스 hover 시 적절한 drag cursor.

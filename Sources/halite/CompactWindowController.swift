@@ -54,8 +54,11 @@ final class CompactWindowController: NSWindowController, NSWindowDelegate, TabSw
     private var swipeNeighborLayer: CALayer?   // neighbor shown as a snapshot (no hit-test)
     private var swipeNeighborIndex = -1
     private var swipeFromRight = false   // neighbor (next tab) enters from the right
-    private var settleTimer: Timer?
     private var settleDx: CGFloat = 0
+    private var settleStep: ((CFTimeInterval) -> Bool)?   // returns true when settled
+    private var settleDisplayLink: AnyObject?             // CADisplayLink (macOS 14+, ProMotion)
+    private var settleTimer: Timer?                       // macOS 13 fallback
+    private var settleLastTs: CFTimeInterval = 0
 
     var hasTabs: Bool { !tabs.isEmpty }
 
@@ -414,6 +417,11 @@ final class CompactWindowController: NSWindowController, NSWindowDelegate, TabSw
         CATransaction.commit()
     }
 
+    /// Re-apply the active-pane indicator setting to every tab's pane tree.
+    func refreshPaneIndicators() {
+        for tab in tabs { tab.tree.refreshIndicators() }
+    }
+
     // MARK: - Interactive 2-finger swipe (TabSwipeHandler)
 
     /// Live finger-tracking. The current tab stays a live view (it remains the sole
@@ -497,32 +505,57 @@ final class CompactWindowController: NSWindowController, NSWindowDelegate, TabSw
         }
     }
 
-    /// hiterm-style settle: each frame move 15% of the remaining distance toward
-    /// `targetDx`, so it eases out — fast at first, slowing as it nears the target,
-    /// then snaps crisply once within 1pt. Drives both the current tree layer and
-    /// the neighbor snapshot from the single shared offset (`dx`).
+    /// hiterm-style settle: each frame move toward `targetDx` by a fraction of the
+    /// remaining distance, so it eases out — fast at first, slowing as it nears the
+    /// target, then snaps crisply within 1pt. Driven by a `CADisplayLink` so it runs
+    /// at the display's refresh rate (120Hz on ProMotion); the per-frame fraction is
+    /// derived from the actual frame interval (`dt`) so the settle takes the same
+    /// wall-clock time at 60 or 120Hz (matching hiterm's 0.15-at-60fps feel).
+    /// macOS 13 falls back to a 60Hz timer.
     private func startSwipeSettle(from dx: CGFloat, to targetDx: CGFloat,
                                   neighborStart: CGFloat, done: @escaping () -> Void) {
-        settleTimer?.invalidate()
+        stopSettle()
         settleDx = dx
-        let apply: () -> Void = { [weak self] in
-            guard let self else { return }
+        settleStep = { [weak self] dt in
+            guard let self else { return true }
+            let dist = targetDx - self.settleDx
+            let settled = abs(dist) < 1.0
+            // 0.15 per 1/60s → frame-rate-independent fraction = 1 − 0.85^(dt·60).
+            self.settleDx = settled ? targetDx : self.settleDx + dist * (1 - pow(0.85, dt * 60))
             self.setSwipeTranslation(self.tabs[self.currentIndex].tree.layer, self.settleDx)
             self.setSwipeTranslation(self.swipeNeighborLayer, neighborStart + self.settleDx)
+            if settled { done() }
+            return settled
         }
-        settleTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] t in
-            guard let self else { t.invalidate(); return }
-            let dist = targetDx - self.settleDx
-            if abs(dist) < 1.0 {
-                self.settleDx = targetDx
-                apply()
-                t.invalidate(); self.settleTimer = nil
-                done()
-                return
+        if #available(macOS 14.0, *) {
+            let link = contentContainer.displayLink(target: self, selector: #selector(settleTick(_:)))
+            link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
+            link.add(to: .main, forMode: .common)
+            settleLastTs = 0
+            settleDisplayLink = link
+        } else {
+            settleTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] t in
+                guard let self else { t.invalidate(); return }
+                if self.settleStep?(1.0 / 60.0) ?? true { self.stopSettle() }
             }
-            self.settleDx += dist * 0.15
-            apply()
         }
+    }
+
+    @available(macOS 14.0, *)
+    @objc private func settleTick(_ link: CADisplayLink) {
+        let now = link.timestamp
+        let dt = settleLastTs == 0 ? (1.0 / 60.0) : max(0, now - settleLastTs)
+        settleLastTs = now
+        if settleStep?(dt) ?? true { stopSettle() }
+    }
+
+    private func stopSettle() {
+        if #available(macOS 14.0, *) { (settleDisplayLink as? CADisplayLink)?.invalidate() }
+        settleDisplayLink = nil
+        settleTimer?.invalidate()
+        settleTimer = nil
+        settleStep = nil
+        settleLastTs = 0
     }
 
     private func endSwipe() {
@@ -534,8 +567,7 @@ final class CompactWindowController: NSWindowController, NSWindowDelegate, TabSw
     /// Tear down an in-flight swipe before a non-swipe path (keyboard/click switch)
     /// takes over, so nothing is left offset.
     private func abortSwipe() {
-        settleTimer?.invalidate()
-        settleTimer = nil
+        stopSettle()
         swipeNeighborLayer?.removeFromSuperlayer()
         swipeNeighborLayer = nil
         if currentIndex >= 0, currentIndex < tabs.count {

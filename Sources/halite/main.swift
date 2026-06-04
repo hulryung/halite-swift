@@ -328,6 +328,7 @@ final class HaliteAppDelegate: NSObject, NSApplicationDelegate {
         }
         for cc in compactControllers {
             for s in cc.sessions { s.updateConfig(newConfig) }
+            cc.refreshPaneIndicators()
         }
     }
 

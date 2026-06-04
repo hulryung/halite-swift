@@ -17,6 +17,7 @@ struct HaliteSettingsView: View {
     @AppStorage("halite.ligatures") private var ligatures: Bool = false
     @AppStorage("halite.showScrollbar") private var showScrollbar: Bool = false
     @AppStorage("halite.tabTransition") private var tabTransitionRaw: String = TabTransitionStyle.slide.rawValue
+    @AppStorage("halite.activePaneIndicator") private var activePaneRaw: String = ActivePaneIndicator.dimInactive.rawValue
 
     private let nerdFonts = FontDiscovery.nerdFontFamilies()
     private let regularFonts = FontDiscovery.regularMonospaceFamilies()
@@ -103,6 +104,11 @@ struct HaliteSettingsView: View {
                         Text(style.displayName).tag(style.rawValue)
                     }
                 }
+                Picker("Active Pane", selection: $activePaneRaw) {
+                    ForEach(ActivePaneIndicator.allCases, id: \.rawValue) { style in
+                        Text(style.displayName).tag(style.rawValue)
+                    }
+                }
             }
             Section("Cursor") {
                 Picker("Shape", selection: $cursorShapeRaw) {
@@ -140,6 +146,7 @@ struct HaliteSettingsView: View {
         .onChange(of: cursorShapeRaw) { _ in postChanged() }
         .onChange(of: ligatures) { _ in postChanged() }
         .onChange(of: showScrollbar) { _ in postChanged() }
+        .onChange(of: activePaneRaw) { _ in postChanged() }
         .onChange(of: themeName) { _ in postChanged() }
         .onChange(of: autoUpdate) { _ in
             // Sparkle updater에 즉시 반영 (config hot-reload 경로와 별개).
