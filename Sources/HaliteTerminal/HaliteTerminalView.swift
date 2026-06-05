@@ -164,7 +164,7 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
 
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.backgroundColor = session.config.backgroundColor.cgColor
+        layer?.backgroundColor = Self.hostBackground(session.config).cgColor
 
         let content = backend.contentView
         content.autoresizingMask = [.width, .height]
@@ -261,10 +261,16 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
         }
     }
 
+    /// host 뷰 레이어의 배경색. 배경 불투명도 < 1이면 clear(=투명)로 둬 metal 레이어의
+    /// 투명 배경이 창 뒤(데스크톱/블러)까지 비치게 한다. 1.0이면 기존처럼 테마 배경색.
+    private static func hostBackground(_ config: HaliteConfig) -> NSColor {
+        config.backgroundOpacity < 1.0 ? .clear : config.backgroundColor
+    }
+
     /// Settings 변경 → session.updateConfig → 여기로 들어와서 textView/색상/스크롤백 적용.
     private func applyConfig(_ config: HaliteConfig) {
         backend.applyConfig(config)
-        layer?.backgroundColor = config.backgroundColor.cgColor
+        layer?.backgroundColor = Self.hostBackground(config).cgColor
         lastReportedSize = nil
         // dedupe key 무력화 후 동기 re-render — grid.version 변화 없이도 새 폰트/색이
         // textStorage에 즉시 반영되도록.

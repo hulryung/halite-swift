@@ -19,6 +19,8 @@ struct HaliteSettingsView: View {
     @AppStorage("halite.tabTransition") private var tabTransitionRaw: String = TabTransitionStyle.slide.rawValue
     @AppStorage("halite.activePaneIndicator") private var activePaneRaw: String = ActivePaneIndicator.dimInactive.rawValue
     @AppStorage("halite.newTabDirectory") private var newTabDirRaw: String = NewTabDirectory.home.rawValue
+    @AppStorage("halite.backgroundOpacity") private var backgroundOpacity: Double = 1.0
+    @AppStorage("halite.backgroundBlur") private var backgroundBlur: Bool = false
 
     private let nerdFonts = FontDiscovery.nerdFontFamilies()
     private let regularFonts = FontDiscovery.regularMonospaceFamilies()
@@ -101,6 +103,18 @@ struct HaliteSettingsView: View {
                 Text("새 탭 시작 위치. split(분할)은 항상 현재 pane의 디렉토리를 상속합니다. 셸 통합(zsh OSC 7)이 자동 주입됩니다.")
                     .font(.caption)
                     .foregroundColor(.secondary)
+                HStack {
+                    Text("Background Opacity")
+                    Slider(value: $backgroundOpacity, in: 0.2...1.0)
+                    Text("\(Int((backgroundOpacity * 100).rounded()))%")
+                        .monospacedDigit()
+                        .frame(width: 40, alignment: .trailing)
+                }
+                Toggle("Background Blur (frosted glass)", isOn: $backgroundBlur)
+                    .disabled(backgroundOpacity >= 1.0)
+                Text("배경 불투명도를 낮추면 창 뒤가 비칩니다. 블러는 그 뒤를 frosted-glass로 흐립니다(불투명도 100%면 효과 없음).")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
             Section("Cursor") {
                 Picker("Shape", selection: $cursorShapeRaw) {
@@ -139,6 +153,8 @@ struct HaliteSettingsView: View {
         .onChange(of: ligatures) { _ in postChanged() }
         .onChange(of: showScrollbar) { _ in postChanged() }
         .onChange(of: activePaneRaw) { _ in postChanged() }
+        .onChange(of: backgroundOpacity) { _ in postChanged() }
+        .onChange(of: backgroundBlur) { _ in postChanged() }
         .onChange(of: themeName) { _ in postChanged() }
         .onChange(of: autoUpdate) { _ in
             // Sparkle updater에 즉시 반영 (config hot-reload 경로와 별개).
@@ -395,6 +411,10 @@ extension HaliteConfig {
         config.cursorBlink = d.bool(forKey: "halite.cursorBlink")
         config.ligatures = d.bool(forKey: "halite.ligatures")
         config.showScrollbar = d.bool(forKey: "halite.showScrollbar")
+        if let o = d.object(forKey: "halite.backgroundOpacity") as? Double {
+            config.backgroundOpacity = CGFloat(max(0.2, min(1.0, o)))
+        }
+        config.backgroundBlur = d.bool(forKey: "halite.backgroundBlur")
         config.animations = d.object(forKey: "halite.animations") as? Bool ?? true
         if let raw = d.string(forKey: "halite.cursorShape"),
            let shape = Grid.CursorShape(rawValue: raw) {

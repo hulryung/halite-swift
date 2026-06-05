@@ -49,12 +49,15 @@ final class MetalDevice {
         desc.fragmentFunction = ffn
         let attach = desc.colorAttachments[0]!
         attach.pixelFormat = Self.pixelFormat
-        // src-over: lets selection/find/cursor overlays composite with alpha.
+        // Premultiplied src-over (bg_fragment premultiplies). Identical to the old
+        // non-premultiplied src-over for opaque fills, but produces correct
+        // premultiplied output so a translucent background (window opacity < 1)
+        // composites correctly over the layer backdrop.
         attach.isBlendingEnabled = true
         attach.rgbBlendOperation = .add
         attach.alphaBlendOperation = .add
-        attach.sourceRGBBlendFactor = .sourceAlpha
-        attach.sourceAlphaBlendFactor = .sourceAlpha
+        attach.sourceRGBBlendFactor = .one
+        attach.sourceAlphaBlendFactor = .one
         attach.destinationRGBBlendFactor = .oneMinusSourceAlpha
         attach.destinationAlphaBlendFactor = .oneMinusSourceAlpha
 
@@ -77,8 +80,12 @@ final class MetalDevice {
         ga.isBlendingEnabled = true
         ga.rgbBlendOperation = .add
         ga.alphaBlendOperation = .add
+        // RGB uses sourceAlpha (glyph_fragment outputs non-premultiplied color);
+        // alpha uses .one so opaque text reaches full alpha over a translucent
+        // background (otherwise glyphs would let the backdrop bleed through). For
+        // an opaque drawable the alpha channel is ignored, so this is a no-op there.
         ga.sourceRGBBlendFactor = .sourceAlpha
-        ga.sourceAlphaBlendFactor = .sourceAlpha
+        ga.sourceAlphaBlendFactor = .one
         ga.destinationRGBBlendFactor = .oneMinusSourceAlpha
         ga.destinationAlphaBlendFactor = .oneMinusSourceAlpha
         guard let gpipeline = try? device.makeRenderPipelineState(descriptor: gdesc) else {

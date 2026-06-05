@@ -38,8 +38,12 @@ enum MetalShaders {
         return out;
     }
 
+    // Premultiplied output (paired with a .one / .oneMinusSourceAlpha blend).
+    // For opaque fills (a==1) this is identical to the old src-over path; for
+    // translucent fills (window background-opacity < 1) it composites correctly
+    // over the (also premultiplied) cleared background and the layer's backdrop.
     fragment float4 bg_fragment(BgVOut in [[stage_in]]) {
-        return in.color;
+        return float4(in.color.rgb * in.color.a, in.color.a);
     }
 
     struct GlyphInstance {

@@ -87,6 +87,7 @@ final class CompactWindowController: NSWindowController, NSWindowDelegate, TabSw
         window.delegate = self
 
         setupViews()
+        WindowChrome.applyFromDefaults(to: window)
 
         if let restore = restoring, !restore.tabs.isEmpty {
             for paneRestore in restore.tabs {

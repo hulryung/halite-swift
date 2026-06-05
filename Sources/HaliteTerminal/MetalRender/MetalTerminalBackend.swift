@@ -113,15 +113,19 @@ final class MetalTerminalBackend: TerminalRenderBackend {
 
         ensureAtlas()
         let layer = metalView.metalLayer
+        // 배경 불투명도 < 1이면 레이어를 투명으로 둬 뒤(데스크톱/블러)가 비치게 한다.
+        let opacity = max(0.2, min(1.0, config.backgroundOpacity))
+        layer.isOpaque = opacity >= 1.0
         guard layer.drawableSize.width > 0, let drawable = layer.nextDrawable() else { return }
 
-        let (bgInstances, glyphInstances, colorGlyphInstances, overlayInstances) =
+        let (rawBg, glyphInstances, colorGlyphInstances, overlayInstances) =
             buildInstances(grid: grid, state: state)
+        let bgInstances = fadeBackgrounds(rawBg, opacity: opacity)
 
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = drawable.texture
         pass.colorAttachments[0].loadAction = .clear
-        pass.colorAttachments[0].clearColor = clearColor(config.theme.background)
+        pass.colorAttachments[0].clearColor = clearColor(config.theme.background, opacity: opacity)
         pass.colorAttachments[0].storeAction = .store
 
         guard let cmd = md.queue.makeCommandBuffer(),
@@ -576,10 +580,25 @@ final class MetalTerminalBackend: TerminalRenderBackend {
 
     // MARK: - Color
 
-    private func clearColor(_ c: NSColor) -> MTLClearColor {
+    /// 배경 clear 색. `opacity` < 1이면 premultiplied 투명 배경(rgb×O, a=O)으로 만들어
+    /// 레이어가 뒤(데스크톱/블러)와 합성하게 한다. opacity=1이면 기존과 동일(불투명).
+    private func clearColor(_ c: NSColor, opacity: CGFloat = 1.0) -> MTLClearColor {
         let s = c.usingColorSpace(.sRGB) ?? c
-        return MTLClearColor(red: Double(s.redComponent), green: Double(s.greenComponent),
-                             blue: Double(s.blueComponent), alpha: Double(s.alphaComponent))
+        let o = Double(max(0, min(1, opacity)))
+        return MTLClearColor(red: Double(s.redComponent) * o, green: Double(s.greenComponent) * o,
+                             blue: Double(s.blueComponent) * o, alpha: o)
+    }
+
+    /// 배경 fill 인스턴스(배경/선택/커서)의 알파에만 불투명도를 곱한다. 텍스트·이모지·
+    /// 밑줄 overlay는 건드리지 않아 불투명하게 남는다. opacity=1이면 입력 그대로 반환.
+    private func fadeBackgrounds(_ insts: [BgInstance], opacity: CGFloat) -> [BgInstance] {
+        guard opacity < 1.0 else { return insts }
+        let o = Float(max(0, min(1, opacity)))
+        return insts.map { inst in
+            var m = inst
+            m.color.w *= o
+            return m
+        }
     }
 
     private func rgba(_ c: NSColor) -> SIMD4<Float> {

@@ -84,6 +84,7 @@ final class HaliteWindowController: NSWindowController, NSWindowDelegate {
         )
         applier.apply(TabBarStyle.current)
         self.tabStyleApplier = applier
+        WindowChrome.applyFromDefaults(to: window)
     }
 
     func applyTabBarStyle(_ style: TabBarStyle) {
@@ -325,10 +326,12 @@ final class HaliteAppDelegate: NSObject, NSApplicationDelegate {
             // split된 pane 모두 hot-reload — 하나라도 빠지면 그 pane만 옛 폰트/테마.
             for s in c.sessions { s.updateConfig(newConfig) }
             c.applyTabBarStyle(newTabStyle)
+            if let w = c.window { WindowChrome.applyFromDefaults(to: w) }
         }
         for cc in compactControllers {
             for s in cc.sessions { s.updateConfig(newConfig) }
             cc.refreshPaneIndicators()
+            if let w = cc.window { WindowChrome.applyFromDefaults(to: w) }
         }
     }
 

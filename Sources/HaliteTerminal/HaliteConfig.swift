@@ -37,6 +37,13 @@ public struct HaliteConfig {
     /// 오른쪽 가장자리에 스크롤 위치 인디케이터(thumb)를 표시할지. 기본 OFF.
     /// 스크롤백이 viewport보다 길 때만 보인다.
     public var showScrollbar: Bool
+    /// 터미널 배경 불투명도(0.2~1.0). 1.0이면 완전 불투명(기존 동작). 1 미만이면
+    /// 배경/선택/커서 fill만 그만큼 투명해지고(텍스트·이모지·밑줄은 불투명 유지),
+    /// 창 뒤가 비친다. 창 쪽 isOpaque/블러는 앱(window controller)이 같이 맞춘다.
+    public var backgroundOpacity: CGFloat
+    /// 투명 배경 뒤에 frosted-glass 블러(NSVisualEffectView)를 깔지. 기본 OFF.
+    /// backgroundOpacity가 1.0이면 보이지 않는다(배경이 불투명이라).
+    public var backgroundBlur: Bool
 
     // 색은 theme에서 파생 — 기존 호출처 호환용 computed property.
     public var backgroundColor: NSColor { theme.background }
@@ -60,6 +67,8 @@ public struct HaliteConfig {
         cursorShape: Grid.CursorShape = .block,
         ligatures: Bool = false,
         showScrollbar: Bool = false,
+        backgroundOpacity: CGFloat = 1.0,
+        backgroundBlur: Bool = false,
         argv: [String] = HaliteConfig.defaultArgv(),
         env: [String: String] = ProcessInfo.processInfo.environment,
         cwd: String? = nil
@@ -75,6 +84,8 @@ public struct HaliteConfig {
         self.cursorShape = cursorShape
         self.ligatures = ligatures
         self.showScrollbar = showScrollbar
+        self.backgroundOpacity = backgroundOpacity
+        self.backgroundBlur = backgroundBlur
         self.argv = argv
         self.env = env
         self.cwd = cwd
