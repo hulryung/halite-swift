@@ -90,6 +90,28 @@ final class VTParserTests: XCTestCase {
         XCTAssertEqual(events, [.osc(["2", "world"])])
     }
 
+    func testOSC7CwdSplit() {
+        // OSC 7 ; file://host/path — host에 일반 문자가 있어도 한 토큰으로 유지.
+        let events = parse("\u{1B}]7;file://mac/Users/dk/dev\u{07}")
+        XCTAssertEqual(events, [.osc(["7", "file://mac/Users/dk/dev"])])
+    }
+
+    func testParseFileURLPath() {
+        XCTAssertEqual(
+            HaliteSession.parseFileURLPath("file://mac/Users/dk/dev"),
+            "/Users/dk/dev")
+        // host 생략(file:///path)
+        XCTAssertEqual(
+            HaliteSession.parseFileURLPath("file:///tmp/x"),
+            "/tmp/x")
+        // 퍼센트 인코딩된 공백
+        XCTAssertEqual(
+            HaliteSession.parseFileURLPath("file://h/Users/dk/My%20Code"),
+            "/Users/dk/My Code")
+        // file:// 아님 → nil
+        XCTAssertNil(HaliteSession.parseFileURLPath("http://x/y"))
+    }
+
     func testPartialUTF8AcrossFeeds() {
         // "안" is 0xEC 0x95 0x88 — split in the middle
         let p = VTParser()

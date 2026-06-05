@@ -18,6 +18,7 @@ struct HaliteSettingsView: View {
     @AppStorage("halite.showScrollbar") private var showScrollbar: Bool = false
     @AppStorage("halite.tabTransition") private var tabTransitionRaw: String = TabTransitionStyle.slide.rawValue
     @AppStorage("halite.activePaneIndicator") private var activePaneRaw: String = ActivePaneIndicator.dimInactive.rawValue
+    @AppStorage("halite.newTabDirectory") private var newTabDirRaw: String = NewTabDirectory.home.rawValue
 
     private let nerdFonts = FontDiscovery.nerdFontFamilies()
     private let regularFonts = FontDiscovery.regularMonospaceFamilies()
@@ -109,6 +110,14 @@ struct HaliteSettingsView: View {
                         Text(style.displayName).tag(style.rawValue)
                     }
                 }
+                Picker("New Tab Directory", selection: $newTabDirRaw) {
+                    ForEach(NewTabDirectory.allCases, id: \.rawValue) { policy in
+                        Text(policy.displayName).tag(policy.rawValue)
+                    }
+                }
+                Text("새 탭 시작 위치. split(분할)은 항상 현재 pane의 디렉토리를 상속합니다. 셸 통합(zsh OSC 7)이 자동 주입됩니다.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
             Section("Cursor") {
                 Picker("Shape", selection: $cursorShapeRaw) {
@@ -268,8 +277,12 @@ extension HaliteConfig {
         }
         // 새 터미널의 시작 디렉토리는 사용자의 홈 디렉토리. 그렇지 않으면 halite를 띄운
         // working directory(예: Xcode 빌드, /tmp, 어딘가에서 cmd 실행)가 그대로 상속되어
-        // 매번 cd를 쳐야 함.
+        // 매번 cd를 쳐야 함. (호출처에서 "현재 디렉토리 상속" 정책 시 덮어쓸 수 있음.)
         config.cwd = NSHomeDirectory()
+        // 셸이 OSC 7로 cwd를 보고하도록 셸 통합 주입(zsh만). split/새 탭 cwd 상속의 소스.
+        config.env.merge(
+            ShellIntegration.envOverrides(forShellPath: config.argv.first)
+        ) { _, new in new }
         return config
     }
 }

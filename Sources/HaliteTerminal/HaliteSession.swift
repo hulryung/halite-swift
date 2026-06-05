@@ -34,6 +34,11 @@ public final class HaliteSession: ObservableObject {
 
     // 호스트가 구독하는 콜백. weak 캡처 권장.
     public var onTitleChanged: ((String) -> Void)?
+    /// 셸이 OSC 7로 보고한 현재 작업 디렉토리. 셸 통합(OSC 7 emit)이 켜져 있을 때만
+    /// 갱신된다. split/새 탭이 "현재 디렉토리"를 상속할 때의 소스. 보고가 없으면
+    /// spawn 당시의 `config.cwd`로 남는다.
+    public private(set) var currentDirectory: String?
+    public var onCwdChanged: ((String) -> Void)?
     public var onBell: (() -> Void)?
     public var onExit: ((Int32) -> Void)?
     public var onURLClick: ((URL) -> Void)?
@@ -45,6 +50,7 @@ public final class HaliteSession: ObservableObject {
 
     public init(config: HaliteConfig) {
         self.config = config
+        self.currentDirectory = config.cwd
         self.grid = Grid(
             cols: 80,
             rows: 24,
@@ -157,6 +163,14 @@ public final class HaliteSession: ObservableObject {
             // OSC 11 ; ? — query default bg
             guard oscParams.count >= 2, oscParams[1] == "?" else { return }
             respondToOSCColorQuery(kind: "11", index: nil, color: config.backgroundColor)
+        case "7":
+            // OSC 7 ; file://host/path ST — 셸이 보고하는 현재 작업 디렉토리.
+            guard oscParams.count >= 2,
+                  let path = Self.parseFileURLPath(oscParams[1]) else { return }
+            if path != currentDirectory {
+                currentDirectory = path
+                onCwdChanged?(path)
+            }
         case "8":
             // OSC 8 ; params ; URI ST
             //   start: params 보통 "id=xxx" 또는 빈 문자열, URI 비어있지 않음
@@ -166,6 +180,16 @@ public final class HaliteSession: ObservableObject {
         default:
             break
         }
+    }
+
+    /// OSC 7 의 `file://host/path` 에서 path 부분만 추출(퍼센트 디코드). host는 무시.
+    static func parseFileURLPath(_ uri: String) -> String? {
+        guard uri.hasPrefix("file://") else { return nil }
+        let afterScheme = uri.dropFirst("file://".count)
+        // host 다음의 첫 '/'부터가 경로. host가 비어 있으면(`file:///path`) 바로 '/'.
+        guard let slash = afterScheme.firstIndex(of: "/") else { return nil }
+        let path = String(afterScheme[slash...])
+        return path.removingPercentEncoding ?? path
     }
 
     private func respondToOSCColorQuery(kind: String, index: Int?, color: NSColor) {

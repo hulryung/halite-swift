@@ -172,7 +172,13 @@ final class CompactWindowController: NSWindowController, NSWindowDelegate, TabSw
 
     @discardableResult
     func addNewTab() -> HaliteSession {
-        let session = HaliteSession(config: HaliteConfig.fromUserDefaults())
+        var config = HaliteConfig.fromUserDefaults()
+        // "현재 디렉토리 상속" 정책이면 현재 활성 pane의 cwd에서 시작(없으면 홈 유지).
+        if NewTabDirectory.current == .inheritCwd,
+           let cwd = activeSession?.currentDirectory {
+            config.cwd = cwd
+        }
+        let session = HaliteSession(config: config)
         addTab(tree: PaneTreeView(rootSession: session), transition: .create)
         return session
     }

@@ -81,8 +81,12 @@ final class PaneTreeView: NSView {
     // MARK: - Public actions
 
     func split(direction: SplitDirection) {
-        guard case .leaf = activeLeaf.kind else { return }
-        let newSession = HaliteSession(config: HaliteConfig.fromUserDefaults())
+        guard case .leaf(let activeSession, _) = activeLeaf.kind else { return }
+        // split은 항상 현재 pane의 작업 디렉토리를 상속(셸 통합 OSC 7 보고 → 없으면
+        // spawn 당시 cwd). 같은 프로젝트 안에서 옆에 pane을 여는 게 일반적이라.
+        var config = HaliteConfig.fromUserDefaults()
+        if let cwd = activeSession.currentDirectory { config.cwd = cwd }
+        let newSession = HaliteSession(config: config)
         let newLeaf = PaneNode.leaf(newSession)
         let oldKind = activeLeaf.kind
         // activeLeaf의 kind를 split으로 교체. activeLeaf 인스턴스는 그대로 (parent 링크 보존).
