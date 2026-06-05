@@ -29,6 +29,9 @@ public struct CellAttrs: Equatable {
     public var fg: TermColor
     public var bg: TermColor?
     public var bold: Bool
+    /// SGR 2 (faint/dim). fg를 배경 쪽으로 절반 정도 흐리게 그린다 — 셸 autosuggestion,
+    /// Claude Code의 회색 제안 텍스트 등이 이걸 쓴다.
+    public var faint: Bool
     public var italic: Bool
     public var underline: Bool
     public var strikethrough: Bool
@@ -38,6 +41,7 @@ public struct CellAttrs: Equatable {
         fg: TermColor = .default,
         bg: TermColor? = nil,
         bold: Bool = false,
+        faint: Bool = false,
         italic: Bool = false,
         underline: Bool = false,
         strikethrough: Bool = false,
@@ -46,21 +50,38 @@ public struct CellAttrs: Equatable {
         self.fg = fg
         self.bg = bg
         self.bold = bold
+        self.faint = faint
         self.italic = italic
         self.underline = underline
         self.strikethrough = strikethrough
         self.inverse = inverse
     }
 
-    /// 현재 테마로 fg/bg를 실제 NSColor로 resolve (inverse 반영).
+    /// 현재 테마로 fg/bg를 실제 NSColor로 resolve (inverse + faint 반영).
     /// bg가 nil이면 투명(window background 비침).
     public func resolvedColors(theme: HaliteTheme) -> (fg: NSColor, bg: NSColor?) {
-        let f = theme.nsColor(fg)
+        var f = theme.nsColor(fg)
         let b: NSColor? = bg.map { theme.nsColor($0) }
+        // faint(SGR 2): fg를 배경 쪽으로 흐리게. inverse면 보이는 글자색이 swap 전
+        // f이므로 swap 전에 적용한다.
+        if faint {
+            f = Self.dim(f, toward: b ?? theme.background, fraction: 0.5)
+        }
         if inverse {
             return (b ?? theme.background, f)
         }
         return (f, b)
+    }
+
+    /// sRGB 공간에서 `c`를 `toward`로 `fraction`만큼 보간(0=원색, 1=완전히 toward).
+    private static func dim(_ c: NSColor, toward: NSColor, fraction t: CGFloat) -> NSColor {
+        let a = c.usingColorSpace(.sRGB) ?? c
+        let d = toward.usingColorSpace(.sRGB) ?? toward
+        func mix(_ x: CGFloat, _ y: CGFloat) -> CGFloat { x + (y - x) * t }
+        return NSColor(srgbRed: mix(a.redComponent, d.redComponent),
+                       green: mix(a.greenComponent, d.greenComponent),
+                       blue: mix(a.blueComponent, d.blueComponent),
+                       alpha: a.alphaComponent)
     }
 }
 

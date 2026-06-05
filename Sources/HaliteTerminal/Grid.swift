@@ -600,11 +600,12 @@ public final class Grid {
             case 0:
                 pen = defaultPen
             case 1:  pen.bold = true
+            case 2:  pen.faint = true
             case 3:  pen.italic = true
             case 4:  pen.underline = true
             case 7:  pen.inverse = true
             case 9:  pen.strikethrough = true
-            case 22: pen.bold = false
+            case 22: pen.bold = false; pen.faint = false   // SGR 22 = neither bold nor faint
             case 23: pen.italic = false
             case 24: pen.underline = false
             case 27: pen.inverse = false
