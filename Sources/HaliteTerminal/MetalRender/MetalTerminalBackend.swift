@@ -51,17 +51,28 @@ final class MetalTerminalBackend: TerminalRenderBackend {
     private struct GlyphAnimEntry {
         var appearing: Bool
         var start: CFTimeInterval
+        var duration: CFTimeInterval
+        var style: GlyphAnimStyle
         var cell: Cell          // disappear: the glyph to fade out (gone from the grid)
     }
     private struct CellPos: Hashable { var row: Int; var col: Int }   // unified-row coords
-    private static let glyphAnimDuration: CFTimeInterval = 0.13
     private var glyphAnims: [CellPos: GlyphAnimEntry] = [:]
     /// Snapshot of the cursor row's cells at the last diffed grid version, used to
     /// detect single-cell typing / deleting near the cursor.
     private var prevCursorRow: [Cell] = []
     private var prevCursorRowIndex: Int = -1
     private var lastGlyphDiffVersion: UInt64 = .max
+    /// reveal 페이싱 시계. 글자 애니메이션 시작 시각을 일정 간격으로 흘려보내 버스트
+    /// 입력을 매끄러운 흐름으로 만든다. 입력이 멈추면 now보다 뒤처져 즉시 재생으로 복귀.
+    private var glyphRevealClock: CFTimeInterval = 0
+    private static let glyphRevealPace: CFTimeInterval = 0.022   // 글자 간 reveal 간격
+    private static let glyphRevealMaxLead: CFTimeInterval = 0.07 // 커서 뒤 최대 지연(상한)
     private lazy var glyphAnimLink = AnimationLink(view: metalView)
+    /// 애니메이션 렌더를 ~60fps로 상한(주사율 무관). 120Hz면 격 프레임, 60Hz면 매
+    /// 프레임 → 둘 다 60fps. 매 프레임 풀 렌더가 메인 스레드를 점유해 PTY 입력을
+    /// starve하는 것을 막는다.
+    private var lastGlyphRenderTime: CFTimeInterval = 0
+    private static let glyphRenderMinInterval: CFTimeInterval = 0.013
     /// Ligature shaper, rebuilt alongside the atlas (same font). Used only when
     /// `config.ligatures` is on.
     private var lineShaper: LineShaper?
@@ -144,31 +155,60 @@ final class MetalTerminalBackend: TerminalRenderBackend {
         // 직전과 같은 커서 행일 때만 비교(행이 바뀌면 타이핑이 아님).
         guard prevCursorRowIndex == urow, prevCursorRow.count == cur.count else { return }
 
-        var appears: [Int] = []
-        var disappears: [(Int, Cell)] = []
+        var appears: [Int] = []                 // 글리프가 새로 생긴 열
+        var disappears: [Int: Cell] = [:]       // 글리프가 사라진 열 → 옛 셀
         for c in 0..<cur.count {
             let beforeBlank = prevCursorRow[c].char == " "
             let afterBlank = cur[c].char == " "
             if !afterBlank, beforeBlank || prevCursorRow[c].char != cur[c].char {
                 appears.append(c)
             } else if afterBlank, !beforeBlank {
-                disappears.append((c, prevCursorRow[c]))
+                disappears[c] = prevCursorRow[c]
             }
         }
-        let total = appears.count + disappears.count
-        guard total > 0, total <= 4 else { return }   // 대량 변화는 무시
+        guard !appears.isEmpty || !disappears.isEmpty else { return }
 
+        // 키를 누르고 있으면 에코가 묶여 한 프레임에 여러 글자가 한꺼번에 들어온다.
+        // 커서에 인접한 연속(run)이면 최대 16자까지 애니메이션하되, 시작 시각을 reveal
+        // 시계로 일정 간격(pace) 흘려보내 버스트를 매끄러운 흐름으로 만든다. 입력이
+        // 멈추면 시계가 now보다 뒤처져 즉시 재생으로 복귀한다(단발 입력은 지연 0).
+        let cap = 16
+        let cursorCol = grid.cursorCol
         let now = CACurrentMediaTime()
-        if appear != .none {
-            for c in appears {
-                glyphAnims[CellPos(row: urow, col: c)] =
-                    GlyphAnimEntry(appearing: true, start: now, cell: cur[c])
+
+        // 타이핑: 커서 왼쪽으로 cursorCol-1에서 끝나는 연속 run (커서 우측 변화 =
+        // autosuggestion 등은 무시).
+        let typed = appears.filter { $0 < cursorCol }.sorted()
+        let typingRun = !typed.isEmpty && typed.last! == cursorCol - 1
+            && (typed.last! - typed.first!) == typed.count - 1 && typed.count <= cap
+        // 백스페이스: 커서에서 시작하는 연속 run.
+        let cleared = disappears.keys.filter { $0 >= cursorCol }.sorted()
+        let backRun = !cleared.isEmpty && cleared.first! == cursorCol
+            && (cleared.last! - cleared.first!) == cleared.count - 1 && cleared.count <= cap
+
+        // 지연이 상한을 넘으면 배치 시작에서만 시계를 now로 리셋(catch-up)해 지연을
+        // 묶는다. 배치 안에서는 항상 pace 간격으로 진행시켜 글자들이 한꺼번에 뭉치지
+        // 않게 한다. (예전엔 글자마다 now+상한으로 clamp해서 상한에 닿은 배치가 통째로
+        // 풀려 ~4자씩 멈칫거렸다.)
+        if glyphRevealClock > now + Self.glyphRevealMaxLead { glyphRevealClock = now }
+        func nextRevealStart() -> CFTimeInterval {
+            let start = max(now, glyphRevealClock)
+            glyphRevealClock = start + Self.glyphRevealPace
+            return start
+        }
+
+        if appear != .none, typingRun {
+            let dur = appear.duration(appearing: true)
+            for c in typed {                    // 왼쪽(오래된 글자)부터 차례로
+                glyphAnims[CellPos(row: urow, col: c)] = GlyphAnimEntry(
+                    appearing: true, start: nextRevealStart(), duration: dur, style: appear, cell: cur[c])
             }
         }
-        if disappear != .none {
-            for (c, old) in disappears {
-                glyphAnims[CellPos(row: urow, col: c)] =
-                    GlyphAnimEntry(appearing: false, start: now, cell: old)
+        if disappear != .none, backRun {
+            let dur = disappear.duration(appearing: false)
+            for c in cleared.reversed() {       // 오른쪽(먼저 지워진 글자)부터 차례로
+                glyphAnims[CellPos(row: urow, col: c)] = GlyphAnimEntry(
+                    appearing: false, start: nextRevealStart(), duration: dur, style: disappear, cell: disappears[c]!)
             }
         }
         if !glyphAnims.isEmpty { startGlyphAnimLink() }
@@ -177,7 +217,7 @@ final class MetalTerminalBackend: TerminalRenderBackend {
     private func pruneGlyphAnims() {
         guard !glyphAnims.isEmpty else { return }
         let now = CACurrentMediaTime()
-        glyphAnims = glyphAnims.filter { now - $0.value.start < Self.glyphAnimDuration }
+        glyphAnims = glyphAnims.filter { now - $0.value.start < $0.value.duration }
     }
 
     private func startGlyphAnimLink() {
@@ -185,7 +225,15 @@ final class MetalTerminalBackend: TerminalRenderBackend {
             guard let self else { return true }
             self.pruneGlyphAnims()
             if self.glyphAnims.isEmpty { return true }
-            self.redrawLast()
+            // 매 프레임 풀 렌더는 메인 스레드를 점유해 PTY 입력을 starve한다(입력이
+            // 6~9자씩 버스트로 풀림). 시간 기반 ~60fps 상한으로 입력에 메인 스레드를
+            // 양보하면 키 반복 자연 속도로 한 글자씩 매끄럽게 흐른다. (주사율 무관 —
+            // 120Hz는 격 프레임, 60Hz는 매 프레임.)
+            let t = CACurrentMediaTime()
+            if t - self.lastGlyphRenderTime >= Self.glyphRenderMinInterval {
+                self.lastGlyphRenderTime = t
+                self.redrawLast()
+            }
             return self.glyphAnims.isEmpty
         }
         if !ok { glyphAnims.removeAll() }   // macOS < 14: no link → instant (no anim)
@@ -194,7 +242,7 @@ final class MetalTerminalBackend: TerminalRenderBackend {
     /// (row,col) 셀의 생성 애니메이션 진행도(0~1). 없으면 nil.
     private func appearProgress(row: Int, col: Int) -> Float? {
         guard let a = glyphAnims[CellPos(row: row, col: col)], a.appearing else { return nil }
-        let p = Float((CACurrentMediaTime() - a.start) / Self.glyphAnimDuration)
+        let p = Float((CACurrentMediaTime() - a.start) / a.duration)
         return max(0, min(1, p))
     }
 
@@ -396,7 +444,14 @@ final class MetalTerminalBackend: TerminalRenderBackend {
 
                 if let color = bgColor(cell: cell, col: col, sel: sel, finds: finds,
                                        activeFind: activeFind, isCursor: isCursor) {
-                    bg.append(BgInstance(origin: origin, size: size, color: rgba(color)))
+                    let bgi = BgInstance(origin: origin, size: size, color: rgba(color))
+                    bg.append(bgi)
+                    // 빈 셀 위의 블록 커서는 overlay 패스(glyph 위)에도 한 번 더 그린다.
+                    // 그래야 백스페이스로 사라지는 ghost 글리프가 커서를 가리지 않고,
+                    // 셀 밖으로 미끄러지거나 퍼지는 부분만 커서 옆으로 보인다.
+                    if isCursor, blockCursorOn, cell.char == " ", config.glyphDisappear != .none {
+                        overlay.append(bgi)
+                    }
                 }
                 let fg = fgColor(cell: cell, col: col, sel: sel, finds: finds,
                                  activeFind: activeFind, hover: hover, isCursor: isCursor)
@@ -473,11 +528,11 @@ final class MetalTerminalBackend: TerminalRenderBackend {
                                           glyphs: inout [GlyphInstance],
                                           colorGlyphs: inout [GlyphInstance]) {
         let now = CACurrentMediaTime()
-        let style = config.glyphDisappear
         for (pos, a) in glyphAnims where !a.appearing {
             guard pos.row >= first, pos.row <= last, a.cell.char != " " else { continue }
-            let p = Float((now - a.start) / Self.glyphAnimDuration)
+            let p = Float((now - a.start) / a.duration)
             guard p < 1 else { continue }
+            let style = a.style
             let wide = Cell.isWide(a.cell.char)
             let x0 = snap(inset.width + CGFloat(pos.col) * metrics.width)
             let x1 = snap(inset.width + CGFloat(pos.col + (wide ? 2 : 1)) * metrics.width)

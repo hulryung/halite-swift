@@ -47,13 +47,19 @@ enum MetalShaders {
     }
 
     struct GlyphInstance {
-        float2 origin; float2 size; float2 uvOrigin; float2 uvSize; float4 color;
+        float2 origin; float2 size; float2 uvOrigin; float2 uvSize; float4 color; float4 fx;
     };
     struct GlyphVOut {
         float4 position [[position]];
         float2 uv;
         float4 color;
+        float4 fx;
     };
+
+    static inline float hash21(float2 p) {
+        float q = sin(dot(p, float2(127.1, 311.7))) * 43758.5453;
+        return fract(q);
+    }
 
     vertex GlyphVOut glyph_vertex(uint vid [[vertex_id]],
                                   uint iid [[instance_id]],
@@ -69,6 +75,7 @@ enum MetalShaders {
         out.position = float4(ndc, 0.0, 1.0);
         out.uv = inst.uvOrigin + corner * inst.uvSize;
         out.color = inst.color;
+        out.fx = inst.fx;
         return out;
     }
 
@@ -76,7 +83,14 @@ enum MetalShaders {
                                    texture2d<float> atlas [[texture(0)]],
                                    sampler samp [[sampler(0)]]) {
         float coverage = atlas.sample(samp, in.uv).r;
-        return float4(in.color.rgb, in.color.a * coverage);
+        float a = in.color.a * coverage;
+        // Dissolve: per-pixel noise vanishes as the dissolve amount rises.
+        float diss = in.fx.x;
+        if (diss > 0.0) {
+            float n = hash21(floor(in.position.xy));
+            a *= smoothstep(diss, diss + 0.18, n);
+        }
+        return float4(in.color.rgb, a);
     }
 
     // Color emoji: sample the premultiplied BGRA color page as-is, ignoring fg.

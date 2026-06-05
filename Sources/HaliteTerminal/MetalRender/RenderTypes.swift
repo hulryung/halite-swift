@@ -25,6 +25,9 @@ struct GlyphInstance {
     var uvOrigin: SIMD2<Float>
     var uvSize: SIMD2<Float>
     var color: SIMD4<Float>
+    /// Per-glyph effect. x = dissolve amount (0 = solid, 1 = fully dissolved),
+    /// yzw reserved. Default zero → no effect (the common case).
+    var fx: SIMD4<Float> = .zero
 }
 
 /// Post-processing parameters. Field order/alignment must match `PostFXParams`
