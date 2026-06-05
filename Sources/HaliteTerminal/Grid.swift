@@ -711,7 +711,7 @@ public final class Grid {
         }
         cells = Self.resizeCellsArray(
             cells, fromCols: cols, fromRows: rows,
-            toCols: newCols, toRows: newRows, pen: pen
+            toCols: newCols, toRows: newRows, rowOffset: rowOffset, pen: pen
         )
         cursorRow = max(0, min(newRows - 1, cursorRow - rowOffset))
         cursorCol = max(0, min(newCols - 1, cursorCol))
@@ -732,7 +732,7 @@ public final class Grid {
             }
             saved.cells = Self.resizeCellsArray(
                 saved.cells, fromCols: savedCols, fromRows: savedRows,
-                toCols: newCols, toRows: newRows, pen: saved.pen
+                toCols: newCols, toRows: newRows, rowOffset: savedRowOffset, pen: saved.pen
             )
             saved.cursorRow = max(0, min(newRows - 1, saved.cursorRow - savedRowOffset))
             saved.cursorCol = max(0, min(newCols - 1, saved.cursorCol))
@@ -870,9 +870,14 @@ public final class Grid {
         _ source: [Line],
         fromCols: Int, fromRows: Int,
         toCols: Int, toRows: Int,
+        rowOffset: Int,
         pen: CellAttrs
     ) -> [Line] {
-        let rowOffset = toRows < fromRows ? fromRows - toRows : 0
+        // `rowOffset` = how many top rows the caller already removed (pushed to
+        // scrollback or intentionally dropped). It MUST match the caller's intent,
+        // not be recomputed here: on a shrink where the cursor still fits, the
+        // caller keeps the TOP rows (rowOffset 0, bottom trimmed); recomputing
+        // `fromRows-toRows` here would drop the top rows instead — losing content.
         let blank = Cell.empty(attrs: pen)
         var newCells: [Line] = []
         newCells.reserveCapacity(toRows)
