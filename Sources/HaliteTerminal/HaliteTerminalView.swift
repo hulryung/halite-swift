@@ -1215,17 +1215,13 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
         // zoom도 cascade 포함된 폰트 사용 — Menlo 등에서도 Nerd glyph fallback 유지.
         let font = fontWithNerdFallback(family: session.config.fontFamily, size: newSize)
         backend.setRenderFont(font)
-        // zoom은 **순수 시각 변경**으로 취급. session.grid 차원은 그대로 두고
-        // cellMetrics만 새 폰트 기준으로 갱신 — SIGWINCH 안 발사 → 셸이 prompt를
-        // 재출력하지 않음 (이전엔 매 Cmd+= 마다 새 prompt 라인이 추가돼서
-        // "Enter 친 것처럼" 보였음). 극단적 확대 시 오른쪽 일부 클립될 수 있지만
-        // 일반 사용 범위에선 OK. 실제 grid resize는 사용자가 윈도우 사이즈 바꿀 때.
-        let glyphSize = ("M" as NSString).size(withAttributes: [.font: font])
-        let newCellW = max(glyphSize.width, 1)
-        let newCellH = max(measuredLineHeight(font: font), 1)
-        cellMetrics = CellMetrics(width: newCellW, height: newCellH)
-        // dedupe 무력화 후 새 cellMetrics로 textStorage 재구성.
+        // 폰트 크기가 바뀌면 새 cell 크기에 맞춰 cols/rows를 다시 계산하고 grid+PTY를
+        // 리사이즈(SIGWINCH)해 셸/TUI가 새 너비/높이로 reflow하게 한다. 윈도우 리사이즈와
+        // 동일 경로 — reportSizeIfChanged가 backend.renderFont에서 메트릭을 파생하므로
+        // 폰트만 바꿔두면 cols/rows가 정확히 다시 잡힌다.
         lastRenderedVersion = .max
+        reportSizeIfChanged()
+        // cols/rows가 안 바뀌는 작은 zoom 단계에서도 새 폰트로 즉시 다시 그린다.
         renderNow()
         followingBottom = true
         scrollViewportToBottom()
