@@ -26,3 +26,13 @@ struct GlyphInstance {
     var uvSize: SIMD2<Float>
     var color: SIMD4<Float>
 }
+
+/// Post-processing parameters. Field order/alignment must match `PostFXParams`
+/// in `MetalShaders.source` (float2 padded to 16 before the float4s).
+struct PostFXParams {
+    var screenSize: SIMD2<Float>
+    /// x=scanline, y=glow, z=vignette, w=glowRadiusPx
+    var coeffs: SIMD4<Float>
+    /// rgb phosphor tint (a unused)
+    var tint: SIMD4<Float>
+}

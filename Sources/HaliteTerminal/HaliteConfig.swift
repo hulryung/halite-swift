@@ -44,6 +44,10 @@ public struct HaliteConfig {
     /// 투명 배경 뒤에 frosted-glass 블러(NSVisualEffectView)를 깔지. 기본 OFF.
     /// backgroundOpacity가 1.0이면 보이지 않는다(배경이 불투명이라).
     public var backgroundBlur: Bool
+    /// 화면 전체 post-processing 효과(CRT 등). 기본 none(=비용 0). [[ScreenEffect]].
+    public var screenEffect: ScreenEffect
+    /// 화면 효과 강도(0~1). 1이면 효과 기본값 그대로, 낮추면 약하게.
+    public var screenEffectIntensity: CGFloat
 
     // 색은 theme에서 파생 — 기존 호출처 호환용 computed property.
     public var backgroundColor: NSColor { theme.background }
@@ -69,6 +73,8 @@ public struct HaliteConfig {
         showScrollbar: Bool = false,
         backgroundOpacity: CGFloat = 1.0,
         backgroundBlur: Bool = false,
+        screenEffect: ScreenEffect = .none,
+        screenEffectIntensity: CGFloat = 1.0,
         argv: [String] = HaliteConfig.defaultArgv(),
         env: [String: String] = ProcessInfo.processInfo.environment,
         cwd: String? = nil
@@ -86,6 +92,8 @@ public struct HaliteConfig {
         self.showScrollbar = showScrollbar
         self.backgroundOpacity = backgroundOpacity
         self.backgroundBlur = backgroundBlur
+        self.screenEffect = screenEffect
+        self.screenEffectIntensity = screenEffectIntensity
         self.argv = argv
         self.env = env
         self.cwd = cwd

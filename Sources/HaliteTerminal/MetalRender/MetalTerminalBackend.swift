@@ -42,6 +42,9 @@ final class MetalTerminalBackend: TerminalRenderBackend {
     /// Glyph atlas, rebuilt when font / cell size / backing scale changes.
     private var atlas: GlyphAtlas?
     private var atlasSignature = ""
+    /// Offscreen scene render target, used only when a screen effect is active.
+    /// Recreated when the drawable size changes.
+    private var sceneTexture: MTLTexture?
     /// Ligature shaper, rebuilt alongside the atlas (same font). Used only when
     /// `config.ligatures` is on.
     private var lineShaper: LineShaper?
@@ -122,8 +125,15 @@ final class MetalTerminalBackend: TerminalRenderBackend {
             buildInstances(grid: grid, state: state)
         let bgInstances = fadeBackgrounds(rawBg, opacity: opacity)
 
+        // 화면 효과(CRT 등)가 켜져 있으면 터미널을 오프스크린 sceneTexture에 그린 뒤
+        // 전체화면 post-fx 패스로 drawable에 합성한다. 꺼져 있으면 drawable에 직접.
+        let effect = config.screenEffect
+        let sceneTarget: MTLTexture = effect.isActive
+            ? ensureSceneTexture(matching: drawable.texture)
+            : drawable.texture
+
         let pass = MTLRenderPassDescriptor()
-        pass.colorAttachments[0].texture = drawable.texture
+        pass.colorAttachments[0].texture = sceneTarget
         pass.colorAttachments[0].loadAction = .clear
         pass.colorAttachments[0].clearColor = clearColor(config.theme.background, opacity: opacity)
         pass.colorAttachments[0].storeAction = .store
@@ -187,6 +197,24 @@ final class MetalTerminalBackend: TerminalRenderBackend {
         }
 
         enc.endEncoding()
+
+        // Post-fx pass: sample the offscreen scene, apply the screen effect, write
+        // the drawable. (Skipped entirely when the effect is off — sceneTarget is
+        // the drawable itself and nothing above changed.)
+        if effect.isActive,
+           let sceneTex = sceneTexture,
+           var params = effect.postFXParams(
+               screenSize: SIMD2<Float>(Float(drawable.texture.width), Float(drawable.texture.height)),
+               intensity: Float(config.screenEffectIntensity)),
+           let fxEnc = cmd.makeRenderCommandEncoder(descriptor: postfxPass(drawable.texture)) {
+            fxEnc.setRenderPipelineState(md.postfxPipeline)
+            fxEnc.setFragmentTexture(sceneTex, index: 0)
+            fxEnc.setFragmentSamplerState(md.glyphSampler, index: 0)
+            fxEnc.setFragmentBytes(&params, length: MemoryLayout<PostFXParams>.stride, index: 0)
+            fxEnc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+            fxEnc.endEncoding()
+        }
+
         // During live resize the layer presents with the layout transaction, so the
         // frame must be presented synchronously (after scheduling) — otherwise the
         // old drawable gets stretched to the new bounds before this frame lands
@@ -579,6 +607,31 @@ final class MetalTerminalBackend: TerminalRenderBackend {
     func reflectScroll() {}     // No NSScroller to sync.
 
     // MARK: - Color
+
+    /// 화면 효과용 오프스크린 씬 텍스처를 drawable 크기에 맞춰 보장(없거나 크기가
+    /// 다르면 재생성). drawable과 같은 픽셀 포맷 + render target/shader read.
+    private func ensureSceneTexture(matching target: MTLTexture) -> MTLTexture {
+        if let t = sceneTexture, t.width == target.width, t.height == target.height {
+            return t
+        }
+        let td = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: MetalDevice.pixelFormat,
+            width: max(1, target.width), height: max(1, target.height), mipmapped: false)
+        td.usage = [.renderTarget, .shaderRead]
+        td.storageMode = .private
+        let tex = md.device.makeTexture(descriptor: td)!
+        sceneTexture = tex
+        return tex
+    }
+
+    /// post-fx 패스 디스크립터. fullscreen 삼각형이 모든 픽셀을 덮어쓰므로 load는 dontCare.
+    private func postfxPass(_ drawable: MTLTexture) -> MTLRenderPassDescriptor {
+        let p = MTLRenderPassDescriptor()
+        p.colorAttachments[0].texture = drawable
+        p.colorAttachments[0].loadAction = .dontCare
+        p.colorAttachments[0].storeAction = .store
+        return p
+    }
 
     /// 배경 clear 색. `opacity` < 1이면 premultiplied 투명 배경(rgb×O, a=O)으로 만들어
     /// 레이어가 뒤(데스크톱/블러)와 합성하게 한다. opacity=1이면 기존과 동일(불투명).

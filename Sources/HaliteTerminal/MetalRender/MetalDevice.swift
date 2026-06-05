@@ -17,8 +17,11 @@ final class MetalDevice {
     /// color-emoji pipeline: samples the premultiplied BGRA color page, premult
     /// (.one) blend. Same vertex/instance layout as `glyphPipeline`.
     let colorGlyphPipeline: MTLRenderPipelineState
-    /// Linear-clamp sampler for the glyph atlas.
+    /// Linear-clamp sampler for the glyph atlas (also reused for post-fx).
     let glyphSampler: MTLSamplerState
+    /// Fullscreen post-processing pass (screen effects). Samples the offscreen
+    /// scene texture, writes the drawable. No blending (opaque overwrite).
+    let postfxPipeline: MTLRenderPipelineState
 
     /// Pixel format used by the CAMetalLayer and pipelines.
     static let pixelFormat: MTLPixelFormat = .bgra8Unorm
@@ -128,6 +131,22 @@ final class MetalDevice {
             return nil
         }
 
+        // Post-fx pipeline — fullscreen triangle, no blending (overwrites drawable).
+        guard let pfv = library.makeFunction(name: "postfx_vertex"),
+              let pff = library.makeFunction(name: "postfx_fragment") else {
+            NSLog("Halite: Metal post-fx shader functions missing")
+            return nil
+        }
+        let pdesc = MTLRenderPipelineDescriptor()
+        pdesc.vertexFunction = pfv
+        pdesc.fragmentFunction = pff
+        pdesc.colorAttachments[0].pixelFormat = Self.pixelFormat
+        pdesc.colorAttachments[0].isBlendingEnabled = false
+        guard let ppipeline = try? device.makeRenderPipelineState(descriptor: pdesc) else {
+            NSLog("Halite: Metal post-fx pipeline creation failed")
+            return nil
+        }
+
         self.device = device
         self.queue = queue
         self.library = library
@@ -135,5 +154,6 @@ final class MetalDevice {
         self.glyphPipeline = gpipeline
         self.colorGlyphPipeline = cpipeline
         self.glyphSampler = sampler
+        self.postfxPipeline = ppipeline
     }
 }

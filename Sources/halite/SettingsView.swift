@@ -21,6 +21,8 @@ struct HaliteSettingsView: View {
     @AppStorage("halite.newTabDirectory") private var newTabDirRaw: String = NewTabDirectory.home.rawValue
     @AppStorage("halite.backgroundOpacity") private var backgroundOpacity: Double = 1.0
     @AppStorage("halite.backgroundBlur") private var backgroundBlur: Bool = false
+    @AppStorage("halite.screenEffect") private var screenEffectRaw: String = ScreenEffect.none.rawValue
+    @AppStorage("halite.screenEffectIntensity") private var screenEffectIntensity: Double = 1.0
 
     private let nerdFonts = FontDiscovery.nerdFontFamilies()
     private let regularFonts = FontDiscovery.regularMonospaceFamilies()
@@ -116,6 +118,24 @@ struct HaliteSettingsView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
+            Section("Effects") {
+                Picker("Screen Effect", selection: $screenEffectRaw) {
+                    ForEach(ScreenEffect.allCases, id: \.rawValue) { e in
+                        Text(e.displayName).tag(e.rawValue)
+                    }
+                }
+                HStack {
+                    Text("Intensity")
+                    Slider(value: $screenEffectIntensity, in: 0.2...1.0)
+                    Text("\(Int((screenEffectIntensity * 100).rounded()))%")
+                        .monospacedDigit()
+                        .frame(width: 40, alignment: .trailing)
+                }
+                .disabled(screenEffectRaw == ScreenEffect.none.rawValue)
+                Text("화면 전체에 입히는 효과. CRT는 스캔라인·글로우·비네트를 더합니다(정적 — idle 시 추가 비용 없음).")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
             Section("Cursor") {
                 Picker("Shape", selection: $cursorShapeRaw) {
                     Text("Block").tag(Grid.CursorShape.block.rawValue)
@@ -155,6 +175,8 @@ struct HaliteSettingsView: View {
         .onChange(of: activePaneRaw) { _ in postChanged() }
         .onChange(of: backgroundOpacity) { _ in postChanged() }
         .onChange(of: backgroundBlur) { _ in postChanged() }
+        .onChange(of: screenEffectRaw) { _ in postChanged() }
+        .onChange(of: screenEffectIntensity) { _ in postChanged() }
         .onChange(of: themeName) { _ in postChanged() }
         .onChange(of: autoUpdate) { _ in
             // Sparkle updater에 즉시 반영 (config hot-reload 경로와 별개).
@@ -415,6 +437,13 @@ extension HaliteConfig {
             config.backgroundOpacity = CGFloat(max(0.2, min(1.0, o)))
         }
         config.backgroundBlur = d.bool(forKey: "halite.backgroundBlur")
+        if let raw = d.string(forKey: "halite.screenEffect"),
+           let e = ScreenEffect(rawValue: raw) {
+            config.screenEffect = e
+        }
+        if let i = d.object(forKey: "halite.screenEffectIntensity") as? Double {
+            config.screenEffectIntensity = CGFloat(max(0.2, min(1.0, i)))
+        }
         config.animations = d.object(forKey: "halite.animations") as? Bool ?? true
         if let raw = d.string(forKey: "halite.cursorShape"),
            let shape = Grid.CursorShape(rawValue: raw) {
