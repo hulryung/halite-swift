@@ -347,6 +347,22 @@ final class HaliteAppDelegate: NSObject, NSApplicationDelegate {
         newTabOrWindow()
     }
 
+    /// Cmd+W — 터미널 창이면 활성 pane을 닫고(마지막이면 탭→창 cascade), 그 외
+    /// 창(Settings 등)이면 창 전체를 닫는다. 메뉴 key-equiv가 NSWindow.performClose에
+    /// 직결돼 있으면 탭이 여러 개여도 창째로 닫히는 버그가 있어 여기로 중앙화한다.
+    @MainActor
+    @objc func closeTabOrWindow(_ sender: Any?) {
+        guard let win = NSApp.keyWindow else { return }
+        // Compact/단일세션 터미널 창의 windowController는 pane 단위 close(performCloseTab)를
+        // 구현한다. 구현하면 그쪽으로, 아니면 창을 닫는다.
+        let sel = #selector(CompactWindowController.performCloseTab(_:))
+        if let wc = win.windowController, wc.responds(to: sel) {
+            wc.perform(sel, with: sender)
+        } else {
+            win.performClose(sender)
+        }
+    }
+
     @MainActor
     private func newTabOrWindow() {
         if let active = activeCompact() {
@@ -439,11 +455,21 @@ func installMainMenu() {
         action: #selector(HaliteAppDelegate.newTab(_:)),
         keyEquivalent: "t"
     )
+    // Cmd+W — 탭/pane을 닫는다(창 전체가 아니라). 터미널 창이면 활성 pane을 닫고
+    // 마지막이면 탭→창 순으로 cascade. 비터미널 창(Settings 등)이면 창을 닫는다.
     fileMenu.addItem(
-        withTitle: "Close Window",
+        withTitle: "Close Tab",
+        action: #selector(HaliteAppDelegate.closeTabOrWindow(_:)),
+        keyEquivalent: "w"
+    )
+    // Cmd+Shift+W — 명시적으로 창 전체 닫기.
+    let closeWindowItem = NSMenuItem(
+        title: "Close Window",
         action: #selector(NSWindow.performClose(_:)),
         keyEquivalent: "w"
     )
+    closeWindowItem.keyEquivalentModifierMask = [.command, .shift]
+    fileMenu.addItem(closeWindowItem)
 
     // Edit menu — Copy/Paste (responder chain으로 우리 view의 copy:/paste:가 잡힘)
     let editItem = NSMenuItem()
