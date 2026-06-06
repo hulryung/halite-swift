@@ -38,7 +38,11 @@ final class GlyphAtlas {
     private var colorFull = false
 
     private enum GlyphKey: Hashable {
-        case char(Character, bold: Bool)
+        // `wide`가 키에 포함돼야 한다. 같은 글자라도 narrow(1셀)/wide(2셀) 래스터는
+        // 비트맵 크기가 달라서, 키에서 빠지면 한쪽 폭으로 캐시된 뒤 다른 폭으로 그릴 때
+        // 늘어나/찌그러져 보인다(예: "점"의 continuation이 잠깐 사라져 narrow로 캐시되면
+        // 이후 wide 렌더가 깨짐).
+        case char(Character, bold: Bool, wide: Bool)
         /// A shaped ligature glyph (by glyph id), spanning `span` cells.
         case glyph(UInt16, bold: Bool, span: Int)
     }
@@ -65,7 +69,7 @@ final class GlyphAtlas {
 
     /// Region for a glyph, rasterizing+packing on first use. nil = draw nothing.
     func region(for ch: Character, bold: Bool, wide: Bool) -> Region? {
-        let key = GlyphKey.char(ch, bold: bold)
+        let key = GlyphKey.char(ch, bold: bold, wide: wide)
         if let cached = regions[key] { return cached }   // includes cached-nil blanks
         guard let bmp = rasterizer.raster(ch, bold: bold, wide: wide) else {
             regions[key] = .some(nil)

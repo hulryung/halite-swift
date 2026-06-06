@@ -183,6 +183,13 @@ public final class Grid {
             cursorCol = 0
         }
 
+        // wide 문자의 한쪽 셀만 덮어쓰면 짝 셀이 orphan으로 남아 반쪽 글리프가 깨져
+        // 보인다(Claude Code 등 TUI가 커서를 옮겨 부분 재그리기할 때 발생). 덮어쓰기
+        // 전에 걸친 wide 문자의 짝을 공백으로 지운다. wide 문자를 쓸 땐 continuation이
+        // 차지할 다음 칸도 같이 정리.
+        eraseWidePartner(row: cursorRow, col: cursorCol)
+        if wide, cursorCol + 1 < cols { eraseWidePartner(row: cursorRow, col: cursorCol + 1) }
+
         cells[cursorRow][cursorCol] = Cell(
             char: ch, attrs: pen, hyperlink: currentHyperlink
         )
@@ -198,6 +205,20 @@ public final class Grid {
             cursorCol += advance
         }
         bumpVersion()
+    }
+
+    /// `(row,col)`을 덮어쓰기 직전에, 그 자리에 걸친 wide 문자의 짝 셀을 공백으로
+    /// 지운다. col이 continuation이면 lead(col-1)를, col이 wide lead면 continuation
+    /// (col+1)을 비운다. 이렇게 해야 wide 문자의 반쪽만 덮을 때 orphan 글리프가 안 남는다.
+    private func eraseWidePartner(row: Int, col: Int) {
+        guard row >= 0, row < rows, col >= 0, col < cols else { return }
+        if cells[row][col].isContinuation {
+            if col - 1 >= 0 {
+                cells[row][col - 1] = Cell.empty(attrs: cells[row][col - 1].attrs)
+            }
+        } else if col + 1 < cols, cells[row][col + 1].isContinuation {
+            cells[row][col + 1] = Cell.empty(attrs: cells[row][col + 1].attrs)
+        }
     }
 
     /// Try to merge `ch` into the cell preceding the cursor (a grapheme that the
