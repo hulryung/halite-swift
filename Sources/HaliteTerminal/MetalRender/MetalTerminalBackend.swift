@@ -46,6 +46,12 @@ final class MetalTerminalBackend: TerminalRenderBackend {
     /// Recreated when the drawable size changes.
     private var sceneTexture: MTLTexture?
 
+    /// 렌더 레이트 리밋. `nextDrawable()`은 드로어블 풀(3)이 차면 다음 vsync까지 메인
+    /// 스레드를 막아 PTY 입력을 starve한다. 직전 present 시각을 기억해 주사율 간격보다
+    /// 자주 부르는 렌더는 coalesce(한 번만 예약 후 스킵)한다.
+    private var lastPresentTime: CFTimeInterval = 0
+    private var coalesceScheduled = false
+
     // MARK: glyph appear/disappear animation (cursor-area only)
 
     private struct GlyphAnimEntry {
@@ -256,15 +262,43 @@ final class MetalTerminalBackend: TerminalRenderBackend {
         // viewport now extends past the new bottom).
         scroll.maxY = max(0, contentHeight - viewportHeight)
 
+        let layer = metalView.metalLayer
+        // 리사이즈 중엔 레이아웃 트랜잭션과 함께 동기 present — 레이트 리밋 미적용.
+        let syncPresent = layer.presentsWithTransaction
+        // 렌더를 display 주사율로 cap한다. nextDrawable()은 드로어블 풀(3)이 차면 다음
+        // vsync까지 메인 스레드를 막는데(타이핑 중 ~16ms 블록 → 입력 starve), 빠른
+        // 연속 입력이 vsync보다 자주 렌더를 부르면 풀이 고갈돼 블록이 잦아진다. 직전
+        // present로부터 주사율 간격이 안 지났으면 이번 렌더는 한 번만 coalesce 예약하고
+        // 건너뛴다(단발 입력은 간격이 충분해 즉시 렌더 → 저지연 유지).
+        // display 주사율 간격(120Hz→8.3ms, 60Hz→16.7ms). 그보다 자주 부르는 렌더는 스킵.
+        let fps = max(60, metalView.window?.screen?.maximumFramesPerSecond ?? 60)
+        let minRenderInterval = 1.0 / CFTimeInterval(fps)
+        if !syncPresent {
+            let since = CACurrentMediaTime() - lastPresentTime
+            if since < minRenderInterval {
+                if !coalesceScheduled {
+                    coalesceScheduled = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + (minRenderInterval - since)) {
+                        [weak self] in
+                        guard let self else { return }
+                        self.coalesceScheduled = false
+                        self.redrawLast()
+                    }
+                }
+                return
+            }
+        }
+
         ensureAtlas()
         // 커서 근처 타이핑/지우기를 감지해 글자 생성/소멸 애니메이션을 등록(grid가
         // 바뀐 프레임에만). 이후 buildInstances가 이 진행도를 반영한다.
         diffGlyphChanges(grid: grid)
-        let layer = metalView.metalLayer
         // 배경 불투명도 < 1이면 레이어를 투명으로 둬 뒤(데스크톱/블러)가 비치게 한다.
         let opacity = max(0.2, min(1.0, config.backgroundOpacity))
         layer.isOpaque = opacity >= 1.0
-        guard layer.drawableSize.width > 0, let drawable = layer.nextDrawable() else { return }
+        guard layer.drawableSize.width > 0, let drawable = layer.nextDrawable() else {
+            return
+        }
 
         let (rawBg, glyphInstances, colorGlyphInstances, overlayInstances) =
             buildInstances(grid: grid, state: state)
@@ -365,7 +399,7 @@ final class MetalTerminalBackend: TerminalRenderBackend {
         // old drawable gets stretched to the new bounds before this frame lands
         // (visible flicker / stretched text). Outside resize, async present keeps
         // typing latency minimal.
-        if metalView.metalLayer.presentsWithTransaction {
+        if syncPresent {
             cmd.commit()
             cmd.waitUntilScheduled()
             drawable.present()
@@ -373,6 +407,7 @@ final class MetalTerminalBackend: TerminalRenderBackend {
             cmd.present(drawable)
             cmd.commit()
         }
+        lastPresentTime = CACurrentMediaTime()
     }
 
     /// Build bg fills + glyph quads + line overlays (underline/strikethrough) for
@@ -952,3 +987,4 @@ final class MetalTerminalBackend: TerminalRenderBackend {
     }
     #endif
 }
+
