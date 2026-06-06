@@ -1208,6 +1208,30 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
         setZoom(1.0)
     }
 
+    /// ⌘↑ — 현재 화면 위쪽의 가장 가까운 프롬프트(OSC 133;A 마크)로 스크롤.
+    @objc public func jumpToPreviousPrompt(_ sender: Any?) { jumpPrompt(forward: false) }
+    /// ⌘↓ — 현재 화면 아래쪽의 가장 가까운 프롬프트로 스크롤.
+    @objc public func jumpToNextPrompt(_ sender: Any?) { jumpPrompt(forward: true) }
+
+    private func jumpPrompt(forward: Bool) {
+        let grid = session.grid
+        let cellH = max(cellMetrics.height, 1)
+        let sbCount = Int(grid.scrollback.count)
+        let pushCount = Int(grid.scrollbackPushCount)
+        // 마크 절대 줄 번호 → 현재 unified row. evict된 마크(음수)는 제외.
+        let markRows = session.promptMarks
+            .map { sbCount + Int($0) - pushCount }
+            .filter { $0 >= 0 }
+            .sorted()
+        guard !markRows.isEmpty else { NSSound.beep(); return }
+        let topRow = Int((backend.scrollYPixels / cellH).rounded())
+        let target = forward ? markRows.first(where: { $0 > topRow })
+                             : markRows.last(where: { $0 < topRow })
+        guard let t = target else { NSSound.beep(); return }
+        followingBottom = false
+        backend.setScrollY(max(0, CGFloat(t) * cellH), animated: true)
+    }
+
     private func setZoom(_ multiplier: CGFloat) {
         fontSizeMultiplier = max(0.5, min(4.0, multiplier))
         let baseSize = session.config.fontSize
@@ -1282,6 +1306,10 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
                 if NSApp.sendAction(Selector(("selectPreviousTab:")), to: nil, from: self) { return true }
             case 124:
                 if NSApp.sendAction(Selector(("selectNextTab:")), to: nil, from: self) { return true }
+            case 126: // ⌘↑ — 이전 프롬프트로 점프 (OSC 133 마크)
+                jumpToPreviousPrompt(self); return true
+            case 125: // ⌘↓ — 다음 프롬프트로 점프
+                jumpToNextPrompt(self); return true
             default:
                 break
             }

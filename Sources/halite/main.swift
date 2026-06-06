@@ -536,6 +536,19 @@ func installMainMenu() {
         action: #selector(HaliteSurfaceView.resetZoom(_:)),
         keyEquivalent: "0"
     )
+    viewMenu.addItem(NSMenuItem.separator())
+    let prevPrompt = NSMenuItem(
+        title: "Jump to Previous Prompt",
+        action: #selector(HaliteSurfaceView.jumpToPreviousPrompt(_:)),
+        keyEquivalent: String(UnicodeScalar(NSUpArrowFunctionKey)!))
+    prevPrompt.keyEquivalentModifierMask = [.command]
+    viewMenu.addItem(prevPrompt)
+    let nextPrompt = NSMenuItem(
+        title: "Jump to Next Prompt",
+        action: #selector(HaliteSurfaceView.jumpToNextPrompt(_:)),
+        keyEquivalent: String(UnicodeScalar(NSDownArrowFunctionKey)!))
+    nextPrompt.keyEquivalentModifierMask = [.command]
+    viewMenu.addItem(nextPrompt)
 
     // Split menu — pane splitting. responder chain으로 활성 윈도우 컨트롤러에 도달.
     let splitItem = NSMenuItem()

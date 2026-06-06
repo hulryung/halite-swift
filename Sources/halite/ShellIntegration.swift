@@ -54,18 +54,20 @@ enum ShellIntegration {
         let hook = """
 
         # --- halite shell integration ---
-        # 매 프롬프트마다 OSC 7로 현재 작업 디렉토리를 보고 → 새 split/탭이 cwd 상속.
-        _halite_report_cwd() {
+        # 매 프롬프트마다: OSC 7로 cwd 보고(새 split/탭이 cwd 상속) + OSC 133;A로
+        # 프롬프트 줄 마크(⌘↑/⌘↓ 프롬프트 점프).
+        _halite_precmd() {
           printf '\\033]7;file://%s%s\\033\\\\' "${HOST}" "${PWD}"
+          printf '\\033]133;A\\033\\\\'
         }
         autoload -Uz add-zsh-hook 2>/dev/null
         if (( $+functions[add-zsh-hook] )); then
-          add-zsh-hook -d precmd _halite_report_cwd 2>/dev/null
-          add-zsh-hook precmd _halite_report_cwd
+          add-zsh-hook -d precmd _halite_precmd 2>/dev/null
+          add-zsh-hook precmd _halite_precmd
         else
-          precmd_functions+=(_halite_report_cwd)
+          precmd_functions+=(_halite_precmd)
         fi
-        _halite_report_cwd
+        _halite_precmd
         # --- end halite shell integration ---
 
         """

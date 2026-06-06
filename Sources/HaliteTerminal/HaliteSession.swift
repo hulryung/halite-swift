@@ -39,6 +39,9 @@ public final class HaliteSession: ObservableObject {
     /// spawn 당시의 `config.cwd`로 남는다.
     public private(set) var currentDirectory: String?
     public var onCwdChanged: ((String) -> Void)?
+    /// OSC 133;A로 기록된 프롬프트 줄의 절대 줄 번호(scrollbackPushCount 기반이라 evict에도
+    /// 안정). ⌘↑/⌘↓ 프롬프트 점프의 소스. 셸 통합(OSC 133 emit)이 켜져 있을 때만 쌓인다.
+    public private(set) var promptMarks: [UInt64] = []
     public var onBell: (() -> Void)?
     public var onExit: ((Int32) -> Void)?
     public var onURLClick: ((URL) -> Void)?
@@ -177,6 +180,18 @@ public final class HaliteSession: ObservableObject {
             //   end: URI 빈 문자열
             let uri = oscParams.count >= 3 ? oscParams[2] : ""
             grid.setHyperlink(uri.isEmpty ? nil : uri)
+        case "133":
+            // OSC 133 ; A/B/C/D — FinalTerm semantic prompt. v1은 A(프롬프트 시작)만
+            // 사용해 프롬프트 줄을 마크한다. B/C/D는 미래용.
+            if oscParams.count >= 2, oscParams[1] == "A" {
+                let absLine = grid.scrollbackPushCount + UInt64(max(0, grid.cursorRow))
+                if promptMarks.last != absLine {
+                    promptMarks.append(absLine)
+                    if promptMarks.count > 5000 {
+                        promptMarks.removeFirst(promptMarks.count - 5000)
+                    }
+                }
+            }
         default:
             break
         }
