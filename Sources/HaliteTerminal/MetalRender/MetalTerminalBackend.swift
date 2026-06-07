@@ -135,6 +135,11 @@ final class MetalTerminalBackend: TerminalRenderBackend {
 
     private func redrawLast() {
         guard let grid = lastGrid else { return }
+        // 동기 출력(DEC 2026 BSU…ESU) 진행 중엔 백엔드 자체 재그리기(coalesce/애니메이션/
+        // 레이아웃)를 건너뛴다. 그러지 않으면 redraw burst 중간의 불완전한 grid가
+        // present돼 화면이 깜빡인다. 완성된 프레임은 ESU 후 host의 renderNow(또는 150ms
+        // 안전 플러시)가 그린다.
+        if grid.inSyncOutputMode { return }
         render(grid: grid, config: config, state: lastState, metrics: metrics)
     }
 
