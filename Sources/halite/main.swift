@@ -550,6 +550,15 @@ func installMainMenu() {
         keyEquivalent: String(UnicodeScalar(NSDownArrowFunctionKey)!))
     nextPrompt.keyEquivalentModifierMask = [.command]
     viewMenu.addItem(nextPrompt)
+    viewMenu.addItem(NSMenuItem.separator())
+    // 전체화면 토글 — macOS 표준 ⌃⌘F (펑션키 불필요). toggleFullScreen:은 NSWindow가
+    // 구현 → responder chain으로 key window에 도달.
+    let fullScreen = NSMenuItem(
+        title: "Toggle Full Screen",
+        action: #selector(NSWindow.toggleFullScreen(_:)),
+        keyEquivalent: "f")
+    fullScreen.keyEquivalentModifierMask = [.command, .control]
+    viewMenu.addItem(fullScreen)
 
     // Split menu — pane splitting. responder chain으로 활성 윈도우 컨트롤러에 도달.
     let splitItem = NSMenuItem()

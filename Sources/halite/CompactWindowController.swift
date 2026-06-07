@@ -47,14 +47,13 @@ final class CompactWindowController: NSWindowController, NSWindowDelegate, TabSw
     private var tabBarSolid: NSView!                    // 솔리드(테마색) 모드용 — vibrancy 위
     private var contentContainer: NSView!
     private static let tabBarHeight: CGFloat = 38
-    /// 전체화면에서 탭바를 메뉴바 높이만큼 내리는 인셋(메뉴바가 떠도 탭을 안 가리게).
     private var tabBarTopConstraint: NSLayoutConstraint!
     private var tabBarBackgroundHeightConstraint: NSLayoutConstraint!
     private var tabBarSolidHeightConstraint: NSLayoutConstraint!
-    private var fullScreenTopInset: CGFloat {
-        (window?.styleMask.contains(.fullScreen) ?? false)
-            ? (NSApp.mainMenu?.menuBarHeight ?? 24) : 0
-    }
+    /// 탭바 top 인셋. 전체화면에서도 0으로 둬 탭바를 맨 위 한 줄로 보여준다. (메뉴바를
+    /// 위해 내리면 빈 띠가 생겨 두 줄로 보였음 — 메뉴바는 전체화면에서 평소 숨겨지고
+    /// 맨 위 hover 시에만 잠깐 겹치는 macOS 표준 동작이라 한 줄을 우선한다.)
+    private var fullScreenTopInset: CGFloat { 0 }
 
     // Interactive 2-finger swipe (TabSwipeHandler). During a horizontal swipe the
     // neighbor tab's live tree is added beside the current one and both follow the
