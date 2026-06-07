@@ -49,7 +49,12 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
     public let session: HaliteSession
 
     public var isActive: Bool = true {
-        didSet { needsDisplay = true }
+        didSet {
+            guard isActive != oldValue else { return }
+            needsDisplay = true
+            // 비활성(디밍) pane은 커서를 깜빡이지 않게 — 타이머 시작/중지.
+            updateBlinkTimer()
+        }
     }
 
     public var onFocus: (() -> Void)?
@@ -217,7 +222,8 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
         cursorBlinkTimer?.invalidate()
         cursorBlinkTimer = nil
         cursorBlinkVisible = true
-        guard session.config.cursorBlink else {
+        // 블링크 ON이고 이 pane이 활성일 때만 깜빡인다. 비활성(디밍) pane은 정적 커서.
+        guard session.config.cursorBlink, isActive else {
             scheduleRender()
             return
         }
@@ -231,7 +237,7 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
 
     /// 키 입력 시 cursor를 즉시 보이게 + blink phase 리셋 (입력 중엔 안 깜빡이게).
     private func resetBlinkPhase() {
-        guard session.config.cursorBlink else { return }
+        guard session.config.cursorBlink, isActive else { return }
         cursorBlinkVisible = true
         cursorBlinkTimer?.invalidate()
         cursorBlinkTimer = Timer.scheduledTimer(withTimeInterval: 0.53, repeats: true) {
