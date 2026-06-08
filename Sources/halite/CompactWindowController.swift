@@ -34,6 +34,11 @@ final class CompactWindowController: NSWindowController, NSWindowDelegate, TabSw
         tabs.compactMap { $0.tree.root.leaves().first?.session }
     }
 
+    /// 모든 탭 × 모든 pane 세션 (종료 확인 등 전수 검사용 — `sessions`는 탭당 첫 leaf만 줌).
+    var allPaneSessions: [HaliteSession] {
+        tabs.flatMap { $0.tree.root.leaves().map { $0.session } }
+    }
+
     /// 현재 active 탭의 active pane (split 했을 때 포커스된 쪽).
     var activeSession: HaliteSession? {
         guard currentIndex < tabs.count else { return nil }

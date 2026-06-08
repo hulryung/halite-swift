@@ -36,6 +36,15 @@ public final class PTYHost {
         }
     }
 
+    /// PTY의 foreground process group이 셸 자신(childPID, = 셸의 pgid)과 다르면 true —
+    /// 즉 셸이 프롬프트에서 대기 중이 아니라 어떤 명령을 foreground로 실행 중일 때.
+    /// 종료 확인 다이얼로그가 "셸만 떠 있는 경우"는 묻지 않도록 판정에 사용.
+    public var isRunningForegroundJob: Bool {
+        guard childPID > 0, masterFD >= 0 else { return false }
+        let fg = tcgetpgrp(masterFD)
+        return fg > 0 && fg != childPID
+    }
+
     deinit {
         terminate()
     }

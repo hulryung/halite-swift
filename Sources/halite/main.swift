@@ -356,6 +356,38 @@ final class HaliteAppDelegate: NSObject, NSApplicationDelegate {
         true
     }
 
+    /// 모든 윈도우(single-session + Compact)의 모든 탭 × 모든 pane 세션.
+    private func allSessions() -> [HaliteSession] {
+        controllers.flatMap { $0.sessions } + compactControllers.flatMap { $0.allPaneSessions }
+    }
+
+    /// ⌘Q / Quit 시 확인 다이얼로그. foreground 명령이 실행 중이거나, 열린 세션(탭/pane)이
+    /// 2개 이상이면 묻는다. 단일 idle 세션이면 묻지 않고 즉시 종료.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        let sessions = allSessions()
+        let busy = sessions.filter { $0.hasRunningForegroundJob }.count
+        let total = sessions.count
+        guard busy > 0 || total > 1 else { return .terminateNow }
+
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        if busy > 0 {
+            alert.messageText = busy == 1
+                ? "A process is still running."
+                : "\(busy) processes are still running."
+            alert.informativeText = "Quitting halite will terminate "
+                + (busy == 1 ? "it." : "them.") + " Quit anyway?"
+        } else {
+            alert.messageText = "halite has \(total) open tabs/panes."
+            alert.informativeText = "Quitting will close them all. Quit anyway?"
+        }
+        alert.addButton(withTitle: "Quit")     // .alertFirstButtonReturn (default / Return)
+        alert.addButton(withTitle: "Cancel")   // .alertSecondButtonReturn (Esc)
+        // 활성 윈도우 앞으로 — 백그라운드에서 ⌘Q가 와도 다이얼로그가 보이도록.
+        NSApp.activate(ignoringOtherApps: true)
+        return alert.runModal() == .alertFirstButtonReturn ? .terminateNow : .terminateCancel
+    }
+
     /// Cmd+N — 항상 새 윈도우.
     @objc func newWindow(_ sender: Any?) {
         spawnWindow()

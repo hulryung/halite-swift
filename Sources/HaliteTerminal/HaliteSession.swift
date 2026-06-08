@@ -94,6 +94,12 @@ public final class HaliteSession: ObservableObject {
         pty.childWorkingDirectory
     }
 
+    /// 이 세션이 (프롬프트 대기가 아니라) 명령을 foreground로 실행 중인지.
+    /// 종료 확인 다이얼로그가 "실제로 도는 작업이 있는 경우"만 묻도록 판정에 사용.
+    public var hasRunningForegroundJob: Bool {
+        pty.isRunningForegroundJob
+    }
+
     public func resize(cols: Int, rows: Int) {
         grid.resize(cols: cols, rows: rows)
         pty.resize(cols: cols, rows: rows)
