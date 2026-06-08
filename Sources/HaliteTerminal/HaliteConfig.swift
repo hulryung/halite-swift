@@ -89,7 +89,7 @@ public struct HaliteConfig {
         copyOnSelect: Bool = true,
         scrollSpeed: CGFloat = 1.0,
         argv: [String] = HaliteConfig.defaultArgv(),
-        env: [String: String] = ProcessInfo.processInfo.environment,
+        env: [String: String] = HaliteConfig.defaultEnv(),
         cwd: String? = nil
     ) {
         self.fontFamily = fontFamily
@@ -114,6 +114,23 @@ public struct HaliteConfig {
         self.argv = argv
         self.env = env
         self.cwd = cwd
+    }
+
+    /// spawn할 자식 프로세스의 기본 환경. 부모 환경을 상속하되 터미널 타입을 선언한다.
+    ///
+    /// 터미널 에뮬레이터는 자신이 어떤 터미널을 흉내내는지 `TERM`으로 declare해야 한다
+    /// (Terminal.app/iTerm2/Ghostty 모두 상속에 기대지 않고 직접 set한다). GUI 앱이
+    /// LaunchServices로 실행되면 상속 환경에 `TERM`/`COLORTERM`이 아예 없어서, Claude
+    /// Code 등 capability를 env로 감지하는 TUI가 컬러 지원을 못 알아채고 색을 떨군다.
+    /// (셸 프롬프트는 raw ANSI escape라 영향 없음 — 그래서 프롬프트만 색이 나왔다.)
+    ///
+    /// 렌더러가 256색·truecolor(24-bit)를 지원하므로 둘 다 선언한다. 자체 terminfo를
+    /// ship하지 않으니 어디에나 설치돼 있는 `xterm-256color`를 TERM 값으로 쓴다.
+    public static func defaultEnv() -> [String: String] {
+        var env = ProcessInfo.processInfo.environment
+        env["TERM"] = "xterm-256color"
+        env["COLORTERM"] = "truecolor"
+        return env
     }
 
     public static func defaultArgv() -> [String] {
