@@ -826,6 +826,17 @@ final class CompactWindowController: NSWindowController, NSWindowDelegate, TabSw
         tabs[currentIndex].tree.moveFocus(dir)
     }
 
+    /// Cmd+Shift+화살표 — 인접 pane과 위치 스왑.
+    @objc func swapPaneLeft(_ sender: Any?) { swapDirectional(.left) }
+    @objc func swapPaneRight(_ sender: Any?) { swapDirectional(.right) }
+    @objc func swapPaneUp(_ sender: Any?) { swapDirectional(.up) }
+    @objc func swapPaneDown(_ sender: Any?) { swapDirectional(.down) }
+
+    private func swapDirectional(_ dir: PaneFocusDirection) {
+        guard currentIndex < tabs.count else { return }
+        tabs[currentIndex].tree.swapDirectional(dir)
+    }
+
     private func refreshTabBar() {
         let titles = tabs.map { tab in
             tab.tree.root.leaves().first?.session.title ?? "halite"

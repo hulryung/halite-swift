@@ -118,6 +118,10 @@ final class HaliteWindowController: NSWindowController, NSWindowDelegate {
     @objc func focusPaneRight(_ sender: Any?) { tree.moveFocus(.right) }
     @objc func focusPaneUp(_ sender: Any?) { tree.moveFocus(.up) }
     @objc func focusPaneDown(_ sender: Any?) { tree.moveFocus(.down) }
+    @objc func swapPaneLeft(_ sender: Any?) { tree.swapDirectional(.left) }
+    @objc func swapPaneRight(_ sender: Any?) { tree.swapDirectional(.right) }
+    @objc func swapPaneUp(_ sender: Any?) { tree.swapDirectional(.up) }
+    @objc func swapPaneDown(_ sender: Any?) { tree.swapDirectional(.down) }
 
     required init?(coder: NSCoder) { fatalError() }
 
@@ -164,6 +168,10 @@ final class HaliteAppDelegate: NSObject, NSApplicationDelegate {
             name: .haliteSettingsChanged,
             object: nil
         )
+        // 키바인딩 변경 → 메뉴 재빌드 (뷰 훅은 store를 라이브로 읽으므로 갱신 불필요).
+        NotificationCenter.default.addObserver(
+            forName: .haliteKeybindingsChanged, object: nil, queue: .main
+        ) { _ in installMainMenu() }
         bindControlSocket()
         // Sparkle은 lazy init — 첫 access 시점에 자동 시작.
         _ = HaliteUpdater.shared
@@ -422,19 +430,30 @@ final class HaliteAppDelegate: NSObject, NSApplicationDelegate {
 }
 
 // MARK: - 최소 메뉴바
+
+/// Rebuilt whenever keybindings change (`.haliteKeybindingsChanged`). All shortcut
+/// equivalents come from `KeyBindingStore` rather than being hardcoded, so a remap
+/// in Settings takes effect by just calling this again.
 func installMainMenu() {
+    let store = KeyBindingStore.shared
     let mainMenu = NSMenu()
+
+    // A rebindable menu item: title + selector come from us, the shortcut from the store.
+    func item(_ title: String, _ selector: Selector?, _ id: AppAction.ID,
+              target: AnyObject? = nil, tag: Int = 0) -> NSMenuItem {
+        let it = NSMenuItem(title: title, action: selector, keyEquivalent: "")
+        store.apply(id, to: it)
+        if let target = target { it.target = target }
+        if tag != 0 { it.tag = tag }
+        return it
+    }
 
     // App menu
     let appItem = NSMenuItem()
     mainMenu.addItem(appItem)
     let appMenu = NSMenu()
     appItem.submenu = appMenu
-    appMenu.addItem(
-        withTitle: "Settings…",
-        action: #selector(HaliteAppDelegate.showSettings(_:)),
-        keyEquivalent: ","
-    )
+    appMenu.addItem(item("Settings…", #selector(HaliteAppDelegate.showSettings(_:)), .settings))
     appMenu.addItem(NSMenuItem.separator())
     // Sparkle 자동업데이트 — target은 SPUStandardUpdaterController 자체.
     let updateItem = NSMenuItem(
@@ -445,157 +464,74 @@ func installMainMenu() {
     updateItem.target = HaliteUpdater.shared.target
     appMenu.addItem(updateItem)
     appMenu.addItem(NSMenuItem.separator())
-    appMenu.addItem(
-        withTitle: "Quit halite",
-        action: #selector(NSApplication.terminate(_:)),
-        keyEquivalent: "q"
-    )
+    appMenu.addItem(item("Quit halite", #selector(NSApplication.terminate(_:)), .quit))
 
     // File menu — New Window, Close Window
     let fileItem = NSMenuItem()
     mainMenu.addItem(fileItem)
     let fileMenu = NSMenu(title: "File")
     fileItem.submenu = fileMenu
-    fileMenu.addItem(
-        withTitle: "New Window",
-        action: #selector(HaliteAppDelegate.newWindow(_:)),
-        keyEquivalent: "n"
-    )
+    fileMenu.addItem(item("New Window", #selector(HaliteAppDelegate.newWindow(_:)), .newWindow))
     // Cmd+T — Compact 모드면 활성 윈도우에 탭 추가, 그 외엔 새 윈도우 (native tab group join).
-    fileMenu.addItem(
-        withTitle: "New Tab",
-        action: #selector(HaliteAppDelegate.newTab(_:)),
-        keyEquivalent: "t"
-    )
+    fileMenu.addItem(item("New Tab", #selector(HaliteAppDelegate.newTab(_:)), .newTab))
     // Cmd+W — 탭/pane을 닫는다(창 전체가 아니라). 터미널 창이면 활성 pane을 닫고
     // 마지막이면 탭→창 순으로 cascade. 비터미널 창(Settings 등)이면 창을 닫는다.
-    fileMenu.addItem(
-        withTitle: "Close Tab",
-        action: #selector(HaliteAppDelegate.closeTabOrWindow(_:)),
-        keyEquivalent: "w"
-    )
+    fileMenu.addItem(item("Close Tab", #selector(HaliteAppDelegate.closeTabOrWindow(_:)), .closeTab))
     // Cmd+Shift+W — 명시적으로 창 전체 닫기.
-    let closeWindowItem = NSMenuItem(
-        title: "Close Window",
-        action: #selector(NSWindow.performClose(_:)),
-        keyEquivalent: "w"
-    )
-    closeWindowItem.keyEquivalentModifierMask = [.command, .shift]
-    fileMenu.addItem(closeWindowItem)
+    fileMenu.addItem(item("Close Window", #selector(NSWindow.performClose(_:)), .closeWindow))
 
     // Edit menu — Copy/Paste (responder chain으로 우리 view의 copy:/paste:가 잡힘)
     let editItem = NSMenuItem()
     mainMenu.addItem(editItem)
     let editMenu = NSMenu(title: "Edit")
     editItem.submenu = editMenu
-    editMenu.addItem(
-        withTitle: "Copy",
-        action: #selector(NSText.copy(_:)),
-        keyEquivalent: "c"
-    )
-    editMenu.addItem(
-        withTitle: "Paste",
-        action: #selector(NSText.paste(_:)),
-        keyEquivalent: "v"
-    )
+    editMenu.addItem(item("Copy", #selector(NSText.copy(_:)), .copy))
+    editMenu.addItem(item("Paste", #selector(NSText.paste(_:)), .paste))
     editMenu.addItem(NSMenuItem.separator())
-    editMenu.addItem(
-        withTitle: "Find…",
-        action: Selector(("performFindPanelAction:")),
-        keyEquivalent: "f"
-    )
-    editMenu.addItem(
-        withTitle: "Find Next",
-        action: #selector(HaliteSurfaceView.findNextMatch),
-        keyEquivalent: "g"
-    )
-    let findPrev = NSMenuItem(
-        title: "Find Previous",
-        action: #selector(HaliteSurfaceView.findPreviousMatch),
-        keyEquivalent: "g"
-    )
-    findPrev.keyEquivalentModifierMask = [.command, .shift]
-    editMenu.addItem(findPrev)
+    editMenu.addItem(item("Find…", Selector(("performFindPanelAction:")), .find))
+    editMenu.addItem(item("Find Next", #selector(HaliteSurfaceView.findNextMatch), .findNext))
+    editMenu.addItem(item("Find Previous", #selector(HaliteSurfaceView.findPreviousMatch), .findPrevious))
 
     // View menu — font zoom
     let viewItem = NSMenuItem()
     mainMenu.addItem(viewItem)
     let viewMenu = NSMenu(title: "View")
     viewItem.submenu = viewMenu
-    viewMenu.addItem(
-        withTitle: "Zoom In",
-        action: #selector(HaliteSurfaceView.zoomIn(_:)),
-        keyEquivalent: "="
-    )
-    viewMenu.addItem(
-        withTitle: "Zoom Out",
-        action: #selector(HaliteSurfaceView.zoomOut(_:)),
-        keyEquivalent: "-"
-    )
-    viewMenu.addItem(
-        withTitle: "Actual Size",
-        action: #selector(HaliteSurfaceView.resetZoom(_:)),
-        keyEquivalent: "0"
-    )
+    viewMenu.addItem(item("Zoom In", #selector(HaliteSurfaceView.zoomIn(_:)), .zoomIn))
+    viewMenu.addItem(item("Zoom Out", #selector(HaliteSurfaceView.zoomOut(_:)), .zoomOut))
+    viewMenu.addItem(item("Actual Size", #selector(HaliteSurfaceView.resetZoom(_:)), .resetZoom))
     viewMenu.addItem(NSMenuItem.separator())
-    let prevPrompt = NSMenuItem(
-        title: "Jump to Previous Prompt",
-        action: #selector(HaliteSurfaceView.jumpToPreviousPrompt(_:)),
-        keyEquivalent: String(UnicodeScalar(NSUpArrowFunctionKey)!))
-    prevPrompt.keyEquivalentModifierMask = [.command]
-    viewMenu.addItem(prevPrompt)
-    let nextPrompt = NSMenuItem(
-        title: "Jump to Next Prompt",
-        action: #selector(HaliteSurfaceView.jumpToNextPrompt(_:)),
-        keyEquivalent: String(UnicodeScalar(NSDownArrowFunctionKey)!))
-    nextPrompt.keyEquivalentModifierMask = [.command]
-    viewMenu.addItem(nextPrompt)
+    // ⌘↑ / ⌘↓ — 프롬프트 점프. 실제 디스패치는 HaliteSurfaceView 키 훅(arrow+⌘ 매칭)이
+    // 담당하고, 이 아이템은 메뉴 표시 + 클릭용. keyEquivalent는 store가 채운다.
+    viewMenu.addItem(item("Jump to Previous Prompt",
+                          #selector(HaliteSurfaceView.jumpToPreviousPrompt(_:)), .jumpPreviousPrompt))
+    viewMenu.addItem(item("Jump to Next Prompt",
+                          #selector(HaliteSurfaceView.jumpToNextPrompt(_:)), .jumpNextPrompt))
     viewMenu.addItem(NSMenuItem.separator())
-    // 전체화면 토글 — macOS 표준 ⌃⌘F (펑션키 불필요). toggleFullScreen:은 NSWindow가
-    // 구현 → responder chain으로 key window에 도달.
-    let fullScreen = NSMenuItem(
-        title: "Toggle Full Screen",
-        action: #selector(NSWindow.toggleFullScreen(_:)),
-        keyEquivalent: "f")
-    fullScreen.keyEquivalentModifierMask = [.command, .control]
-    viewMenu.addItem(fullScreen)
+    // 전체화면 토글 — macOS 표준 ⌃⌘F. toggleFullScreen:은 NSWindow가 구현 → responder chain.
+    viewMenu.addItem(item("Toggle Full Screen", #selector(NSWindow.toggleFullScreen(_:)), .toggleFullScreen))
 
     // Split menu — pane splitting. responder chain으로 활성 윈도우 컨트롤러에 도달.
     let splitItem = NSMenuItem()
     mainMenu.addItem(splitItem)
     let splitMenu = NSMenu(title: "Split")
     splitItem.submenu = splitMenu
-    splitMenu.addItem(
-        withTitle: "Split Horizontally",
-        action: #selector(CompactWindowController.splitPaneHorizontally(_:)),
-        keyEquivalent: "d"
-    )
-    let vsplit = NSMenuItem(
-        title: "Split Vertically",
-        action: #selector(CompactWindowController.splitPaneVertically(_:)),
-        keyEquivalent: "d"
-    )
-    vsplit.keyEquivalentModifierMask = [.command, .shift]
-    splitMenu.addItem(vsplit)
-
+    splitMenu.addItem(item("Split Horizontally",
+                           #selector(CompactWindowController.splitPaneHorizontally(_:)), .splitHorizontally))
+    splitMenu.addItem(item("Split Vertically",
+                           #selector(CompactWindowController.splitPaneVertically(_:)), .splitVertically))
     splitMenu.addItem(NSMenuItem.separator())
-
-    // Pane focus 네비 — Cmd+Opt+화살표.
-    let focusDirs: [(String, Selector, UInt16)] = [
-        ("Focus Pane Left", Selector(("focusPaneLeft:")), 123),
-        ("Focus Pane Right", Selector(("focusPaneRight:")), 124),
-        ("Focus Pane Down", Selector(("focusPaneDown:")), 125),
-        ("Focus Pane Up", Selector(("focusPaneUp:")), 126),
-    ]
-    let arrowChars: [UInt16: String] = [
-        123: "\u{2190}", 124: "\u{2192}", 125: "\u{2193}", 126: "\u{2191}",
-    ]
-    for (title, sel, code) in focusDirs {
-        let item = NSMenuItem(title: title, action: sel,
-                              keyEquivalent: arrowChars[code] ?? "")
-        item.keyEquivalentModifierMask = [.command, .option]
-        splitMenu.addItem(item)
-    }
+    // Pane focus 네비 — 기본 Cmd+Opt+화살표 (store로 리바인드 가능).
+    splitMenu.addItem(item("Focus Pane Left", Selector(("focusPaneLeft:")), .focusPaneLeft))
+    splitMenu.addItem(item("Focus Pane Right", Selector(("focusPaneRight:")), .focusPaneRight))
+    splitMenu.addItem(item("Focus Pane Down", Selector(("focusPaneDown:")), .focusPaneDown))
+    splitMenu.addItem(item("Focus Pane Up", Selector(("focusPaneUp:")), .focusPaneUp))
+    splitMenu.addItem(NSMenuItem.separator())
+    // Cmd+Shift+화살표 — 인접 pane과 위치 스왑 (⌘⇧+클릭과 동일한 swap).
+    splitMenu.addItem(item("Swap Pane Left", Selector(("swapPaneLeft:")), .swapPaneLeft))
+    splitMenu.addItem(item("Swap Pane Right", Selector(("swapPaneRight:")), .swapPaneRight))
+    splitMenu.addItem(item("Swap Pane Down", Selector(("swapPaneDown:")), .swapPaneDown))
+    splitMenu.addItem(item("Swap Pane Up", Selector(("swapPaneUp:")), .swapPaneUp))
 
     // Window menu — 탭 네비.
     let windowItem = NSMenuItem()
@@ -606,22 +542,10 @@ func installMainMenu() {
     // NSMenu's punctuation key-equivalent matching for ⌘⇧] / ⌘⇧[ is unreliable
     // (charactersIgnoringModifiers applies Shift → "}"/"{", and letters case-fold
     // but punctuation doesn't). These items stay for menu DISPLAY + click; the
-    // actual keystroke is dispatched in HaliteSurfaceView.performKeyEquivalent,
-    // the same path ⌘W already uses.
-    let nextTab = NSMenuItem(
-        title: "Show Next Tab",
-        action: Selector(("selectNextTab:")), keyEquivalent: "]"
-    )
-    nextTab.keyEquivalentModifierMask = [.command, .shift]
-    windowMenu.addItem(nextTab)
-
-    let prevTab = NSMenuItem(
-        title: "Show Previous Tab",
-        action: Selector(("selectPreviousTab:")), keyEquivalent: "["
-    )
-    prevTab.keyEquivalentModifierMask = [.command, .shift]
-    windowMenu.addItem(prevTab)
-
+    // actual keystroke is dispatched by HaliteSurfaceView's key hook, the same
+    // path ⌘W already uses. (store fills the displayed equivalent.)
+    windowMenu.addItem(item("Show Next Tab", Selector(("selectNextTab:")), .nextTab))
+    windowMenu.addItem(item("Show Previous Tab", Selector(("selectPreviousTab:")), .previousTab))
     windowMenu.addItem(NSMenuItem.separator())
 
     // Cmd+1..9 — n번째 탭으로. tag에 1-based 번호.
@@ -646,6 +570,12 @@ app.setActivationPolicy(.regular)
 
 let appDelegate = HaliteAppDelegate()
 app.delegate = appDelegate
+
+// 앱 레벨 단축키(탭 전환·프롬프트 점프·닫기·종료)를 사용자 키바인딩으로 해석하는 훅.
+// 한 번만 설치하면 store를 라이브로 읽어 리바인드가 즉시 반영된다.
+HaliteSurfaceView.appKeyEquivalentHook = { view, event in
+    KeyBindingStore.shared.handleViewKeyEquivalent(event, on: view)
+}
 
 installMainMenu()
 

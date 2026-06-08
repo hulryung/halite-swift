@@ -1332,7 +1332,23 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
         session.write(data)
     }
 
+    /// App-injected hook for app-level key equivalents (tab nav, prompt jump,
+    /// close, quit) resolved against the user's configurable keybindings. Returns
+    /// true if it handled the event. `halite.app` installs this once at startup so
+    /// remapped shortcuts take effect live. When nil — the engine used standalone
+    /// (e.g. embedded in cmux) — the built-in defaults below run unchanged.
+    ///
+    /// Contract: if a hook is installed it is *authoritative* for app-level keys.
+    /// Returning false means "not an app shortcut" → fall through to the menu /
+    /// responder chain (so ⌘T, ⌘C, … still reach their menu items). The engine's
+    /// own hardcoded fallback is skipped, so a user can genuinely unbind a key.
+    public static var appKeyEquivalentHook: ((HaliteSurfaceView, NSEvent) -> Bool)?
+
     public override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if let hook = HaliteSurfaceView.appKeyEquivalentHook {
+            if hook(self, event) { return true }
+            return super.performKeyEquivalent(with: event)
+        }
         let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         // ⌘⇧] / ⌘⇧[ — next / previous tab. Dispatched here (not via the menu's
         // key equivalent) because NSMenu's matching for shifted punctuation is

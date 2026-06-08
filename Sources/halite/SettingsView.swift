@@ -39,6 +39,7 @@ struct HaliteSettingsView: View {
             windowTab.tabItem { Label("Window", systemImage: "macwindow") }
             effectsTab.tabItem { Label("Effects", systemImage: "sparkles") }
             terminalTab.tabItem { Label("Terminal", systemImage: "terminal") }
+            KeysSettingsTab().tabItem { Label("Keys", systemImage: "keyboard") }
             advancedTab.tabItem { Label("Advanced", systemImage: "gearshape") }
         }
         .frame(width: 540, height: 600)

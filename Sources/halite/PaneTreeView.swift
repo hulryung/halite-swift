@@ -26,6 +26,9 @@ final class PaneTreeView: NSView {
         /// After rebuild, find the wrapper whose leaf === `newLeaf` and animate it in.
         case split(newLeaf: PaneNode)
         case close(snapshot: NSImage, closingFrame: NSRect, edge: ClosingEdge)
+        /// Cross-slide swap: each pane's snapshot glides from its old slot to the
+        /// other's. Frames are in self coords; differing sizes are interpolated too.
+        case swap(snapA: NSImage, frameA: NSRect, snapB: NSImage, frameB: NSRect)
     }
 
     /// 닫히는 pane이 슬라이드해 사라질 방향(바깥 edge). self는 non-flipped(y up).
@@ -182,9 +185,49 @@ final class PaneTreeView: NSView {
         }
     }
 
+    /// ⌘⇧+클릭 — 클릭한 pane과 현재 active pane의 *위치*를 맞바꾼다. 두 leaf 노드의
+    /// payload(session+surface)만 교환하므로 트리 형태/parent 링크/ratio는 그대로 유지된다.
+    /// active 세션이 새 위치로 옮겨가고 focus도 그 세션을 따라간다.
+    func swapActive(with target: PaneNode) {
+        guard target !== activeLeaf, target.isLeaf, activeLeaf.isLeaf else { return }
+
+        // 스왑 전, 두 pane의 현재 위치 + 스냅샷(Metal surface 포함)을 잡아둔다. rebuild가
+        // 콘텐츠를 즉시 새 슬롯에 배치하므로, 이 스냅샷들을 옛 위치에 얹고 서로의 위치로
+        // 미끄러뜨려 '두 pane이 자리를 바꾸는' 모션을 만든다.
+        var animation: PaneAnimation = .none
+        if Motion.enabled,
+           let wrapperA = findWrapper(for: activeLeaf, in: self),
+           let wrapperB = findWrapper(for: target, in: self),
+           let snapA = Motion.snapshot(of: wrapperA),
+           let snapB = Motion.snapshot(of: wrapperB) {
+            animation = .swap(
+                snapA: snapA, frameA: wrapperA.convert(wrapperA.bounds, to: self),
+                snapB: snapB, frameB: wrapperB.convert(wrapperB.bounds, to: self)
+            )
+        }
+
+        let activeKind = activeLeaf.kind
+        activeLeaf.kind = target.kind
+        target.kind = activeKind
+        // active 세션이 이제 target 노드에 있으므로 focus가 따라가도록 active를 옮긴다.
+        activeLeaf = target
+        rebuild(animation: animation)
+    }
+
     /// Cmd+Opt+화살표 — 현재 active pane의 화면 위치 기준으로 방향상 가장 가까운
-    /// 인접 pane으로 focus 이동. leaf wrapper들의 self 좌표계 frame을 사용.
+    /// 인접 pane으로 focus 이동.
     func moveFocus(_ dir: PaneFocusDirection) {
+        if let target = directionalNeighbor(dir) { setActive(target) }
+    }
+
+    /// Cmd+Shift+화살표 — 방향상 가장 가까운 인접 pane과 *위치*를 맞바꾼다.
+    func swapDirectional(_ dir: PaneFocusDirection) {
+        if let target = directionalNeighbor(dir) { swapActive(with: target) }
+    }
+
+    /// active pane 기준으로 `dir` 방향에 화면상 가장 가까운 leaf를 찾는다.
+    /// leaf wrapper들의 self 좌표계 frame을 사용. (focus 이동/스왑 공용.)
+    private func directionalNeighbor(_ dir: PaneFocusDirection) -> PaneNode? {
         var wrappers: [PaneLeafWrapper] = []
         func collect(_ v: NSView) {
             if let w = v as? PaneLeafWrapper { wrappers.append(w) }
@@ -193,7 +236,7 @@ final class PaneTreeView: NSView {
         collect(self)
         guard wrappers.count >= 2,
               let current = wrappers.first(where: { $0.leaf === activeLeaf })
-        else { return }
+        else { return nil }
 
         let cur = current.convert(current.bounds, to: self)
         let curMid = NSPoint(x: cur.midX, y: cur.midY)
@@ -218,7 +261,7 @@ final class PaneTreeView: NSView {
             let dist = dx * dx + dy * dy
             if dist < bestDist { bestDist = dist; best = w }
         }
-        if let target = best { setActive(target.leaf) }
+        return best?.leaf
     }
 
     // MARK: - Tree → NSView 재구성
@@ -253,6 +296,10 @@ final class PaneTreeView: NSView {
             // (Task 5) 닫힌 pane 스냅샷이 옛 frame에서 바깥 edge로 nudge + fade out 되며
             // 사라지는 모션 — 헬퍼로 추출 (animateSplitIn과 대칭).
             animateCloseOut(snapshot: snapshot, closingFrame: closingFrame, edge: edge)
+
+        case .swap(let snapA, let frameA, let snapB, let frameB):
+            // 두 pane 스냅샷이 서로의 슬롯으로 직선 크로스 슬라이드.
+            animateSwap(snapA: snapA, frameA: frameA, snapB: snapB, frameB: frameB)
         }
     }
 
@@ -431,6 +478,43 @@ final class PaneTreeView: NSView {
         }
     }
 
+    /// 크로스 슬라이드 스왑: A 스냅샷은 frameA→frameB, B 스냅샷은 frameB→frameA 로 직선
+    /// 이동. 두 pane 크기가 다르면 position과 함께 bounds.size 도 보간하므로(콘텐츠는
+    /// `.resize` gravity로 늘어남) 도착 시 라이브 콘텐츠 크기와 정확히 맞아 떨어진다 →
+    /// 오버레이 제거가 매끄럽다. close와 같은 오버레이 관용구(명시 CABasicAnimation +
+    /// fillMode forwards + asyncAfter 제거).
+    private func animateSwap(snapA: NSImage, frameA: NSRect, snapB: NSImage, frameB: NSRect) {
+        // rebuild가 막 배치한 라이브 콘텐츠를 최종 위치/크기로 settle (스냅샷이 덮기 전에).
+        layoutSubtreeIfNeeded()
+        let overlayA = Motion.overlay(image: snapA, frame: frameA, in: self)
+        let overlayB = Motion.overlay(image: snapB, frame: frameB, in: self)
+        slideOverlay(overlayA, from: frameA, to: frameB, key: "halite.swap-a")
+        slideOverlay(overlayB, from: frameB, to: frameA, key: "halite.swap-b")
+        DispatchQueue.main.asyncAfter(deadline: .now() + Motion.duration) {
+            overlayA.removeFromSuperlayer()
+            overlayB.removeFromSuperlayer()
+        }
+    }
+
+    /// 오버레이 레이어를 `from`→`to`(self 좌표 frame)로 position+size 동시 애니메이트.
+    private func slideOverlay(_ layer: CALayer, from: NSRect, to: NSRect, key: String) {
+        let pos = CABasicAnimation(keyPath: "position")
+        pos.fromValue = NSValue(point: CGPoint(x: from.midX, y: from.midY))
+        pos.toValue = NSValue(point: CGPoint(x: to.midX, y: to.midY))
+
+        let size = CABasicAnimation(keyPath: "bounds.size")
+        size.fromValue = NSValue(size: from.size)
+        size.toValue = NSValue(size: to.size)
+
+        let group = CAAnimationGroup()
+        group.animations = [pos, size]
+        group.duration = Motion.duration
+        group.timingFunction = Motion.timing
+        group.isRemovedOnCompletion = false
+        group.fillMode = .forwards
+        layer.add(group, forKey: key)
+    }
+
     // MARK: - Border 색 갱신
 
     private func updateBorderColors() {
@@ -529,7 +613,24 @@ private final class PaneLeafWrapper: NSView {
                        blue: mix(bg.blueComponent), alpha: 1.0)
     }
 
+    /// While ⌘⇧ is held, claim the click for the wrapper (pane swap) instead of
+    /// letting it fall through to the terminal surface underneath.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let hit = super.hitTest(point)
+        if hit != nil, NSEvent.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            .isSuperset(of: [.command, .shift]) {
+            return self
+        }
+        return hit
+    }
+
     override func mouseDown(with event: NSEvent) {
+        let mods = event.modifierFlags.intersection([.command, .shift, .option, .control])
+        if mods == [.command, .shift] {
+            // ⌘⇧+클릭 — 이 pane을 active pane과 위치 교환. surface로 전달하지 않는다.
+            owner?.swapActive(with: leaf)
+            return
+        }
         owner?.setActive(leaf)
         super.mouseDown(with: event)
     }
