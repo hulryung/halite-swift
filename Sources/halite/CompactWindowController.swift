@@ -306,6 +306,10 @@ final class CompactWindowController: NSWindowController, NSWindowDelegate, TabSw
         currentIndex = index
         for t in tabs { t.tree.removeFromSuperview() }
         let tree = tabs[index].tree
+        // 탭에서 마지막으로 쓰던 pane. addSubview가 트리를 윈도우에 붙이면 각 surface의
+        // viewDidMoveToWindow → makeFirstResponder → onFocus 가 동기 발화해 activeLeaf를
+        // (순회 마지막 pane으로) 덮어쓰므로, 의도값을 *미리* 잡아두고 뒤에서 복원한다.
+        let restoreTarget = tree.activeLeaf
         contentContainer.addSubview(tree)
         NSLayoutConstraint.activate([
             tree.topAnchor.constraint(equalTo: contentContainer.topAnchor),
@@ -313,9 +317,8 @@ final class CompactWindowController: NSWindowController, NSWindowDelegate, TabSw
             tree.leadingAnchor.constraint(equalTo: contentContainer.leadingAnchor),
             tree.trailingAnchor.constraint(equalTo: contentContainer.trailingAnchor),
         ])
-        if case .leaf(_, let surface) = tree.activeLeaf.kind {
-            window?.makeFirstResponder(surface)
-        }
+        // 마지막 사용 pane으로 active + first responder 복원 (위 onFocus 오염을 되돌림).
+        tree.setActive(restoreTarget)
         if let firstSession = tree.root.leaves().first?.session {
             let title = firstSession.title
             window?.title = title.isEmpty ? "halite" : title
