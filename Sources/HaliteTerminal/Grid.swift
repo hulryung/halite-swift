@@ -877,6 +877,19 @@ public final class Grid {
         !line.wrapped && line.cells.allSatisfy { isBlankCell($0) }
     }
 
+    /// 커서 행 아래에 비어있지 않은 행이 있는가 (primary 화면 기준).
+    ///
+    /// Claude Code처럼 alt-screen/sync-output을 쓰지 않으면서도 입력 줄 **아래**에
+    /// status/footer를 상주시키는 primary-screen TUI를 식별하는 신호다. follow-bottom
+    /// 시 호스트는 이 경우 cursor-visible 정책 대신 grid-top anchor를 써서, 커서만
+    /// 보이고 그 아래 footer가 fold 밑으로 잘리는 것을 막는다. (rows*cellH ≤ viewport라
+    /// 라이브 grid는 항상 viewport에 들어가므로 grid-top anchor가 하단까지 안전하다.)
+    public var hasContentBelowCursor: Bool {
+        guard !isAltScreenActive, cursorRow + 1 < rows else { return false }
+        for r in (cursorRow + 1)..<rows where !isBlankRow(cells[r]) { return true }
+        return false
+    }
+
     /// `width` 길이로 pad/trim 한 Line 생성 (reflow용).
     private func paddedRow(_ rowCells: [Cell], to width: Int, wrapped: Bool) -> Line {
         var r = rowCells

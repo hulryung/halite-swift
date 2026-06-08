@@ -302,7 +302,10 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
         // 등)에서도 위치를 건드리지 않는다 — 보던 history가 강제로 바닥으로 튀지 않게.
         // 키 입력 점프 애니메이션 중(isSnappingToCursor)에도 건드리지 않음.
         if followingBottom && !isSnappingToCursor {
-            if session.grid.isAltScreenActive || session.grid.hasUsedSyncOutput {
+            if session.grid.isAltScreenActive || session.grid.hasUsedSyncOutput
+                || session.grid.hasContentBelowCursor {
+                // grid-top anchor — 라이브 grid 전체(하단 footer 포함)를 보여준다.
+                // Claude Code(커서 아래 status 상주)가 이 경로로 들어와 잘림이 해소됨.
                 scrollViewportToAltTop()
             } else {
                 scrollViewportToBottom()
@@ -399,24 +402,32 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
         // 항상 보이는 시스템 설정에서 ~15pt 차지하기 때문.
         let usableW = max(backend.contentSize.width - inset.width * 2, 1)
 
-        // height: bounds.height는 macOS 네이티브 탭 바 출현/사라짐(2탭↔1탭 토글)에
-        // 따라 ~36pt가 들락날락한다. window.contentRect도 마찬가지로 변함 (윈도우
-        // 자체가 탭바 만큼 작아지는 macOS 동작). 그대로 rows로 환산하면 매 토글마다
-        // SIGWINCH가 셸에 전달되어 prompt가 다시 그려져 누적됨.
+        // height: 두 가지 윈도우 모드를 구분해야 한다. 식별자는 tabbingMode —
+        // compact 모드는 네이티브 탭을 끄고(`.disallowed`) 커스텀 탭바를 쓴다.
         //
-        // stable rows를 위해 탭바 가시 여부에 따라 조건부 보정:
-        //   탭바 hidden (1 tab):  contentRect - tabBarReservation
-        //   탭바 visible (2+ tabs): contentRect 그대로
-        // 결과: 두 상태 모두 동일한 effective height → rows count 일정.
-        let isTabBarVisible = (window?.tabbedWindows?.count ?? 1) >= 2
-        let stableContentHeight: CGFloat
-        if let w = window {
-            let cr = w.contentRect(forFrameRect: w.frame).height
-            stableContentHeight = isTabBarVisible ? cr : cr - tabBarReservation
+        //   • compact (커스텀 탭바): 탭바는 평범한 subview라 우리 backing view를 이미
+        //     그만큼 줄여놨다 → backend.contentSize.height가 곧 실제 그릴 수 있는
+        //     높이다. 그대로 쓴다 (위 usableW와 대칭). window.contentRect에서 매직
+        //     상수를 빼던 옛 경로는 탭바 실제 높이(38)와 어긋나(36) rows를 1 더 잡아,
+        //     Claude Code 같은 TUI의 맨 아래 줄이 화면 밖으로 밀려 스크롤해야 보였다.
+        //
+        //   • standard (네이티브 탭바): bounds/contentRect가 2탭↔1탭 토글에 따라
+        //     ~36pt 들락날락한다 → 매 토글마다 SIGWINCH로 prompt가 다시 그려져 누적됨.
+        //     탭바가 숨어있을 때(1 tab)도 그 높이를 미리 빼서 rows를 일정하게 고정한다.
+        let usableH: CGFloat
+        if window?.tabbingMode == .disallowed {
+            usableH = max(backend.contentSize.height - inset.height * 2, 1)
         } else {
-            stableContentHeight = bounds.height
+            let isTabBarVisible = (window?.tabbedWindows?.count ?? 1) >= 2
+            let stableContentHeight: CGFloat
+            if let w = window {
+                let cr = w.contentRect(forFrameRect: w.frame).height
+                stableContentHeight = isTabBarVisible ? cr : cr - tabBarReservation
+            } else {
+                stableContentHeight = bounds.height
+            }
+            usableH = max(stableContentHeight - inset.height * 2, 1)
         }
-        let usableH = max(stableContentHeight - inset.height * 2, 1)
         let cols = max(Int(floor(usableW / cellW)), 1)
         let rows = max(Int(floor(usableH / cellH)), 1)
 
@@ -876,10 +887,14 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
     private func followTargetY() -> CGFloat? {
         let grid = session.grid
         let inset = backend.contentInset.height
-        if grid.isAltScreenActive || grid.hasUsedSyncOutput {
+        if grid.isAltScreenActive || grid.hasUsedSyncOutput || grid.hasContentBelowCursor {
             // Alt-screen / primary-screen TUI(Claude Code 등) — 라이브 grid 전체가
             // 보이도록 grid-top을 viewport-top에 anchor. (rows*cellH ≤ visHeight라
             // grid가 항상 viewport에 들어감 → 하단 안 잘림.)
+            //
+            // Claude Code는 alt-screen도 sync-output도 안 쓰지만 입력 줄 아래에 status를
+            // 상주시킨다(hasContentBelowCursor). cursor-visible 정책은 cursor만 보이면
+            // 멈춰서 그 status를 fold 밑으로 잘랐다 — grid-top anchor로 해소.
             //
             // 중요: scrollback이 늘어나는 TUI(sync output 누적)에서 cursor-visible
             // 정책을 쓰면, cursor가 이미 보일 때 scroll을 안 해서 매 프레임 scrollback이
@@ -1409,6 +1424,17 @@ public final class HaliteSurfaceView: NSView, NSTextInputClient {
            (0x41...0x5A).contains(scalar) || (0x61...0x7A).contains(scalar) {
             let lower = scalar | 0x20
             session.write(Data([UInt8(lower - 0x60)]))
+            return
+        }
+
+        // Shift+Enter → 입력란 줄바꿈(submit 안 함). AppKit은 Shift+Enter도 일반
+        // Enter와 똑같이 `insertNewline:`으로 보내 둘 다 CR이 나가므로, Claude Code
+        // 같은 TUI가 구분을 못 해 Shift+Enter를 제출로 처리한다. 여기서 가로채 ESC CR을
+        // 보낸다 — claude의 `/terminal-setup`이 Apple Terminal에 심는 매핑과 동일해
+        // "줄바꿈"으로 인식된다. (IME 조합 중이면 통과시켜 정상 commit.)
+        if mods == .shift, event.keyCode == 36 || event.keyCode == 76,
+           markedText.isEmpty {
+            session.write(Data([0x1B, 0x0D])) // ESC CR
             return
         }
 
