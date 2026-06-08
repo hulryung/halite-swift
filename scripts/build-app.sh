@@ -21,7 +21,7 @@ cd "$REPO_ROOT"
 MARKETING_VERSION="${MARKETING_VERSION:-0.1.0}"
 BUILD_NUMBER="${BUILD_NUMBER:-$(date +%s)}"
 
-DIST_DIR="$REPO_ROOT/dist"
+DIST_DIR="${DIST_DIR:-$REPO_ROOT/dist}"
 APP_DIR="$DIST_DIR/Halite.app"
 CONTENTS="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS/MacOS"
@@ -89,11 +89,14 @@ SPARKLE_KEY="${SPARKLE_PUBLIC_KEY:-__SPARKLE_PUBLIC_KEY__}"
 # git hash + 빌드 채널 — dev 빌드는 윈도우에 hash를 표시해 정식과 구분.
 GIT_HASH="${GIT_HASH:-$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)}"
 BUILD_CHANNEL="${BUILD_CHANNEL:-release}"
+# 빌드 시각 — 정식 빌드는 윈도우 우상단에 표시(dev의 git hash와 동일한 자리).
+BUILD_DATE="${BUILD_DATE:-$(date '+%Y-%m-%d %H:%M')}"
 sed -e "s|__MARKETING_VERSION__|$MARKETING_VERSION|g" \
     -e "s|__BUILD_NUMBER__|$BUILD_NUMBER|g" \
     -e "s|__SPARKLE_PUBLIC_KEY__|$SPARKLE_KEY|g" \
     -e "s|__GIT_HASH__|$GIT_HASH|g" \
     -e "s|__BUILD_CHANNEL__|$BUILD_CHANNEL|g" \
+    -e "s|__BUILD_DATE__|$BUILD_DATE|g" \
     "$TEMPLATE" > "$CONTENTS/Info.plist"
 
 # 아이콘 — template의 CFBundleIconFile=Halite를 만족시키도록 Halite.icns 복사.

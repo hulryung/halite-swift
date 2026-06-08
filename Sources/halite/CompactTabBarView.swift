@@ -68,13 +68,14 @@ final class CompactTabBarView: NSView {
         newTabButton.action = #selector(newTabClicked)
         addSubview(newTabButton)
 
-        // dev 빌드면 우측에 git hash 표시 (정식과 구분).
-        if BuildInfo.isDevBuild {
-            devLabel = NSTextField(labelWithString: "dev \(BuildInfo.gitHash ?? "")")
-            devLabel?.font = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
-            devLabel?.textColor = NSColor.systemOrange
-            devLabel?.alignment = .right
-            if let l = devLabel { addSubview(l) }
+        // 우측 배지 — dev 빌드는 git hash(주황), 정식 빌드는 빌드 시각(은은한 색).
+        if let badge = BuildInfo.badgeText {
+            let l = NSTextField(labelWithString: badge)
+            l.font = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
+            l.textColor = BuildInfo.isDevBuild ? .systemOrange : .tertiaryLabelColor
+            l.alignment = .right
+            addSubview(l)
+            devLabel = l
         }
     }
 

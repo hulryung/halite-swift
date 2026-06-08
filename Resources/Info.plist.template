@@ -18,6 +18,8 @@
 	<string>__GIT_HASH__</string>
 	<key>HaliteBuildChannel</key>
 	<string>__BUILD_CHANNEL__</string>
+	<key>HaliteBuildDate</key>
+	<string>__BUILD_DATE__</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleInfoDictionaryVersion</key>
