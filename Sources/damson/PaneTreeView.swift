@@ -223,6 +223,70 @@ final class PaneTreeView: NSView {
         if let target = directionalNeighbor(dir) { setActive(target) }
     }
 
+    /// damson-cli `resize-pane` — nudge the split divider that governs the active pane
+    /// toward `dir` by `fraction` of the relevant axis (one nudge per call). Walks up from
+    /// the active leaf to the nearest ancestor split whose axis matches the direction
+    /// (horizontal split ↔ left/right, vertical split ↔ up/down), then shifts its ratio
+    /// the same way SplitContainer.applyDrag does. Returns false if there's no such split.
+    @discardableResult
+    func resizeActiveDivider(_ dir: PaneFocusDirection, fraction: CGFloat) -> Bool {
+        let wantHorizontal = (dir == .left || dir == .right)
+        // Find the nearest ancestor split on the matching axis, and whether the active
+        // pane lives in its `first` (left/top) subtree — that decides the ratio sign.
+        var child: PaneNode = activeLeaf
+        var node: PaneNode? = activeLeaf.parent
+        while let parent = node {
+            if case .split(let sdir, let first, let second, let ratio) = parent.kind {
+                let axisMatches = (sdir == .horizontal) == wantHorizontal
+                if axisMatches {
+                    let inFirst = containsNode(child, in: first)
+                    // Moving the divider "right"/"down" grows the first (left/top) pane.
+                    // Mirror applyDrag's coordinate handling: vertical splits are bottom-up.
+                    var delta: CGFloat
+                    switch dir {
+                    case .right, .down: delta = fraction
+                    case .left, .up:    delta = -fraction
+                    }
+                    // If the active pane is the second child, a positive nudge in its own
+                    // direction should grow IT, so flip the sign relative to the first pane.
+                    if !inFirst { delta = -delta }
+                    let newRatio = min(0.95, max(0.05, ratio + delta))
+                    parent.kind = .split(direction: sdir, first: first, second: second, ratio: newRatio)
+                    needsLayout = true
+                    return true
+                }
+            }
+            child = parent
+            node = parent.parent
+        }
+        return false
+    }
+
+    /// True if `target` is `subtree` or lives anywhere inside it.
+    private func containsNode(_ target: PaneNode, in subtree: PaneNode) -> Bool {
+        if subtree === target { return true }
+        if case .split(_, let a, let b, _) = subtree.kind {
+            return containsNode(target, in: a) || containsNode(target, in: b)
+        }
+        return false
+    }
+
+    /// Leaf sessions in left-to-right / top-to-bottom traversal order, paired with whether each is active.
+    /// For damson-cli `list-panes`.
+    func paneSessionsInOrder() -> [(session: DamsonSession, active: Bool)] {
+        var out: [(DamsonSession, Bool)] = []
+        func walk(_ node: PaneNode) {
+            switch node.kind {
+            case .leaf(let s, _):
+                out.append((s, node === activeLeaf))
+            case .split(_, let a, let b, _):
+                walk(a); walk(b)
+            }
+        }
+        walk(root)
+        return out
+    }
+
     /// Cmd+Shift+arrow — swap *positions* with the nearest adjacent pane in the given direction.
     func swapDirectional(_ dir: PaneFocusDirection) {
         if let target = directionalNeighbor(dir) { swapActive(with: target) }

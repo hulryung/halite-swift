@@ -10,6 +10,14 @@ import DamsonControl
 //   damson-cli switch-tab 2
 //   damson-cli close-tab
 //   damson-cli list-tabs
+//   damson-cli send-text "ls -la"
+//   damson-cli send-key enter
+//   damson-cli send-key ctrl-c
+//   damson-cli resize-window 120 40
+//   damson-cli resize-pane right 3
+//   damson-cli focus-pane left
+//   damson-cli close-pane
+//   damson-cli list-panes
 //   damson-cli --list-instances
 //   damson-cli --pid 12345 new-tab
 //
@@ -27,10 +35,22 @@ Usage:
 
 Commands:
   new-tab                 Spawn a new tab.
-  split horizontal|vertical   Split the active pane (not supported in damson).
+  split horizontal|vertical   Split the active pane.
   switch-tab <index>      Switch to the tab at the 0-based index.
   close-tab               Close the active tab.
   list-tabs               Print tab list as JSON.
+
+  send-text <text>        Type literal text into the active pane.
+  send-key <name>...      Send named keys/chords to the active pane. One or more of:
+                            enter tab backtab esc space backspace delete
+                            up down left right home end pageup pagedown insert
+                            ctrl-c ctrl-d ctrl-l (ctrl-<a..z>) f1..f12
+  resize-window <cols> <rows>   Resize the active window to a cols×rows grid.
+                                (also accepts <cols>x<rows>, e.g. 120x40)
+  resize-pane <left|right|up|down> [amount]   Nudge the active split divider (amount cells, default 1).
+  focus-pane <left|right|up|down>   Move pane focus.
+  close-pane              Close the active pane.
+  list-panes              Print the active tab's panes as JSON.
 
 Options:
   --pid PID               Target the instance with this PID (default: most recent).
@@ -52,6 +72,12 @@ var positional: [String] = []
 var i = 0
 while i < args.count {
     let a = args[i]
+    // `--` ends option parsing: everything after is positional (so `send-text -- --foo`
+    // can pass text that begins with dashes).
+    if a == "--" {
+        positional.append(contentsOf: args[(i + 1)...])
+        break
+    }
     switch a {
     case "-h", "--help":
         print(usage)
@@ -67,7 +93,10 @@ while i < args.count {
         pidArg = v
         i += 1
     default:
-        if a.hasPrefix("--") {
+        // Options must precede the subcommand. Once a positional (the subcommand) is
+        // seen, treat the rest as literal arguments — so `send-key ctrl-c` and a
+        // `send-text` payload that looks option-like are passed through verbatim.
+        if positional.isEmpty, a.hasPrefix("--") {
             die("unknown option: \(a)")
         }
         positional.append(a)
@@ -117,8 +146,61 @@ case "switch-tab":
         die("switch-tab requires a 0-based integer index")
     }
     cmdKind = .switchTab(index: idx)
+case "send-text":
+    // Join the remaining args with spaces so an unquoted `send-text ls -la` works too;
+    // a single quoted arg passes through verbatim. Empty text is rejected.
+    guard !rest.isEmpty else { die("send-text requires text") }
+    let text = rest.joined(separator: " ")
+    cmdKind = .sendText(text)
+case "send-key":
+    guard !rest.isEmpty else { die("send-key requires at least one key name") }
+    // Validate names up front so a typo fails fast on the client (the server validates again).
+    for name in rest where keyNameToBytes(name) == nil {
+        die("unknown key name: \(name)")
+    }
+    cmdKind = .sendKeys(rest)
+case "resize-window":
+    // Accept "<cols> <rows>" or a single "<cols>x<rows>".
+    let dims: (Int, Int)
+    if rest.count == 1, let d = parseWxH(rest[0]) {
+        dims = d
+    } else if rest.count == 2, let c = Int(rest[0]), let r = Int(rest[1]) {
+        dims = (c, r)
+    } else {
+        die("resize-window requires <cols> <rows> (or <cols>x<rows>)")
+    }
+    guard dims.0 > 0, dims.1 > 0 else { die("resize-window cols/rows must be positive") }
+    cmdKind = .resizeWindow(cols: dims.0, rows: dims.1)
+case "resize-pane":
+    guard rest.count >= 1, let dir = PaneDir(rawValue: rest[0]) else {
+        die("resize-pane requires a direction: left|right|up|down")
+    }
+    var amount = 1
+    if rest.count >= 2 {
+        guard let a = Int(rest[1]), a > 0 else { die("resize-pane amount must be a positive integer") }
+        amount = a
+    }
+    cmdKind = .resizePane(dir: dir, amount: amount)
+case "focus-pane":
+    guard rest.count == 1, let dir = PaneDir(rawValue: rest[0]) else {
+        die("focus-pane requires a direction: left|right|up|down")
+    }
+    cmdKind = .focusPane(dir: dir)
+case "close-pane":
+    guard rest.isEmpty else { die("close-pane takes no arguments") }
+    cmdKind = .closePane
+case "list-panes":
+    guard rest.isEmpty else { die("list-panes takes no arguments") }
+    cmdKind = .listPanes
 default:
     die("unknown command: \(sub)")
+}
+
+/// Parse "120x40" → (120, 40). Returns nil on any malformed input.
+func parseWxH(_ s: String) -> (Int, Int)? {
+    let parts = s.lowercased().split(separator: "x", omittingEmptySubsequences: false)
+    guard parts.count == 2, let c = Int(parts[0]), let r = Int(parts[1]) else { return nil }
+    return (c, r)
 }
 
 let socketPath: String
@@ -134,14 +216,18 @@ case .success(let resp):
         let msg = resp.err ?? "(no error message)"
         die("damson: \(msg)", code: 1)
     }
-    // If the ok response carries tabs, print them as JSON (script-friendly).
-    if let tabs = resp.tabs {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = []
-        if let data = try? encoder.encode(tabs),
-           let s = String(data: data, encoding: .utf8) {
-            print(s)
-        }
+    // If the ok response carries structured data, print it as JSON (script-friendly).
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = []
+    if let tabs = resp.tabs,
+       let data = try? encoder.encode(tabs),
+       let s = String(data: data, encoding: .utf8) {
+        print(s)
+    }
+    if let panes = resp.panes,
+       let data = try? encoder.encode(panes),
+       let s = String(data: data, encoding: .utf8) {
+        print(s)
     }
     exit(0)
 case .failure(let e):

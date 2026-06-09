@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import DamsonControl
 import DamsonTerminal
 
 /// Window controller dedicated to compact mode. A single NSWindow multiplexes N
@@ -801,6 +802,44 @@ final class CompactWindowController: NSWindowController, NSWindowDelegate, TabSw
     func splitActive(direction: SplitDirection) {
         guard currentIndex < tabs.count else { return }
         tabs[currentIndex].tree.split(direction: direction)
+    }
+
+    /// damson-cli `focus-pane` — move focus in the active tab's pane tree.
+    func focusActivePane(_ dir: PaneFocusDirection) {
+        guard currentIndex < tabs.count else { return }
+        tabs[currentIndex].tree.moveFocus(dir)
+    }
+
+    /// damson-cli `close-pane` — close the active tab's active pane (cascades to tab/window when last).
+    func closeActivePane() {
+        guard currentIndex < tabs.count else { return }
+        tabs[currentIndex].tree.closeActive()
+    }
+
+    /// damson-cli `resize-pane` — nudge the divider governing the active pane by `cells`
+    /// in `dir`. Returns false when there's no split on that axis.
+    @discardableResult
+    func resizeActivePane(_ dir: PaneFocusDirection, cells: Int) -> Bool {
+        guard currentIndex < tabs.count, let win = window else { return false }
+        return tabs[currentIndex].tree.resizeActiveDivider(
+            dir, fraction: WindowResize.dividerFraction(dir, cells: cells,
+                                                         session: activeSession, window: win))
+    }
+
+    /// damson-cli `list-panes` — panes of the active tab in traversal order.
+    func paneList() -> [PaneInfo] {
+        guard currentIndex < tabs.count else { return [] }
+        return tabs[currentIndex].tree.paneSessionsInOrder().enumerated().map { (i, pair) in
+            PaneInfo(index: i, cols: pair.session.grid.cols,
+                     rows: pair.session.grid.rows, active: pair.active)
+        }
+    }
+
+    /// damson-cli `resize-window` — size the window so the active terminal is `cols`×`rows`.
+    @discardableResult
+    func resizeWindowToGrid(cols: Int, rows: Int) -> Bool {
+        guard let win = window, let session = activeSession else { return false }
+        return WindowResize.resize(window: win, to: (cols, rows), basedOn: session)
     }
 
     /// Number of panes (leaves) in each tab — for the list-tabs IPC response.

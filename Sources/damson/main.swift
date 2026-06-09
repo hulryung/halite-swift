@@ -111,6 +111,40 @@ final class DamsonWindowController: NSWindowController, NSWindowDelegate {
         tree.split(direction: direction)
     }
 
+    /// damson-cli `focus-pane` — move focus in the pane tree.
+    func focusActivePane(_ dir: PaneFocusDirection) {
+        tree.moveFocus(dir)
+    }
+
+    /// damson-cli `close-pane` — close the active pane (cascades to window when last).
+    func closeActivePane() {
+        tree.closeActive()
+    }
+
+    /// damson-cli `resize-pane` — nudge the divider governing the active pane.
+    @discardableResult
+    func resizeActivePane(_ dir: PaneFocusDirection, cells: Int) -> Bool {
+        guard let win = window else { return false }
+        return tree.resizeActiveDivider(
+            dir, fraction: WindowResize.dividerFraction(dir, cells: cells,
+                                                         session: activeSession, window: win))
+    }
+
+    /// damson-cli `list-panes` — panes in traversal order.
+    func paneList() -> [PaneInfo] {
+        tree.paneSessionsInOrder().enumerated().map { (i, pair) in
+            PaneInfo(index: i, cols: pair.session.grid.cols,
+                     rows: pair.session.grid.rows, active: pair.active)
+        }
+    }
+
+    /// damson-cli `resize-window` — size the window so the active terminal is `cols`×`rows`.
+    @discardableResult
+    func resizeWindowToGrid(cols: Int, rows: Int) -> Bool {
+        guard let win = window, let session = activeSession else { return false }
+        return WindowResize.resize(window: win, to: (cols, rows), basedOn: session)
+    }
+
     /// Cmd+W — close the active pane. If it's the last pane, onAllPanesClosed closes the window.
     @objc func performCloseTab(_ sender: Any?) {
         tree.closeActive()
@@ -289,6 +323,98 @@ final class DamsonAppDelegate: NSObject, NSApplicationDelegate {
             }
             let tabs = currentNativeTabs()
             return .tabs(tabs.enumerated().map { (i, _) in TabInfo(index: i, pane_count: 1) })
+
+        // MARK: Remote input & pane control
+
+        case .sendText(let text):
+            guard let session = activeControlSession() else { return .err("no active pane") }
+            guard let data = text.data(using: .utf8) else { return .err("invalid UTF-8 text") }
+            session.write(data)
+            return .ok()
+
+        case .sendKeys(let names):
+            guard let session = activeControlSession() else { return .err("no active pane") }
+            // Validate every name first so a partial chord isn't half-sent on a typo.
+            var sequence = Data()
+            for name in names {
+                guard let bytes = keyNameToBytes(name) else {
+                    return .err("unknown key name: \(name)")
+                }
+                sequence.append(contentsOf: bytes)
+            }
+            session.write(sequence)
+            return .ok()
+
+        case .resizeWindow(let cols, let rows):
+            if let active = activeCompact() {
+                return active.resizeWindowToGrid(cols: cols, rows: rows)
+                    ? .ok() : .err("no active pane to size")
+            }
+            if let single = activeSingleController() {
+                return single.resizeWindowToGrid(cols: cols, rows: rows)
+                    ? .ok() : .err("no active pane to size")
+            }
+            return .err("no active window to resize")
+
+        case .resizePane(let dir, let amount):
+            let focusDir = paneFocusDirection(dir)
+            if let active = activeCompact() {
+                return active.resizeActivePane(focusDir, cells: amount)
+                    ? .ok() : .err("active pane has no split to resize toward \(dir.rawValue)")
+            }
+            if let single = activeSingleController() {
+                return single.resizeActivePane(focusDir, cells: amount)
+                    ? .ok() : .err("active pane has no split to resize toward \(dir.rawValue)")
+            }
+            return .err("no active window")
+
+        case .focusPane(let dir):
+            let focusDir = paneFocusDirection(dir)
+            if let active = activeCompact() {
+                active.focusActivePane(focusDir)
+                return .ok()
+            }
+            if let single = activeSingleController() {
+                single.focusActivePane(focusDir)
+                return .ok()
+            }
+            return .err("no active window")
+
+        case .closePane:
+            if let active = activeCompact() {
+                active.closeActivePane()
+                return .ok()
+            }
+            if let single = activeSingleController() {
+                single.closeActivePane()
+                return .ok()
+            }
+            return .err("no active window")
+
+        case .listPanes:
+            if let active = activeCompact() {
+                return .panes(active.paneList())
+            }
+            if let single = activeSingleController() {
+                return .panes(single.paneList())
+            }
+            return .err("no active window")
+        }
+    }
+
+    /// The active pane's session, resolving across compact and single-session controllers.
+    @MainActor
+    private func activeControlSession() -> DamsonSession? {
+        activeCompact()?.activeSession ?? activeSingleController()?.activeSession
+    }
+
+    /// Map the wire-level pane direction onto the local pane-focus enum.
+    private func paneFocusDirection(_ dir: PaneDir) -> PaneFocusDirection {
+        switch dir {
+        case .left: return .left
+        case .right: return .right
+        case .up: return .up
+        case .down: return .down
         }
     }
 
