@@ -134,12 +134,12 @@ final class SelectionLogicTests: XCTestCase {
         XCTAssertEqual(r.map { String(Array(text)[$0]) }, "~/.config/foo.toml")
     }
 
-    func testSmartIdentifierFallback() {
+    func testSmartPlainWordNoMatch() {
+        // A plain identifier has no smart token → caller falls back to word span.
         let text = "let value_count = 3"
         let idx = text.distance(from: text.startIndex,
                                 to: text.range(of: "count")!.lowerBound)
-        let r = SelectionLogic.smartTokenRange(in: text, at: idx)
-        XCTAssertEqual(r.map { String(Array(text)[$0]) }, "value_count")
+        XCTAssertNil(SelectionLogic.smartTokenRange(in: text, at: idx))
     }
 
     func testSmartNoMatchOnWhitespace() {

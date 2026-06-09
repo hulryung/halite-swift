@@ -30,6 +30,7 @@ struct DamsonSettingsView: View {
     @AppStorage("damson.pressAndHold") private var pressAndHold: Bool = false
     @AppStorage("damson.copyOnSelect") private var copyOnSelect: Bool = true
     @AppStorage("damson.scrollSpeed") private var scrollSpeed: Double = 1.0
+    @AppStorage("damson.wordSeparators") private var wordSeparators: String = ""
     @AppStorage("damson.tabBarTransparent") private var tabBarTransparent: Bool = false
 
     private let nerdFonts = FontDiscovery.nerdFontFamilies()
@@ -65,6 +66,7 @@ struct DamsonSettingsView: View {
         .onChange(of: glyphDisappearRaw) { _ in postChanged() }
         .onChange(of: copyOnSelect) { _ in postChanged() }
         .onChange(of: scrollSpeed) { _ in postChanged() }
+        .onChange(of: wordSeparators) { _ in postChanged() }
         .onChange(of: pressAndHold) { v in
             // Update the system key immediately (full effect after restart). Off = key repeat, on = accent popup.
             UserDefaults.standard.set(v, forKey: "ApplePressAndHoldEnabled")
@@ -255,6 +257,15 @@ struct DamsonSettingsView: View {
             Section("Selection") {
                 Toggle("Copy on select", isOn: $copyOnSelect)
                 Text("When on (default), selecting text (drag, or double-/triple-click) copies it to the clipboard immediately.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                HStack {
+                    Text("Word separators")
+                    TextField("(none)", text: $wordSeparators)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 160)
+                }
+                Text("Extra characters that break a word on double-click (whitespace always breaks). Leave empty so paths and identifiers like /usr/local/bin select as one word.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -566,6 +577,7 @@ extension DamsonConfig {
         if let s = d.object(forKey: "damson.scrollSpeed") as? Double {
             config.scrollSpeed = CGFloat(max(0.25, min(4.0, s)))
         }
+        config.wordSeparators = d.string(forKey: "damson.wordSeparators") ?? ""
         config.animations = d.object(forKey: "damson.animations") as? Bool ?? true
         if let raw = d.string(forKey: "damson.cursorShape"),
            let shape = Grid.CursorShape(rawValue: raw) {

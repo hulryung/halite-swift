@@ -58,6 +58,10 @@ public struct DamsonConfig {
     /// Speed multiplier when forwarding trackpad-wheel events to a mouse-reporting TUI (Claude Code, etc.).
     /// 1.0 = ≈one wheel tick per line of movement. Higher is faster. No effect on native scrollback scrolling.
     public var scrollSpeed: CGFloat
+    /// Characters that break a word for double-click selection. Whitespace/tab
+    /// always break regardless. Default is empty so `-_/.` and similar stay part
+    /// of a word, letting paths and identifiers select cleanly.
+    public var wordSeparators: String
 
     // Colors are derived from the theme — computed properties for backward compatibility with existing call sites.
     public var backgroundColor: NSColor { theme.background }
@@ -89,6 +93,7 @@ public struct DamsonConfig {
         glyphDisappear: GlyphAnimStyle = .none,
         copyOnSelect: Bool = true,
         scrollSpeed: CGFloat = 1.0,
+        wordSeparators: String = "",
         argv: [String] = DamsonConfig.defaultArgv(),
         env: [String: String] = DamsonConfig.defaultEnv(),
         cwd: String? = nil
@@ -112,6 +117,7 @@ public struct DamsonConfig {
         self.glyphDisappear = glyphDisappear
         self.copyOnSelect = copyOnSelect
         self.scrollSpeed = scrollSpeed
+        self.wordSeparators = wordSeparators
         self.argv = argv
         self.env = env
         self.cwd = cwd

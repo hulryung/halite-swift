@@ -767,20 +767,88 @@ public final class DamsonSurfaceView: NSView, NSTextInputClient {
     }
 
     private func isWordBreak(_ c: Character) -> Bool {
-        // Word boundary — whitespace/tab only. CJK isn't word-segmented, but use whitespace for now.
-        c == " " || c == "\t"
+        // Whitespace/tab always break; the user's configured separators add more.
+        SelectionLogic.isWordBreak(c, separators: session.config.wordSeparators)
     }
 
-    /// Smart double-click token recognition (URL / path / email / identifier).
-    /// Implemented in Bundle 4; returns nil until then so word selection runs.
+    /// Smart double-click token recognition. Builds the clicked logical line
+    /// (spanning soft-wrapped rows), runs the ordered smart rules (URL / email /
+    /// path / identifier), and maps the matched char range back to (row, col)
+    /// selection endpoints. Returns nil if no rule matches → caller falls back to
+    /// plain whitespace word selection.
     private func smartSelectionBounds(
         _ pos: (row: Int, col: Int)
     ) -> ((row: Int, col: Int), (row: Int, col: Int))? {
-        nil
+        let line = logicalLine(containing: pos.row)
+        // Build flat text + a per-character (row, col) map. Continuation cells are
+        // skipped so a char index maps to the wide glyph's leading column.
+        var text = ""
+        var charToCell: [(row: Int, col: Int)] = []
+        var clickCharIndex: Int?
+        for (row, cells) in line {
+            for (col, cell) in cells.enumerated() {
+                if cell.isContinuation { continue }
+                // Track the nearest real char at or before the clicked column (a
+                // click can land on a wide-char continuation or padding cell).
+                if row == pos.row && col <= pos.col { clickCharIndex = text.count }
+                text.append(cell.char)
+                charToCell.append((row, col))
+            }
+        }
+        guard let idx = clickCharIndex,
+              let range = SelectionLogic.smartTokenRange(in: text, at: idx),
+              range.lowerBound < charToCell.count,
+              range.upperBound - 1 < charToCell.count, range.upperBound > 0 else { return nil }
+        let startCell = charToCell[range.lowerBound]
+        let endCell = charToCell[range.upperBound - 1]
+        // end is exclusive in selection terms → one column past the last char's cell.
+        return (startCell, (endCell.row, endCell.col + 1))
     }
 
-    /// Implemented in Bundle 4 (semantic / OSC 133 command output copy).
-    private func copyLastCommandOutputImpl() {}
+    /// The contiguous run of unified rows that form the soft-wrapped logical line
+    /// containing `row`, as (row, cells) pairs in top-to-bottom order. A row that
+    /// is `wrapped` continues into the next; walk both directions from `row`.
+    private func logicalLine(containing row: Int) -> [(row: Int, cells: [Cell])] {
+        let grid = session.grid
+        let total = grid.scrollback.count + grid.rows
+        guard row >= 0, row < total else { return [] }
+        var startRow = row
+        while startRow > 0 && rowWrappedToNext(startRow - 1) { startRow -= 1 }
+        var endRow = row
+        while endRow < total - 1 && rowWrappedToNext(endRow) { endRow += 1 }
+        var out: [(row: Int, cells: [Cell])] = []
+        for r in startRow...endRow { out.append((r, cellsForTextViewRow(r))) }
+        return out
+    }
+
+    /// Semantic / OSC 133 command-output copy. Selects + copies the most recent
+    /// command's output region using the recorded prompt-start marks. No-op (with
+    /// a beep) when there are no usable marks.
+    private func copyLastCommandOutputImpl() {
+        let grid = session.grid
+        let sbCount = grid.scrollback.count
+        let pushCount = Int(grid.scrollbackPushCount)
+        // Map absolute mark line numbers → current unified rows, dropping evicted ones.
+        let markRows = session.promptMarks
+            .map { sbCount + Int($0) - pushCount }
+            .filter { $0 >= 0 }
+        let cursorRow = sbCount + grid.cursorRow
+        guard let range = SelectionLogic.lastCommandOutputRows(
+            promptRows: markRows, cursorRow: cursorRow
+        ) else { NSSound.beep(); return }
+        let total = sbCount + grid.rows
+        let startRow = max(0, min(range.lowerBound, total - 1))
+        let endRow = max(startRow, min(range.upperBound, total - 1))
+        selectionRectangular = false
+        selectionGranularity = .character
+        selectionAnchor = (startRow, 0)
+        selectionHead = (endRow, cellsForTextViewRow(endRow).count)
+        scheduleRender()
+        guard let text = selectedText(), !text.isEmpty else { NSSound.beep(); return }
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(text, forType: .string)
+    }
 
     public override func mouseDragged(with event: NSEvent) {
         // In cell-motion / any-motion mode, forward drag to the PTY too.

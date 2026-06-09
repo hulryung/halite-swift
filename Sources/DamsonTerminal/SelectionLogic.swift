@@ -89,10 +89,15 @@ public enum SelectionLogic {
     // MARK: - Smart selection rules
 
     /// An ordered set of recognizers tried at double-click before falling back to
-    /// plain word selection. Each returns the half-open char range of the matched
-    /// token covering `index`, or nil.
+    /// plain (separator-aware) word selection. Each returns the half-open char
+    /// range of the matched token covering `index`, or nil.
+    ///
+    /// Note: there is intentionally no generic "identifier" rule here — plain
+    /// words are left to the caller's `wordSpan` so the user's configurable word
+    /// separators stay authoritative. Smart rules only fire for the structured
+    /// tokens (URL / email / path) that benefit from dedicated recognition.
     public enum SmartRule: CaseIterable {
-        case url, email, path, identifier
+        case url, email, path
     }
 
     /// Try each smart rule in order against `text`, returning the first token
@@ -128,14 +133,6 @@ public enum SelectionLogic {
                 return r
             }
             return nil
-        case .identifier:
-            // Word with common identifier chars (letters, digits, _-./ and CJK).
-            return contiguousTokenRange(
-                chars, index,
-                allowed: { c in
-                    c.isLetter || c.isNumber || c == "_" || c == "-"
-                        || c == "." || c == "/"
-                })
         }
     }
 
@@ -180,26 +177,17 @@ public enum SelectionLogic {
 
     // MARK: - Semantic (command) selection from prompt marks
 
-    /// Given the sorted unified-row indices of prompt-start marks and the current
-    /// cursor row, return the [startRow, endRow] (inclusive) of the most recent
-    /// command's output region. The output sits between the last two prompt marks,
-    /// or from the last prompt mark to the cursor when only one mark exists.
-    /// Returns nil when there are no usable marks.
+    /// Given the unified-row indices of prompt-start marks (OSC 133;A) and the
+    /// current cursor row, return the inclusive [startRow, endRow] of the most
+    /// recent command's output. The most recent prompt sits at the last mark; the
+    /// command echo + its output run from the row below that prompt down to the
+    /// cursor. Returns nil when there are no usable marks. The start is clamped to
+    /// the cursor so an empty (cursor-on-prompt) region still yields a valid range.
     public static func lastCommandOutputRows(
         promptRows: [Int], cursorRow: Int
     ) -> ClosedRange<Int>? {
-        let marks = promptRows.sorted()
-        guard let last = marks.last else { return nil }
-        // The output starts on the line after the prompt line (the command echo +
-        // its output). Use the row just below the last prompt as the start.
+        guard let last = promptRows.max() else { return nil }
         let start = last + 1
-        if marks.count >= 2 {
-            // From the second-to-last prompt's output start up to just before the
-            // last prompt is the *previous* command. The most recent command's
-            // output is from the last prompt to the cursor.
-            let end = max(start, cursorRow)
-            return start...end
-        }
         let end = max(start, cursorRow)
         return start...end
     }
