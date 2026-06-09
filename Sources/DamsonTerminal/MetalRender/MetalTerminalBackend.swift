@@ -955,6 +955,18 @@ final class MetalTerminalBackend: TerminalRenderBackend {
     var contentHeight: CGFloat { CGFloat(lastTotalRows) * max(metrics.height, 1) + inset.height * 2 }
     var viewportHeight: CGFloat { metalView.bounds.height }
 
+    /// Jump to `y` and refresh scroll geometry WITHOUT presenting a frame. The
+    /// caller renders immediately after, so the followed position lands in that one
+    /// frame. `totalRows` primes `lastTotalRows` (which `render()` normally sets)
+    /// so the maxY clamp matches the content height of the frame about to be drawn.
+    func alignScroll(to y: CGFloat, totalRows: Int) {
+        lastTotalRows = totalRows
+        scroll.maxY = max(0, contentHeight - viewportHeight)
+        animLink.stop()              // a hard jump cancels any in-flight ease
+        scroll.jump(to: y)
+        onScrollGeometryChanged?()
+    }
+
     func setScrollY(_ y: CGFloat, animated: Bool) {
         scroll.maxY = max(0, contentHeight - viewportHeight)
         guard animated else {

@@ -149,6 +149,12 @@ public protocol TerminalRenderBackend: AnyObject {
     var scrollYPixels: CGFloat { get }
     /// Scroll to a content-pixel offset; `animated` drives the smooth snap.
     func setScrollY(_ y: CGFloat, animated: Bool)
+    /// Jump to a content-pixel offset *without* presenting a frame, priming the
+    /// content-height clamp with `totalRows` for the frame about to be drawn. The
+    /// host calls this right before `render()` to follow new output, so the frame
+    /// is presented once at the final position instead of being drawn at the stale
+    /// position and corrected on a second frame (a one-row scroll flicker).
+    func alignScroll(to y: CGFloat, totalRows: Int)
     /// Handle a scroll-wheel/trackpad event. Returns `true` if the backend
     /// consumed it (and scrolled), so the host won't fall through to a no-op
     /// `super.scrollWheel`. The Metal backend applies the delta itself.

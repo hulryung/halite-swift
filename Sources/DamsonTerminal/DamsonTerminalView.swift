@@ -1821,14 +1821,11 @@ public final class DamsonSurfaceView: NSView, NSTextInputClient {
         lastRenderedHoverKey = hoverKey
         lastRenderedBlinkKey = blinkKey
 
-        // The backend draws a frame (including ensureLayout). Dedupe was done above.
-        backend.render(grid: grid, config: session.config, state: currentRenderState(),
-                       metrics: cellMetrics)
-
-        // Automatic follow-scroll only happens while followingBottom. If the user
-        // is scrolled up viewing history, the position isn't touched even when new
-        // output / cursor movement arrives (except the content-anchor correction
-        // on scrollback evict, handled separately below).
+        // Align the scroll position to the follow target BEFORE drawing, so output
+        // that scrolls the grid is presented once at the final position. Drawing
+        // first and correcting the position afterward (the old order) presented a
+        // stale frame one row off, then the corrected one — a one-row vertical
+        // flicker on every scroll-in line in TUIs like Claude Code / hermes.
 
         // When an alt-screen transition (primary↔alt) occurs, resume follow.
         // vim/htop etc. must always show that screen on entry and the shell bottom
@@ -1852,25 +1849,27 @@ public final class DamsonSurfaceView: NSView, NSTextInputClient {
             ? Int(evictedTotal - lastEvictedTotal) : 0
         lastEvictedTotal = evictedTotal
 
-        var scrolled = false
+        let totalRows = grid.scrollback.count + grid.rows
         if followingBottom {
             // During a key-input jump animation, the animation owns the position — don't scroll immediately.
             // Alt screen uses the viewport top anchor; otherwise (normal shell/
             // Claude Code, etc.) the cursor-visible policy. followTargetY() computes both cases uniformly.
             if !isSnappingToCursor, let targetY = followTargetY() {
-                backend.setScrollY(targetY, animated: false)
-                scrolled = true
+                backend.alignScroll(to: targetY, totalRows: totalRows)
             }
         } else if evictedSinceLast > 0 {
             // The user is scrolled up viewing history — scroll up by the amount of
             // scrollback evicted so the line they're viewing stays at the same on-screen position (content-anchor).
             let curY = backend.scrollYPixels
             let adjusted = max(0, curY - CGFloat(evictedSinceLast) * cellMetrics.height)
-            backend.setScrollY(adjusted, animated: false)
-            scrolled = true
+            backend.alignScroll(to: adjusted, totalRows: totalRows)
         }
         // else: leave the position the user scrolled up to as-is (no forced bottom pinning).
-        if !scrolled { backend.reflectScroll() }
+
+        // The backend draws a frame (including ensureLayout) at the aligned
+        // position. Dedupe was done above.
+        backend.render(grid: grid, config: session.config, state: currentRenderState(),
+                       metrics: cellMetrics)
 
         refreshCursorOverlayNow()
     }
