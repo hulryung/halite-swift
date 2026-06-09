@@ -15,12 +15,12 @@ public enum ScreenEffect: String, CaseIterable, Sendable {
 
     public var displayName: String {
         switch self {
-        case .none: return "None (없음)"
-        case .crt: return "CRT (스캔라인·글로우)"
-        case .greenPhosphor: return "Green Phosphor (초록 단색 CRT)"
-        case .amberPhosphor: return "Amber Phosphor (호박색 단색 CRT)"
-        case .grayscale: return "Grayscale (흑백)"
-        case .bloom: return "Bloom (부드러운 글로우)"
+        case .none: return "None"
+        case .crt: return "CRT (scanlines + glow)"
+        case .greenPhosphor: return "Green Phosphor (green monochrome CRT)"
+        case .amberPhosphor: return "Amber Phosphor (amber monochrome CRT)"
+        case .grayscale: return "Grayscale (black & white)"
+        case .bloom: return "Bloom (soft glow)"
         }
     }
 

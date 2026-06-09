@@ -111,7 +111,7 @@ struct DamsonSettingsView: View {
                         .frame(width: 220, alignment: .leading)
                 }
                 Toggle("Ligatures", isOn: $ligatures)
-                Text("=> != -> === 등 프로그래밍 리가처. 폰트가 지원할 때만 보입니다 (Fira Code, JetBrains Mono, D2CodingLigature 등).")
+                Text("Programming ligatures like => != -> ===. Shown only when the font supports them (Fira Code, JetBrains Mono, D2CodingLigature, etc.).")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -136,7 +136,7 @@ struct DamsonSettingsView: View {
                     }
                 }
                 Toggle("Transparent tab bar", isOn: $tabBarTransparent)
-                Text("끄면(기본) 탭바가 테마 배경색의 솔리드, 켜면 frosted-glass 투명.")
+                Text("When off (default), the tab bar is a solid theme background color; when on, it's frosted-glass translucent.")
                     .font(.caption)
                     .foregroundColor(.secondary)
                 Toggle("Show Scrollbar", isOn: $showScrollbar)
@@ -151,7 +151,7 @@ struct DamsonSettingsView: View {
                     }
                 }
                 Toggle("Focus follows mouse", isOn: $focusFollowsMouse)
-                Text("켜면(기본) 클릭 없이 마우스 커서가 올라간 pane이 활성화됩니다. 분할(split)된 창에서만 의미가 있습니다.")
+                Text("When on (default), the pane under the mouse cursor activates without a click. Only meaningful in split windows.")
                     .font(.caption)
                     .foregroundColor(.secondary)
                 Picker("New Tab Directory", selection: $newTabDirRaw) {
@@ -159,7 +159,7 @@ struct DamsonSettingsView: View {
                         Text(policy.displayName).tag(policy.rawValue)
                     }
                 }
-                Text("새 탭 시작 위치. split(분할)은 항상 현재 pane의 디렉토리를 상속합니다. 셸 통합(zsh OSC 7)이 자동 주입됩니다.")
+                Text("Starting location for new tabs. Splits always inherit the current pane's directory. Shell integration (zsh OSC 7) is injected automatically.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -173,7 +173,7 @@ struct DamsonSettingsView: View {
                 }
                 Toggle("Background Blur (frosted glass)", isOn: $backgroundBlur)
                     .disabled(backgroundOpacity >= 1.0)
-                Text("배경 불투명도를 낮추면 창 뒤가 비칩니다. 블러는 그 뒤를 frosted-glass로 흐립니다(불투명도 100%면 효과 없음).")
+                Text("Lowering the background opacity lets what's behind the window show through. Blur frosts that backdrop like frosted glass (no effect at 100% opacity).")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -198,22 +198,22 @@ struct DamsonSettingsView: View {
                         .frame(width: 40, alignment: .trailing)
                 }
                 .disabled(screenEffectRaw == ScreenEffect.none.rawValue)
-                Text("화면 전체에 입히는 효과. CRT/인광/블룸 등(정적 — idle 시 추가 비용 없음).")
+                Text("An effect applied across the whole screen — CRT, phosphor, bloom, and more (static — no extra cost when idle).")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
             Section("Text Animation") {
-                Picker("On Type (생성)", selection: $glyphAppearRaw) {
+                Picker("On Type (appear)", selection: $glyphAppearRaw) {
                     ForEach(GlyphAnimStyle.allCases, id: \.rawValue) { s in
                         Text(s.appearDisplayName()).tag(s.rawValue)
                     }
                 }
-                Picker("On Delete (소멸)", selection: $glyphDisappearRaw) {
+                Picker("On Delete (disappear)", selection: $glyphDisappearRaw) {
                     ForEach(GlyphAnimStyle.allCases, id: \.rawValue) { s in
                         Text(s.disappearDisplayName()).tag(s.rawValue)
                     }
                 }
-                Text("커서 근처에서 글자가 생기거나 지워질 때 짧게 재생되는 애니메이션. 타이핑/지우기에만 적용(스크롤·대량 출력 제외).")
+                Text("A short animation played when glyphs appear or are erased near the cursor. Applies only to typing and deleting (excludes scrolling and bulk output).")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -245,7 +245,7 @@ struct DamsonSettingsView: View {
                 Toggle("Blink", isOn: $cursorBlink)
                 Toggle("Animations", isOn: $animations)
             }
-            Section("IME Composition (한글/일본어/중국어 조합 표시)") {
+            Section("IME Composition (Korean / Japanese / Chinese composition display)") {
                 Picker("Style", selection: $imeStyleRaw) {
                     ForEach(IMECompositionStyle.allCases, id: \.rawValue) { style in
                         Text(style.displayName).tag(style.rawValue)
@@ -254,7 +254,7 @@ struct DamsonSettingsView: View {
             }
             Section("Selection") {
                 Toggle("Copy on select", isOn: $copyOnSelect)
-                Text("켜면(기본) 텍스트를 선택(드래그/더블·트리플 클릭)하는 즉시 클립보드에 복사됩니다.")
+                Text("When on (default), selecting text (drag, or double-/triple-click) copies it to the clipboard immediately.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -266,13 +266,13 @@ struct DamsonSettingsView: View {
                         .monospacedDigit()
                         .frame(width: 48, alignment: .trailing)
                 }
-                Text("Claude Code·tmux 등 마우스 추적 TUI에서 트랙패드 스크롤 속도. 낮추면 느리게. (일반 scrollback 스크롤엔 영향 없음)")
+                Text("Trackpad scroll speed in mouse-tracking TUIs like Claude Code and tmux. Lower is slower. (No effect on normal scrollback scrolling.)")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
             Section("Keyboard") {
                 Toggle("Press and hold for accents", isOn: $pressAndHold)
-                Text("끄면(기본) 모든 키가 길게 누름에 반복 입력됩니다(터미널 표준). 켜면 macOS 기본 동작 — a·e 등 일부 키는 길게 누를 때 악센트 팝업이 떠 반복이 안 됩니다. 변경은 앱 재시작 후 적용.")
+                Text("When off (default), every key repeats on press-and-hold (the terminal standard). When on, macOS default behavior applies — some keys like a/e show an accent popup on hold instead of repeating. Changes take effect after an app restart.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -285,7 +285,7 @@ struct DamsonSettingsView: View {
         Form {
             Section("Updates") {
                 Toggle("Automatic Updates", isOn: $autoUpdate)
-                Text("켜면 백그라운드에서 새 버전을 확인합니다. \"Check for Updates…\"로 언제든 수동 확인 가능.")
+                Text("When on, checks for new versions in the background. You can always check manually via \"Check for Updates…\".")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -594,10 +594,10 @@ extension DamsonConfig {
 extension IMECompositionStyle {
     var displayName: String {
         switch self {
-        case .none: return "None (표시 없음, 디폴트)"
-        case .underline: return "Underline (얇게)"
-        case .thickUnderline: return "Thick Underline (두껍게)"
-        case .background: return "Background (배경)"
+        case .none: return "None (no display, default)"
+        case .underline: return "Underline (thin)"
+        case .thickUnderline: return "Thick Underline (thick)"
+        case .background: return "Background (highlight)"
         case .both: return "Background + Underline"
         }
     }

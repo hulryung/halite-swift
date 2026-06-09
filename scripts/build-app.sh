@@ -75,7 +75,7 @@ if [[ -d "$SPARKLE_FW" ]]; then
     # Add an RPATH so the standard Frameworks/ location is found (ignored if already present).
     install_name_tool -add_rpath "@executable_path/../Frameworks" "$MACOS_DIR/damson" 2>/dev/null || true
 else
-    echo "warning: $SPARKLE_FW 없음 — 자동업데이트 동작 안 함. swift build 결과 확인" >&2
+    echo "warning: $SPARKLE_FW missing — auto-update won't work. Check the swift build output." >&2
 fi
 
 # Info.plist — token substitution.

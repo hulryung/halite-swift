@@ -19,9 +19,9 @@ enum TabBarStyle: String, CaseIterable {
 
     var displayName: String {
         switch self {
-        case .compact: return "Compact (신호등 옆)"
-        case .standard: return "Standard (항상 표시)"
-        case .auto: return "Auto (2탭 이상일 때)"
+        case .compact: return "Compact (next to the traffic lights)"
+        case .standard: return "Standard (always shown)"
+        case .auto: return "Auto (when 2+ tabs)"
         }
     }
 

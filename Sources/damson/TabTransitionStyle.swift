@@ -15,9 +15,9 @@ enum TabTransitionStyle: String, CaseIterable {
 
     var displayName: String {
         switch self {
-        case .slide: return "Slide (페이지 스와이프)"
-        case .crossfade: return "Crossfade (살짝 밀림)"
-        case .none: return "None (즉시)"
+        case .slide: return "Slide (page swipe)"
+        case .crossfade: return "Crossfade (slight push)"
+        case .none: return "None (instant)"
         }
     }
 

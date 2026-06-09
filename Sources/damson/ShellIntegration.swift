@@ -54,8 +54,8 @@ enum ShellIntegration {
         let hook = """
 
         # --- damson shell integration ---
-        # 매 프롬프트마다: OSC 7로 cwd 보고(새 split/탭이 cwd 상속) + OSC 133;A로
-        # 프롬프트 줄 마크(⌘↑/⌘↓ 프롬프트 점프).
+        # On every prompt: report cwd via OSC 7 (new splits/tabs inherit cwd) + mark the
+        # prompt line via OSC 133;A (⌘↑/⌘↓ prompt jump).
         _damson_precmd() {
           printf '\\033]7;file://%s%s\\033\\\\' "${HOST}" "${PWD}"
           printf '\\033]133;A\\033\\\\'

@@ -16,23 +16,23 @@ public enum GlyphAnimStyle: String, CaseIterable, Sendable {
 
     public func appearDisplayName() -> String {
         switch self {
-        case .none:     return "None (없음)"
+        case .none:     return "None"
         case .fade:     return "Fade in"
-        case .pop:      return "Pop (튀어나오며)"
-        case .slide:    return "Slide up (올라오며)"
-        case .dissolve: return "Dissolve (모이며)"
-        case .burst:    return "Burst (알록달록 모이며)"
+        case .pop:      return "Pop (springing out)"
+        case .slide:    return "Slide up (rising in)"
+        case .dissolve: return "Dissolve (gathering in)"
+        case .burst:    return "Burst (colorful gather-in)"
         }
     }
 
     public func disappearDisplayName() -> String {
         switch self {
-        case .none:     return "None (없음)"
+        case .none:     return "None"
         case .fade:     return "Fade out"
-        case .pop:      return "Collapse (줄어들며)"
-        case .slide:    return "Slide down (내려가며)"
-        case .dissolve: return "Dissolve (흩어지며)"
-        case .burst:    return "Burst (알록달록 터지며)"
+        case .pop:      return "Collapse (shrinking away)"
+        case .slide:    return "Slide down (dropping out)"
+        case .dissolve: return "Dissolve (scattering away)"
+        case .burst:    return "Burst (colorful burst-out)"
         }
     }
 

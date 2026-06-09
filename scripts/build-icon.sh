@@ -13,24 +13,24 @@ PNG_1024="$REPO_ROOT/Resources/Damson-1024.png"
 DST_ICNS="$REPO_ROOT/Resources/Damson.icns"
 
 if [[ ! -f "$SRC_SVG" ]]; then
-    echo "error: $SRC_SVG 없음" >&2
+    echo "error: $SRC_SVG not found" >&2
     exit 1
 fi
 if command -v rsvg-convert >/dev/null 2>&1; then
     echo "==> rsvg-convert 1024px PNG"
     rsvg-convert -w 1024 -h 1024 "$SRC_SVG" -o "$PNG_1024"
 elif command -v qlmanage >/dev/null 2>&1; then
-    echo "==> qlmanage 1024px PNG (rsvg-convert 없음 → 폴백)"
+    echo "==> qlmanage 1024px PNG (rsvg-convert missing → fallback)"
     QL_DIR=$(mktemp -d -t damson-ql)
     trap 'rm -rf "$QL_DIR"' EXIT
     qlmanage -t -s 1024 -o "$QL_DIR" "$SRC_SVG" >/dev/null 2>&1
     mv "$QL_DIR/$(basename "$SRC_SVG").png" "$PNG_1024"
 else
-    echo "error: rsvg-convert 또는 qlmanage 필요. brew install librsvg" >&2
+    echo "error: rsvg-convert or qlmanage required. brew install librsvg" >&2
     exit 1
 fi
 
-echo "==> sips로 multi-size + iconutil"
+echo "==> sips multi-size + iconutil"
 ICONSET_DIR=$(mktemp -d -t damson-icns)
 trap 'rm -rf "$ICONSET_DIR" "${QL_DIR:-}"' EXIT
 ICONSET="$ICONSET_DIR/icon.iconset"

@@ -28,4 +28,4 @@ GIT_HASH="$HASH" BUILD_CHANNEL=dev \
 
 echo "==> launching dist/Damson.app"
 open -n "$REPO_ROOT/dist/Damson.app"
-echo "    (윈도우에 'dev $HASH' 표시됨)"
+echo "    (window shows 'dev $HASH')"

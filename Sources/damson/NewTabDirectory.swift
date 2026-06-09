@@ -11,8 +11,8 @@ enum NewTabDirectory: String, CaseIterable {
 
     var displayName: String {
         switch self {
-        case .home: return "Home (홈 디렉토리)"
-        case .inheritCwd: return "Current (현재 디렉토리 상속)"
+        case .home: return "Home (home directory)"
+        case .inheritCwd: return "Current (inherit current directory)"
         }
     }
 

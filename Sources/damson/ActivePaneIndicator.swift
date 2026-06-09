@@ -19,10 +19,10 @@ enum ActivePaneIndicator: String, CaseIterable {
 
     var displayName: String {
         switch self {
-        case .dimInactive: return "Dim inactive (비활성 흐리게)"
-        case .accentBorder: return "Accent border (강조 테두리)"
-        case .subtleBorder: return "Subtle border (은은한 테두리)"
-        case .none: return "None (표시 없음)"
+        case .dimInactive: return "Dim inactive (dim the inactive pane)"
+        case .accentBorder: return "Accent border (highlighted border)"
+        case .subtleBorder: return "Subtle border (faint border)"
+        case .none: return "None (no indicator)"
         }
     }
 
