@@ -49,13 +49,24 @@ public final class DamsonSession: ObservableObject {
     public var onClipboardWrite: ((String) -> Void)?
     public var onOutput: ((Data) -> Void)?
 
-    // The pluggable byte source/sink. Defaults to a local forkpty (`PTYHost`).
-    // TODO(tmux P1): TmuxPaneBackend will conform to SessionIOBackend and be
-    // injected here for tmux -CC panes — see docs/TMUX-INTEGRATION.md.
-    private let pty: SessionIOBackend = PTYHost()
+    // The pluggable byte source/sink. Defaults to a local forkpty (`PTYHost`); a tmux -CC
+    // pane injects a `TmuxPaneBackend` via the backend-factory init below — see
+    // docs/TMUX-INTEGRATION.md. Whether `spawn` actually forks (PTYHost) or is a no-op
+    // (tmux, already spawned) is the backend's concern.
+    private let pty: SessionIOBackend
     private let parser = VTParser()
 
-    public init(config: DamsonConfig, restoredScrollback: [Line]? = nil) {
+    /// Default path: a local forkpty session. Behavior is identical to before the seam —
+    /// the backend is a freshly constructed `PTYHost`.
+    public convenience init(config: DamsonConfig, restoredScrollback: [Line]? = nil) {
+        self.init(config: config, restoredScrollback: restoredScrollback, backend: PTYHost())
+    }
+
+    /// Backend-injection path: construct a session over an arbitrary `SessionIOBackend`
+    /// (e.g. a `TmuxPaneBackend` for a tmux `-CC` pane). `spawn` is still called with the
+    /// config's argv/env/cwd; a tmux backend treats it as a no-op.
+    public init(config: DamsonConfig, restoredScrollback: [Line]? = nil, backend: SessionIOBackend) {
+        self.pty = backend
         self.config = config
         self.currentDirectory = config.cwd
         self.grid = Grid(
