@@ -152,6 +152,16 @@ public final class Grid {
         return cells[r].wrapped
     }
 
+    /// 셸이 OSC 133;A(프롬프트 시작)를 보냈을 때 호출. 현재 커서 행에 프롬프트-시작
+    /// 마크를 단다. reflow가 이 마크부터 커서까지의 "라이브 프롬프트 블록"을 재줄바꿈
+    /// 없이 보존해, 셸의 SIGWINCH redraw(상대 커서 ↑N + 지우기)가 프롬프트 위 콘텐츠를
+    /// 먹지 않게 한다. viewport에는 마크가 하나만 있으면 되므로 기존 것은 지운다.
+    public func markPromptStart() {
+        for r in 0..<rows { cells[r].isPromptStart = false }
+        guard cursorRow >= 0, cursorRow < rows else { return }
+        cells[cursorRow].isPromptStart = true
+    }
+
     // MARK: - 기본 mutation
 
     /// 한 글자를 현재 cursor 위치에 쓰고 cursor를 진행.
@@ -183,7 +193,9 @@ public final class Grid {
 
         // wide char가 마지막 열에 걸리면 그 cell은 비우고 다음 줄로 wrap.
         if wide && cursorCol == cols - 1 {
-            cells[cursorRow][cursorCol] = Cell.empty(attrs: pen)
+            // 레이아웃 빈칸으로 표시 — reflow가 논리 줄을 되모을 때 이 칸을 콘텐츠로
+            // 잘못 끼워 넣지 않게 한다(콘텐츠 공백과 구분).
+            cells[cursorRow][cursorCol] = Cell.wideSpacer(attrs: pen)
             // Same soft-wrap case: a wide glyph that won't fit pushes to the next
             // row, so the row it leaves behind is a wrapped continuation.
             cells[cursorRow].wrapped = true
@@ -793,66 +805,42 @@ public final class Grid {
         for i in phys.indices where !isBlankRow(phys[i]) { lastKeep = max(lastKeep, i) }
         let kept = Array(phys[0...min(lastKeep, phys.count - 1)])
 
-        // 3. 논리 줄로 그룹핑(wrap 플래그로 이어진 run). 커서를 (논리 줄 index, 줄 내
-        //    offset)로 기록.
-        var logicals: [[Cell]] = []
-        var curCells: [Cell] = []
-        var cursorLi = 0
-        var cursorLcol = 0
-        for (i, row) in kept.enumerated() {
-            let base = curCells.count
-            curCells.append(contentsOf: row.cells)
-            if i == cursorAbs {
-                cursorLi = logicals.count
-                // pendingWrap은 커서를 마지막 칸 "한 칸 너머"에 둔다 → 행 전체 길이.
-                cursorLcol = base + (pendingWrap ? row.cells.count
-                                                 : min(max(0, cursorCol), row.cells.count))
-            }
-            if !row.wrapped {
-                logicals.append(curCells)
-                curCells = []
-            }
+        // 3. "라이브 프롬프트 블록" 보존 구간의 시작(preserveStart)을 정한다.
+        //    셸은 SIGWINCH 후 reset-prompt에서 "커서 상대 이동(↑N) + 화면 지우기"로
+        //    프롬프트를 다시 그린다. N은 셸이 *직전에 그린* 프롬프트의 물리 행 수다.
+        //    우리가 프롬프트를 미리 재줄바꿈해 행 수를 바꾸면 그 ↑N이 프롬프트 위
+        //    콘텐츠로 넘어가 지워버린다(좁은 폭에서 접혔던 starship 정보 줄이 넓힐 때
+        //    펴지며 재현). 그래서 프롬프트 블록은 재줄바꿈하지 않고 원본 물리 행 수를
+        //    그대로 보존한다. 경계는 OSC 133;A(프롬프트 시작) 마크. 마크가 없으면(133
+        //    미지원 셸) 커서의 논리 줄만 보존한다.
+        var preserveStart = cursorAbs
+        var m = min(cursorAbs, kept.count - 1)
+        var foundMark = false
+        while m >= 0 {
+            if kept[m].isPromptStart { preserveStart = m; foundMark = true; break }
+            m -= 1
         }
-        if !curCells.isEmpty { logicals.append(curCells) }
-        if logicals.isEmpty { logicals.append([]) }
+        if !foundMark { preserveStart = cursorAbs }
+        // 논리 줄을 쪼개지 않도록 그 줄 시작까지 뒤로 확장.
+        while preserveStart > 0 && kept[preserveStart - 1].wrapped { preserveStart -= 1 }
+        preserveStart = max(0, min(preserveStart, cursorAbs))
 
-        // 4. 논리 줄별 trailing blank 셀 제거(하드 개행 padding). 단, 커서 줄에서는
-        //    커서 컬럼 아래로는 자르지 않는다.
-        for li in logicals.indices {
-            var n = logicals[li].count
-            while n > 0 && isBlankCell(logicals[li][n - 1]) { n -= 1 }
-            if li == cursorLi { n = max(n, cursorLcol) }
-            if n < logicals[li].count { logicals[li].removeLast(logicals[li].count - n) }
-        }
-
-        // 5. 각 논리 줄을 newCols로 재분할 → wrap 플래그를 가진 새 물리 행.
+        // 4. preserveStart 이전(완료된 출력 + scrollback)만 논리 줄로 재결합 후 newCols로
+        //    재줄바꿈한다. 커서는 보존 구간에 있으므로 여기선 추적하지 않는다.
         var newPhys: [Line] = []
-        var newCursorAbs = 0
-        var newCursorCol = 0
-        var newPendingWrap = false
-        for (li, L) in logicals.enumerated() {
-            if L.isEmpty {
-                if li == cursorLi { newCursorAbs = newPhys.count; newCursorCol = 0 }
-                newPhys.append(paddedRow([], to: newCols, wrapped: false))
-                continue
-            }
-            var idx = 0
-            while idx < L.count {
-                let end = min(idx + newCols, L.count)
-                let isLast = (end == L.count)
-                if li == cursorLi, cursorLcol >= idx, cursorLcol < end || isLast {
-                    newCursorAbs = newPhys.count
-                    let off = cursorLcol - idx
-                    if off >= newCols {
-                        newCursorCol = newCols - 1
-                        newPendingWrap = true
-                    } else {
-                        newCursorCol = off
-                    }
-                }
-                newPhys.append(paddedRow(Array(L[idx..<end]), to: newCols, wrapped: !isLast))
-                idx = end
-            }
+        appendRewrapped(Array(kept[0..<preserveStart]), to: newCols, into: &newPhys)
+
+        // 5. 프롬프트 블록(마크~커서, +커서 아래 라이브 콘텐츠)은 원본 물리 행을 폭만
+        //    clip/pad 해 그대로 보존(행 수·wrap·프롬프트 마크 유지).
+        let newCursorAbs = newPhys.count + (cursorAbs - preserveStart)
+        let newCursorCol: Int
+        let newPendingWrap: Bool
+        if cursorCol >= newCols { newCursorCol = newCols - 1; newPendingWrap = true }
+        else { newCursorCol = max(0, cursorCol); newPendingWrap = pendingWrap }
+        for row in kept[preserveStart...] {
+            var line = paddedRow(row.cells, to: newCols, wrapped: row.wrapped)
+            line.isPromptStart = row.isPromptStart
+            newPhys.append(line)
         }
         if newPhys.isEmpty { newPhys.append(paddedRow([], to: newCols, wrapped: false)) }
 
@@ -878,9 +866,46 @@ public final class Grid {
 
     }
 
+    /// reflow의 "재줄바꿈 구간"(프롬프트 블록 위의 완료된 출력 + scrollback): 물리 행을
+    /// wrap 플래그로 논리 줄로 재결합(wide-spacer 제외)하고, 논리 줄별 trailing blank를
+    /// 다듬은 뒤 newCols로 재분할해 `newPhys`에 덧붙인다. wide 문자가 행 경계에 걸리면
+    /// 다음 행으로 넘기고 그 자리에 spacer를 남긴다(한글 반쪽 잘림 방지).
+    private func appendRewrapped(_ rows: [Line], to newCols: Int, into newPhys: inout [Line]) {
+        guard !rows.isEmpty else { return }
+        var logicals: [[Cell]] = []
+        var curCells: [Cell] = []
+        for row in rows {
+            for cell in row.cells where !cell.isWideSpacer { curCells.append(cell) }
+            if !row.wrapped { logicals.append(curCells); curCells = [] }
+        }
+        if !curCells.isEmpty { logicals.append(curCells) }
+        for li in logicals.indices {
+            var n = logicals[li].count
+            while n > 0 && isBlankCell(logicals[li][n - 1]) { n -= 1 }
+            if n < logicals[li].count { logicals[li].removeLast(logicals[li].count - n) }
+        }
+        for L in logicals {
+            if L.isEmpty { newPhys.append(paddedRow([], to: newCols, wrapped: false)); continue }
+            var idx = 0
+            while idx < L.count {
+                var end = min(idx + newCols, L.count)
+                var wideWrapped = false
+                if end < L.count, L[end].isContinuation, end - 1 > idx { end -= 1; wideWrapped = true }
+                let isLast = (end == L.count)
+                var rowCells = Array(L[idx..<end])
+                if wideWrapped { rowCells.append(Cell.wideSpacer(attrs: defaultPen)) }
+                newPhys.append(paddedRow(rowCells, to: newCols, wrapped: !isLast))
+                idx = end
+            }
+        }
+    }
+
     /// 시각적으로 빈 셀(공백 + 배경/링크/강조 없음)인지. reflow의 trailing 트리밍용.
     private func isBlankCell(_ c: Cell) -> Bool {
-        c.char == " " && c.attrs.bg == nil && c.hyperlink == nil
+        // continuation 셀은 wide 문자의 뒷칸이라 char가 " "지만 비어있지 않다. blank로
+        // 보면 trailing 트리밍이 wide 문자의 짝을 떼어내 lead가 반쪽으로 잘려 그려진다.
+        !c.isContinuation
+            && c.char == " " && c.attrs.bg == nil && c.hyperlink == nil
             && !c.attrs.inverse && !c.attrs.underline && !c.attrs.strikethrough
     }
 

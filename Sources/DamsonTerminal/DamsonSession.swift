@@ -200,6 +200,9 @@ public final class DamsonSession: ObservableObject {
                         promptMarks.removeFirst(promptMarks.count - 5000)
                     }
                 }
+                // Mark this row so a resize preserves the whole prompt block's
+                // physical-row count (keeps the shell's relative redraw in sync).
+                grid.markPromptStart()
             }
         default:
             break

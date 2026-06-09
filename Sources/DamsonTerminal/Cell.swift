@@ -99,10 +99,15 @@ public struct CellAttrs: Equatable, Codable {
 public struct Line: Equatable {
     public var cells: [Cell]
     public var wrapped: Bool
+    /// Set on the row where the shell emitted OSC 133;A (prompt start). Reflow uses
+    /// it to preserve the whole live prompt block's physical-row count (so the
+    /// shell's relative SIGWINCH redraw doesn't erase content above the prompt).
+    public var isPromptStart: Bool
 
-    public init(_ cells: [Cell], wrapped: Bool = false) {
+    public init(_ cells: [Cell], wrapped: Bool = false, isPromptStart: Bool = false) {
         self.cells = cells
         self.wrapped = wrapped
+        self.isPromptStart = isPromptStart
     }
 
     public var count: Int { cells.count }
@@ -127,6 +132,10 @@ public struct Cell: Equatable {
     /// wide glyph가 자연스럽게 두 칸을 점유함). 셸이 보내는 wide-aware backspace
     /// (`\b\b  \b\b`)가 두 cell을 함께 비울 때 정상 동작에 필요.
     public var isContinuation: Bool
+    /// wide 문자가 행 마지막 칸에 안 들어가 다음 행으로 넘어갈 때 남는 *레이아웃 빈칸*.
+    /// 콘텐츠 공백이 아니라 순전히 폭 맞춤용이라, reflow가 물리 행을 논리 줄로 되모을 때
+    /// 이 칸은 건너뛴다(콘텐츠 공백과 구분돼야 좁혔다 넓혔을 때 정렬이 안 어긋난다).
+    public var isWideSpacer: Bool
     /// OSC 8 hyperlink URI. 셀이 hyperlink의 일부면 set.
     /// run-length 그룹핑 시 hyperlink 경계에서 split됨.
     public var hyperlink: String?
@@ -135,17 +144,25 @@ public struct Cell: Equatable {
         char: Character,
         attrs: CellAttrs,
         isContinuation: Bool = false,
+        isWideSpacer: Bool = false,
         hyperlink: String? = nil
     ) {
         self.char = char
         self.attrs = attrs
         self.isContinuation = isContinuation
+        self.isWideSpacer = isWideSpacer
         self.hyperlink = hyperlink
     }
 
     /// 빈 셀 (공백 + 펜 속성).
     public static func empty(attrs: CellAttrs) -> Cell {
         Cell(char: " ", attrs: attrs)
+    }
+
+    /// wide 문자가 마지막 열에 안 들어가 다음 행으로 밀릴 때 그 자리에 남는 빈 칸.
+    /// 보이기엔 공백이지만 reflow 복원 시 콘텐츠가 아니므로 제외된다.
+    public static func wideSpacer(attrs: CellAttrs) -> Cell {
+        Cell(char: " ", attrs: attrs, isWideSpacer: true)
     }
 
     /// wide char의 후행 cell. 선행 cell 다음 칸에 배치. 선행 cell의 hyperlink를

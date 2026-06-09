@@ -11,6 +11,31 @@ final class GridTests: XCTestCase {
         for ch in s { g.putChar(ch) }
     }
 
+    /// Newline + carriage-return: start of a fresh logical line.
+    private func newline(_ g: Grid) { g.lineFeed(); g.carriageReturn() }
+
+    /// Logical lines (scrollback + viewport): soft-wrapped physical rows rejoined
+    /// via the wrap flag, continuation/wide-spacer cells skipped, each logical
+    /// line's trailing blanks trimmed, blank tail lines dropped. Lets a resize
+    /// round-trip be compared for true content (independent of wrap width).
+    private func logicalText(_ g: Grid) -> [String] {
+        var phys: [(cells: [Cell], wrapped: Bool)] = g.scrollback.map { ($0.cells, $0.wrapped) }
+        for r in 0..<g.rows { phys.append((g.row(r), g.rowWrapped(r))) }
+        var out: [String] = []
+        var cur = ""
+        for (cells, wrapped) in phys {
+            for c in cells where !c.isContinuation && !c.isWideSpacer { cur.append(c.char) }
+            if !wrapped {
+                while cur.hasSuffix(" ") { cur.removeLast() }
+                out.append(cur)
+                cur = ""
+            }
+        }
+        if !cur.isEmpty { while cur.hasSuffix(" ") { cur.removeLast() }; out.append(cur) }
+        while let last = out.last, last.isEmpty { out.removeLast() }
+        return out
+    }
+
     // MARK: putChar / cursor advance
 
     func testPutCharAdvancesCursor() {
@@ -88,18 +113,20 @@ final class GridTests: XCTestCase {
 
     func testReflowNarrowToWideRejoinsWrappedLine() {
         let g = makeGrid(cols: 4, rows: 4)
-        write(g, "abcdefg")          // row0 "abcd"(wrapped), row1 "efg"
+        // A COMPLETED line (newline-terminated) so it's above the cursor and gets
+        // rewrapped; reflow preserves only the cursor's *own* (live prompt) line.
+        write(g, "abcdefg"); newline(g)   // row0 "abcd"(wrapped), row1 "efg"
         XCTAssertTrue(g.rowWrapped(0))
         g.resize(cols: 8, rows: 4)   // widen → the wrapped halves rejoin
         XCTAssertEqual(String(g.row(0).map { $0.char }), "abcdefg ")
         XCTAssertFalse(g.rowWrapped(0))
-        XCTAssertEqual(g.cursorRow, 0)
-        XCTAssertEqual(g.cursorCol, 7) // cursor parked just past "abcdefg"
+        XCTAssertEqual(g.cursorRow, 1)  // cursor on the empty line below the rejoined text
+        XCTAssertEqual(g.cursorCol, 0)
     }
 
     func testReflowWideToNarrowSplitsLine() {
         let g = makeGrid(cols: 8, rows: 4)
-        write(g, "abcdefghij")        // row0 "abcdefgh"(wrapped), row1 "ij"
+        write(g, "abcdefghij"); newline(g)   // row0 "abcdefgh"(wrapped), row1 "ij"
         g.resize(cols: 4, rows: 4)    // narrow → re-split at width 4
         XCTAssertEqual(String(g.row(0).map { $0.char }), "abcd")
         XCTAssertTrue(g.rowWrapped(0))
@@ -107,8 +134,174 @@ final class GridTests: XCTestCase {
         XCTAssertTrue(g.rowWrapped(1))
         XCTAssertEqual(String(g.row(2).map { $0.char }), "ij  ")
         XCTAssertFalse(g.rowWrapped(2))
-        XCTAssertEqual(g.cursorRow, 2)
-        XCTAssertEqual(g.cursorCol, 2)
+        XCTAssertEqual(g.cursorRow, 3)  // cursor on the empty line below the split text
+        XCTAssertEqual(g.cursorCol, 0)
+    }
+
+    /// Regression: a narrowing reflow must not split a wide (CJK/Hangul) char from
+    /// its continuation cell at a row boundary. If it did, the lead would sit in the
+    /// last column with no continuation behind it and the renderer would squash the
+    /// glyph into one cell (the "한글 마지막 글자 잘림" bug). The whole wide char must
+    /// move onto the next physical row, exactly like putChar's last-column wide-wrap.
+    func testReflowKeepsWideCharWholeAtRowBoundary() {
+        let g = makeGrid(cols: 10, rows: 4)
+        write(g, "ab한"); newline(g)   // a(0) b(1) 한-lead(2) 한-cont(3), completed line
+        g.resize(cols: 3, rows: 4)    // "ab" fills the row; "한" can't straddle the seam
+        XCTAssertEqual(String(g.row(0).map { $0.char }), "ab ")
+        XCTAssertTrue(g.rowWrapped(0))
+        XCTAssertEqual(g.cell(row: 1, col: 0).char, "한")
+        XCTAssertFalse(g.cell(row: 1, col: 0).isContinuation)
+        XCTAssertTrue(g.cell(row: 1, col: 1).isContinuation,
+                      "the wide char's continuation must travel with its lead")
+    }
+
+    /// A wide char in the middle of a logical line must also stay whole when the
+    /// re-split lands the seam right on it — independent of trailing-blank trimming.
+    func testReflowKeepsInteriorWideCharWhole() {
+        let g = makeGrid(cols: 10, rows: 4)
+        write(g, "a한bc"); newline(g)  // a(0) 한-lead(1) 한-cont(2) b(3) c(4), completed line
+        g.resize(cols: 2, rows: 4)
+        XCTAssertEqual(String(g.row(0).map { $0.char }), "a ")
+        XCTAssertEqual(g.cell(row: 1, col: 0).char, "한")
+        XCTAssertTrue(g.cell(row: 1, col: 1).isContinuation)
+        XCTAssertEqual(String(g.row(2).map { $0.char }), "bc")
+    }
+
+    /// Regression: a wide char at the very end of a logical line keeps its
+    /// continuation through reflow's trailing-blank trim. A continuation cell has
+    /// char " " but is NOT blank — trimming it would orphan the lead (→ clipped).
+    func testReflowPreservesTrailingWideCharContinuation() {
+        let g = makeGrid(cols: 8, rows: 4)
+        write(g, "한")                // lead(0) cont(1), then blank padding
+        g.resize(cols: 6, rows: 4)    // pure column change → reflow path
+        XCTAssertEqual(g.cell(row: 0, col: 0).char, "한")
+        XCTAssertFalse(g.cell(row: 0, col: 0).isContinuation)
+        XCTAssertTrue(g.cell(row: 0, col: 1).isContinuation,
+                      "trailing trim must not drop a wide char's continuation")
+    }
+
+    /// Regression (screenshot bug): narrowing then widening must restore the exact
+    /// original layout. The wide-wrap layout gap left when a CJK char is pushed to
+    /// the next row is a *spacer*, not content — reflow must drop it when rejoining,
+    /// otherwise it leaks into the logical line and shifts every following cell
+    /// (the scrambled `ls` columns). Round-trips back to "ab한cd" with no shift.
+    func testReflowWideCharNarrowThenWideRoundTrips() {
+        let g = makeGrid(cols: 10, rows: 4)
+        write(g, "ab한cd"); newline(g)  // a b 한-lead 한-cont c d, completed line
+        g.resize(cols: 3, rows: 4)     // narrow → "한" gets pushed across a seam
+        g.resize(cols: 10, rows: 4)    // widen back → must rejoin with no stray space
+        XCTAssertEqual(g.cell(row: 0, col: 0).char, "a")
+        XCTAssertEqual(g.cell(row: 0, col: 1).char, "b")
+        XCTAssertEqual(g.cell(row: 0, col: 2).char, "한")
+        XCTAssertFalse(g.cell(row: 0, col: 2).isContinuation)
+        XCTAssertTrue(g.cell(row: 0, col: 3).isContinuation)
+        XCTAssertEqual(g.cell(row: 0, col: 4).char, "c")
+        XCTAssertEqual(g.cell(row: 0, col: 5).char, "d")
+    }
+
+    /// A wide char that wraps at the right margin during normal typing leaves a
+    /// spacer too; a later reflow must not turn that spacer into a content space.
+    func testReflowAfterNaturalWideWrapDropsSpacer() {
+        let g = makeGrid(cols: 4, rows: 4)
+        write(g, "abc한"); newline(g)  // "abc" fills cols 0-2; "한" can't fit col 3 →
+                                       // col 3 spacer, "한" wraps to row 1 (completed line)
+        XCTAssertTrue(g.rowWrapped(0))
+        XCTAssertTrue(g.cell(row: 0, col: 3).isWideSpacer)
+        g.resize(cols: 8, rows: 4)     // widen → rejoin "abc한" with no stray space
+        XCTAssertEqual(g.cell(row: 0, col: 0).char, "a")
+        XCTAssertEqual(g.cell(row: 0, col: 1).char, "b")
+        XCTAssertEqual(g.cell(row: 0, col: 2).char, "c")
+        XCTAssertEqual(g.cell(row: 0, col: 3).char, "한")
+        XCTAssertTrue(g.cell(row: 0, col: 4).isContinuation)
+    }
+
+    /// Regression (screenshot 2): repeated narrow/widen cycles must not drop any
+    /// content. A logical line whose wide char straddles a seam was losing the rest
+    /// of that line (and following lines) after a couple of cycles.
+    func testReflowRepeatedCyclesPreserveContentWithWideChars() {
+        let g = makeGrid(cols: 20, rows: 8)
+        let lines = ["alpha bravo", "charlie 한글 delta", "echo foxtrot", "golf 한 hotel"]
+        // Every line newline-terminated → all are completed lines above the cursor
+        // (which sits on a trailing empty line, preserved as-is by reflow).
+        for line in lines { write(g, line); newline(g) }
+        let before = logicalText(g)
+        XCTAssertEqual(before, lines, "precondition: fresh grid holds all lines")
+
+        for cols in [7, 20, 5, 13, 20, 8, 20] {
+            g.resize(cols: cols, rows: 8)
+        }
+        XCTAssertEqual(logicalText(g), lines,
+                       "content (incl. text after wide chars) must survive resize cycles")
+    }
+
+    /// Brute force: a long line with wide chars, resized through every width down
+    /// to 3 and back up. Content must hold at EVERY step — pinpoints the width that
+    /// drops "everything after the wide char".
+    func testReflowEveryWidthPreservesWideContent() {
+        let original = "one two 한글 three four 한 five six 글 seven"
+        for lo in 3...28 {
+            let g = makeGrid(cols: 30, rows: 6)
+            write(g, original); newline(g)   // completed line above the cursor
+            // Walk down to `lo` then back to 30, asserting at each width.
+            var widths = Array(stride(from: 29, through: lo, by: -1))
+            widths += Array(stride(from: lo + 1, through: 30, by: 1))
+            for w in widths {
+                g.resize(cols: w, rows: 6)
+                let got = logicalText(g).joined(separator: "⏎")
+                XCTAssertEqual(got, original,
+                               "width \(w) (cycling toward \(lo)) lost/altered content")
+            }
+        }
+    }
+
+    /// Realistic: many ASCII lines filling well past the viewport (so most live in
+    /// scrollback), then a shrink/grow cycle. Mirrors the `ls`-fills-the-screen case
+    /// where "everything after some point vanished" — even for plain English.
+    func testReflowManyAsciiLinesSurviveShrinkGrow() {
+        let g = makeGrid(cols: 40, rows: 10)
+        var lines: [String] = []
+        for i in 0..<30 { lines.append("line-\(String(format: "%02d", i))-content-word-here") }
+        for line in lines { write(g, line); newline(g) }   // all completed lines
+        XCTAssertEqual(logicalText(g), lines, "precondition: all 30 lines present")
+        for (c, r) in [(15, 10), (40, 10), (12, 6), (40, 12), (20, 10), (40, 10)] {
+            g.resize(cols: c, rows: r)
+        }
+        XCTAssertEqual(logicalText(g), lines, "no ASCII lines lost across shrink/grow")
+    }
+
+    /// After a resize the cursor must stay at the last content row (a fresh shell
+    /// prompt has nothing below it). If reflow mislands the cursor, the view's
+    /// `hasContentBelowCursor` flips true and the follow logic anchors to the
+    /// viewport top, hiding all scrollback — content "disappears".
+    func testReflowKeepsCursorAtBottomNoContentBelow() {
+        let g = makeGrid(cols: 30, rows: 8)
+        let lines = ["output line one", "output line two", "output line three",
+                     "output four 한글 mixed", "$ "]
+        for (i, line) in lines.enumerated() {
+            write(g, line)
+            if i < lines.count - 1 { newline(g) }
+        }
+        XCTAssertFalse(g.hasContentBelowCursor, "precondition: prompt is the last line")
+        for (c, r) in [(12, 8), (30, 8), (8, 5), (30, 10), (20, 8), (30, 8)] {
+            g.resize(cols: c, rows: r)
+            XCTAssertFalse(g.hasContentBelowCursor,
+                           "resize \(c)x\(r): cursor must stay at the last content row")
+        }
+    }
+
+    /// Same as above but with a small viewport so content spills into scrollback —
+    /// the resize then moves lines across the viewport/scrollback seam, where the
+    /// screenshot's "everything after 한글 vanished" loss actually showed up.
+    func testReflowResizeAcrossScrollbackSeamPreservesWideContent() {
+        let g = makeGrid(cols: 12, rows: 3)
+        let lines = ["aaaa", "bbbb", "한글 cc", "dddd", "eeee한", "ffff"]
+        for line in lines { write(g, line); newline(g) }   // all completed lines
+        XCTAssertEqual(logicalText(g), lines, "precondition")
+        for (c, r) in [(4, 3), (12, 3), (6, 5), (3, 2), (12, 4), (5, 3), (12, 6)] {
+            g.resize(cols: c, rows: r)
+        }
+        XCTAssertEqual(logicalText(g), lines,
+                       "no content lost across viewport/scrollback reflow with wide chars")
     }
 
     /// Regression: a narrowing reflow re-wraps the viewport into more physical
@@ -118,10 +311,12 @@ final class GridTests: XCTestCase {
     /// `scrollbackPushCount - count` eviction metric used to trap on UInt64
     /// underflow during a window resize. `linesEvictedFromTop` must clamp to 0.
     func testNarrowingReflowDoesNotUnderflowEvictionCount() {
-        let g = makeGrid(cols: 8, rows: 2)
-        write(g, "aaaaaaaabbbbbbbb")   // 16 chars = one soft-wrapped line filling both rows
+        let g = makeGrid(cols: 8, rows: 4)
+        // A completed (newline-terminated) soft-wrapped line so reflow rewraps it
+        // and grows scrollback. The cursor's own line is the trailing empty one.
+        write(g, "aaaaaaaabbbbbbbb"); newline(g)   // 16 chars = one soft-wrapped line
         XCTAssertEqual(g.scrollbackPushCount, 0, "no scrollUp happened, so nothing was pushed")
-        g.resize(cols: 4, rows: 2)     // reflow → 4 physical rows, 2 overflow into scrollback
+        g.resize(cols: 4, rows: 4)     // reflow → 4 physical rows, overflow into scrollback
         XCTAssertGreaterThan(g.scrollback.count, Int(g.scrollbackPushCount),
             "precondition: reflow grew scrollback past the push count")
         XCTAssertEqual(g.linesEvictedFromTop, 0,
