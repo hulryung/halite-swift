@@ -49,7 +49,10 @@ public final class DamsonSession: ObservableObject {
     public var onClipboardWrite: ((String) -> Void)?
     public var onOutput: ((Data) -> Void)?
 
-    private let pty = PTYHost()
+    // The pluggable byte source/sink. Defaults to a local forkpty (`PTYHost`).
+    // TODO(tmux P1): TmuxPaneBackend will conform to SessionIOBackend and be
+    // injected here for tmux -CC panes — see docs/TMUX-INTEGRATION.md.
+    private let pty: SessionIOBackend = PTYHost()
     private let parser = VTParser()
 
     public init(config: DamsonConfig, restoredScrollback: [Line]? = nil) {

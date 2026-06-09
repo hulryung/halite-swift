@@ -3,7 +3,10 @@ import Foundation
 
 /// Spawns the child shell on a PTY and manages read/write/resize/wait.
 /// Reading runs on a dedicated thread; callbacks hop to the main queue.
-public final class PTYHost {
+///
+/// This is the default `SessionIOBackend` (local forkpty). A tmux control-mode
+/// backend will be a sibling conformance — see `docs/TMUX-INTEGRATION.md`.
+public final class PTYHost: SessionIOBackend {
     public enum SpawnError: Error {
         case forkptyFailed(errno: Int32)
     }
