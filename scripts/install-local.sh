@@ -27,10 +27,10 @@ cd "$REPO_ROOT"
 SIGN_IDENTITY="${SIGN_IDENTITY:--}"
 INSTALL_DIR="${INSTALL_DIR:-/Applications}"
 MARKETING_VERSION="${MARKETING_VERSION:-0.1.0}"
-APP="$REPO_ROOT/dist/Halite.app"
-ENTITLEMENTS="$REPO_ROOT/Resources/Halite.entitlements"
+APP="$REPO_ROOT/dist/Damson.app"
+ENTITLEMENTS="$REPO_ROOT/Resources/Damson.entitlements"
 HASH="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
-DEST="$INSTALL_DIR/Halite.app"
+DEST="$INSTALL_DIR/Damson.app"
 
 [[ -f "$ENTITLEMENTS" ]] || { echo "error: missing $ENTITLEMENTS" >&2; exit 1; }
 
@@ -64,7 +64,7 @@ codesign --verify --deep --strict --verbose=2 "$APP" 2>&1 | tail -1
 # 3) 설치 — 실행 중 인스턴스를 종료하고 교체. quarantine 비트 제거(로컬 빌드라
 #    보통 없지만, 있으면 첫 실행 Gatekeeper 프롬프트가 뜸).
 echo "==> install to $DEST"
-pkill -f "Halite.app/Contents/MacOS/halite" 2>/dev/null || true
+pkill -f "Damson.app/Contents/MacOS/damson" 2>/dev/null || true
 sleep 1
 rm -rf "$DEST"
 cp -R "$APP" "$DEST"

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# build-app.sh — swift build -c release, 그 결과 binary 두 개(halite, halite-cli)를
+# build-app.sh — swift build -c release, 그 결과 binary 두 개(halite, damson-cli)를
 # 정상 .app 번들 구조로 묶음.
 #
-# 출력: $REPO/dist/Halite.app
+# 출력: $REPO/dist/Damson.app
 #
 # 환경변수:
 #   MARKETING_VERSION   — Info.plist CFBundleShortVersionString (default: 0.1.0)
@@ -22,7 +22,7 @@ MARKETING_VERSION="${MARKETING_VERSION:-0.1.0}"
 BUILD_NUMBER="${BUILD_NUMBER:-$(date +%s)}"
 
 DIST_DIR="${DIST_DIR:-$REPO_ROOT/dist}"
-APP_DIR="$DIST_DIR/Halite.app"
+APP_DIR="$DIST_DIR/Damson.app"
 CONTENTS="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS/MacOS"
 RESOURCES_DIR="$CONTENTS/Resources"
@@ -32,15 +32,15 @@ if [[ "${CLEAN:-0}" == "1" ]]; then
 fi
 
 echo "==> swift build -c release"
-swift build -c release --product halite
-swift build -c release --product halite-cli
+swift build -c release --product damson
+swift build -c release --product damson-cli
 
 # arm64 + x86_64 universal binary 만들고 싶으면 --arch arm64 --arch x86_64 추가
 # (지금은 빌드 머신 아키텍처만; CI에서 universal 처리).
 
 BIN_DIR="$(swift build -c release --show-bin-path)"
-HALITE_BIN="$BIN_DIR/halite"
-CLI_BIN="$BIN_DIR/halite-cli"
+HALITE_BIN="$BIN_DIR/damson"
+CLI_BIN="$BIN_DIR/damson-cli"
 
 if [[ ! -x "$HALITE_BIN" || ! -x "$CLI_BIN" ]]; then
     echo "error: built binaries missing under $BIN_DIR" >&2
@@ -52,14 +52,14 @@ rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 
 # 실행 가능 본체.
-cp "$HALITE_BIN" "$MACOS_DIR/halite"
-chmod 0755 "$MACOS_DIR/halite"
+cp "$HALITE_BIN" "$MACOS_DIR/damson"
+chmod 0755 "$MACOS_DIR/damson"
 
-# halite-cli — Resources에 두고 사용자가 /usr/local/bin에 symlink 거는 방식.
+# damson-cli — Resources에 두고 사용자가 /usr/local/bin에 symlink 거는 방식.
 # (Hardened Runtime + nested code signing 규칙상 MacOS/와 Resources/ 둘 다
 #  나란히 실행파일을 둬도 sign이 통과되므로 Resources/가 깔끔.)
-cp "$CLI_BIN" "$RESOURCES_DIR/halite-cli"
-chmod 0755 "$RESOURCES_DIR/halite-cli"
+cp "$CLI_BIN" "$RESOURCES_DIR/damson-cli"
+chmod 0755 "$RESOURCES_DIR/damson-cli"
 
 # Sparkle.framework — SwiftPM이 .app으로 자동 번들 안 하므로 직접 복사.
 # SwiftPM이 빌드한 binary의 RPATH는 @loader_path(= MacOS 디렉토리, dev 빌드에서
@@ -72,7 +72,7 @@ if [[ -d "$SPARKLE_FW" ]]; then
     # -R로 심볼릭 링크(Versions/Current → A, Sparkle → Versions/Current/Sparkle 등) 보존.
     cp -R "$SPARKLE_FW" "$FRAMEWORKS_DIR/Sparkle.framework"
     # 표준 Frameworks/ 위치를 찾도록 RPATH 추가 (이미 있으면 무시).
-    install_name_tool -add_rpath "@executable_path/../Frameworks" "$MACOS_DIR/halite" 2>/dev/null || true
+    install_name_tool -add_rpath "@executable_path/../Frameworks" "$MACOS_DIR/damson" 2>/dev/null || true
 else
     echo "warning: $SPARKLE_FW 없음 — 자동업데이트 동작 안 함. swift build 결과 확인" >&2
 fi
@@ -99,17 +99,17 @@ sed -e "s|__MARKETING_VERSION__|$MARKETING_VERSION|g" \
     -e "s|__BUILD_DATE__|$BUILD_DATE|g" \
     "$TEMPLATE" > "$CONTENTS/Info.plist"
 
-# 아이콘 — template의 CFBundleIconFile=Halite를 만족시키도록 Halite.icns 복사.
-if [[ -f "$REPO_ROOT/Resources/Halite.icns" ]]; then
-    cp "$REPO_ROOT/Resources/Halite.icns" "$RESOURCES_DIR/Halite.icns"
+# 아이콘 — template의 CFBundleIconFile=Damson를 만족시키도록 Damson.icns 복사.
+if [[ -f "$REPO_ROOT/Resources/Damson.icns" ]]; then
+    cp "$REPO_ROOT/Resources/Damson.icns" "$RESOURCES_DIR/Damson.icns"
 fi
 
 # Entitlements는 sign 단계에서 codesign --entitlements로 적용 — 번들에는 안 들어감.
 
 echo "==> verifying bundle"
 plutil -lint "$CONTENTS/Info.plist" > /dev/null
-file "$MACOS_DIR/halite" | head -1
-file "$RESOURCES_DIR/halite-cli" | head -1
+file "$MACOS_DIR/damson" | head -1
+file "$RESOURCES_DIR/damson-cli" | head -1
 
 # Trampoline 자체 정합성 — 빌드한 binary가 .app 안에 있으면 trampoline은
 # isInsideAppBundle()로 spotting하고 skip하므로 추가 wrap 없음. OK.

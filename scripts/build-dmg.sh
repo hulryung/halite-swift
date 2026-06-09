@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# build-dmg.sh — dist/Halite.app을 drag-to-Applications 형태의 .dmg로 묶음.
+# build-dmg.sh — dist/Damson.app을 drag-to-Applications 형태의 .dmg로 묶음.
 #
-# 산출물: dist/Halite-<version>.dmg
+# 산출물: dist/Damson-<version>.dmg
 #
 # hdiutil만 사용 (additional tool 의존 없음). 더 예쁜 결과 원하면 `create-dmg`로
 # 교체 가능 (brew install create-dmg).
@@ -9,7 +9,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP="$REPO_ROOT/dist/Halite.app"
+APP="$REPO_ROOT/dist/Damson.app"
 
 if [[ ! -d "$APP" ]]; then
     echo "error: $APP not found. Run scripts/build-app.sh (and sign-and-notarize.sh) first." >&2
@@ -19,18 +19,18 @@ fi
 # Info.plist에서 marketing version 읽기.
 VERSION="$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist" 2>/dev/null || echo "0.0.0")"
 
-DMG="$REPO_ROOT/dist/Halite-$VERSION.dmg"
+DMG="$REPO_ROOT/dist/Damson-$VERSION.dmg"
 STAGE_DIR="$(mktemp -d -t halite-dmg-stage)"
 trap 'rm -rf "$STAGE_DIR"' EXIT
 
 echo "==> staging at $STAGE_DIR"
-cp -R "$APP" "$STAGE_DIR/Halite.app"
+cp -R "$APP" "$STAGE_DIR/Damson.app"
 # /Applications 심볼릭 링크 — drag-to-install UX.
 ln -s /Applications "$STAGE_DIR/Applications"
 
 rm -f "$DMG"
 echo "==> hdiutil create"
-hdiutil create -volname "Halite $VERSION" \
+hdiutil create -volname "Damson $VERSION" \
     -srcfolder "$STAGE_DIR" \
     -fs HFS+ \
     -format UDZO \

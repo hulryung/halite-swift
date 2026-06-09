@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# sign-and-notarize.sh — dist/Halite.app을 codesign으로 Developer ID
+# sign-and-notarize.sh — dist/Damson.app을 codesign으로 Developer ID
 # Application 서명 → notarytool로 Apple에 노타라이즈 제출 → 결과를 stapler로
 # 번들에 박음.
 #
@@ -25,8 +25,8 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP="$REPO_ROOT/dist/Halite.app"
-ENTITLEMENTS="$REPO_ROOT/Resources/Halite.entitlements"
+APP="$REPO_ROOT/dist/Damson.app"
+ENTITLEMENTS="$REPO_ROOT/Resources/Damson.entitlements"
 
 if [[ ! -d "$APP" ]]; then
     echo "error: $APP not found. Run scripts/build-app.sh first." >&2
@@ -78,11 +78,11 @@ if [[ -d "$SPARKLE_FW" ]]; then
         --sign "$APPLE_SIGNING_IDENTITY" "$SPARKLE_FW"
 fi
 
-# halite-cli — nested executable.
+# damson-cli — nested executable.
 codesign --force --options runtime --timestamp \
     --entitlements "$ENTITLEMENTS" \
     --sign "$APPLE_SIGNING_IDENTITY" \
-    "$APP/Contents/Resources/halite-cli"
+    "$APP/Contents/Resources/damson-cli"
 
 echo "==> codesign main bundle"
 codesign --force --options runtime --timestamp \
@@ -101,10 +101,10 @@ if [[ "${SKIP_NOTARIZE:-0}" == "1" ]]; then
 fi
 
 # 노타라이즈는 .zip 또는 .dmg를 받음. 여기선 임시 .zip으로 제출 (가장 빠름).
-ZIP="$REPO_ROOT/dist/Halite-notarize.zip"
+ZIP="$REPO_ROOT/dist/Damson-notarize.zip"
 rm -f "$ZIP"
 echo "==> ditto $APP -> $ZIP"
-( cd "$REPO_ROOT/dist" && ditto -c -k --keepParent "Halite.app" "$ZIP" )
+( cd "$REPO_ROOT/dist" && ditto -c -k --keepParent "Damson.app" "$ZIP" )
 
 echo "==> xcrun notarytool submit (this can take a few minutes)"
 NOTARY_ARGS=()

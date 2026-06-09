@@ -96,7 +96,7 @@ jobs:
         run: |
           VERSION="${{ steps.ver.outputs.version }}"
           TAG="${{ steps.ver.outputs.tag }}"
-          DMG="dist/Halite-$VERSION.dmg"
+          DMG="dist/Damson-$VERSION.dmg"
           # 릴리즈가 없으면 생성(태그도 함께 — workflow_dispatch 경로), 이미 있으면 자산만 갱신.
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "$DMG" --clobber
@@ -114,8 +114,8 @@ jobs:
           VERSION="${{ steps.ver.outputs.version }}"
           BUILD="${{ steps.ver.outputs.build }}"
           TAG="${{ steps.ver.outputs.tag }}"
-          DMG="dist/Halite-$VERSION.dmg"
-          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/$TAG/Halite-$VERSION.dmg"
+          DMG="dist/Damson-$VERSION.dmg"
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/$TAG/Damson-$VERSION.dmg"
 
           # sign_update에 넘길 raw EdDSA private key (secret은 base64 1회 인코딩).
           export SPARKLE_PRIVATE_KEY="$(echo "$SPARKLE_PRIVATE_KEY_B64" | base64 --decode)"

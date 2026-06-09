@@ -7,10 +7,10 @@
 #
 # 사용:
 #   ./scripts/sparkle-appcast.sh \
-#       --dmg dist/Halite-0.1.0.dmg \
+#       --dmg dist/Damson-0.1.0.dmg \
 #       --version 0.1.0 \
 #       --build 1 \
-#       --url https://github.com/hulryung/halite-swift/releases/download/v0.1.0/Halite-0.1.0.dmg \
+#       --url https://github.com/hulryung/damson/releases/download/v0.1.0/Damson-0.1.0.dmg \
 #       > entry.xml
 #
 # entry.xml 내용을 기존 appcast.xml의 <channel> 안에 추가하거나, full appcast를

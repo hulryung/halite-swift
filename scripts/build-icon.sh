@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # build-icon.sh — Resources/icon-source.svg → 1024px PNG → multi-size .iconset
-# → Resources/Halite.icns.
+# → Resources/Damson.icns.
 #
 # 의존성: rsvg-convert (brew install librsvg), sips + iconutil (macOS 내장).
 
@@ -8,8 +8,8 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC_SVG="$REPO_ROOT/Resources/icon-source.svg"
-PNG_1024="$REPO_ROOT/Resources/Halite-1024.png"
-DST_ICNS="$REPO_ROOT/Resources/Halite.icns"
+PNG_1024="$REPO_ROOT/Resources/Damson-1024.png"
+DST_ICNS="$REPO_ROOT/Resources/Damson.icns"
 
 if [[ ! -f "$SRC_SVG" ]]; then
     echo "error: $SRC_SVG 없음" >&2
@@ -50,7 +50,7 @@ done
 iconutil --convert icns "$ICONSET" --output "$DST_ICNS"
 
 # SwiftPM 리소스 경로에도 복제.
-cp "$DST_ICNS" "$REPO_ROOT/Sources/halite/Resources/Halite.icns"
+cp "$DST_ICNS" "$REPO_ROOT/Sources/halite/Resources/Damson.icns"
 
 echo "==> $DST_ICNS"
 ls -lh "$DST_ICNS"

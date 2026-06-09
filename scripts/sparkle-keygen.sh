@@ -19,7 +19,7 @@ GEN="$REPO_ROOT/.build/artifacts/sparkle/Sparkle/bin/generate_keys"
 if [[ ! -x "$GEN" ]]; then
     # 빌드 한 번 돌려서 artifact 받음.
     echo "==> fetching Sparkle artifacts via swift build" >&2
-    ( cd "$REPO_ROOT" && swift build --product halite 2>&1 | tail -3 ) >&2
+    ( cd "$REPO_ROOT" && swift build --product damson 2>&1 | tail -3 ) >&2
 fi
 if [[ ! -x "$GEN" ]]; then
     echo "error: generate_keys not found at $GEN" >&2

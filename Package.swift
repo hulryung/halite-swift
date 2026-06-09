@@ -2,30 +2,30 @@
 import PackageDescription
 
 let package = Package(
-    name: "halite-swift",
+    name: "damson",
     platforms: [
         .macOS(.v13),
     ],
     products: [
         // 엔진 라이브러리 — cmux와 halite.app이 공유
         .library(
-            name: "HaliteTerminal",
-            targets: ["HaliteTerminal"]
+            name: "DamsonTerminal",
+            targets: ["DamsonTerminal"]
         ),
-        // halite ↔ halite-cli IPC wire format (서버/클라이언트 공유)
+        // halite ↔ damson-cli IPC wire format (서버/클라이언트 공유)
         .library(
-            name: "HaliteControl",
-            targets: ["HaliteControl"]
+            name: "DamsonControl",
+            targets: ["DamsonControl"]
         ),
         // 독립 앱 (개발 중에는 `swift run halite`, 배포는 추후 Xcode 프로젝트)
         .executable(
-            name: "halite",
-            targets: ["halite"]
+            name: "damson",
+            targets: ["damson"]
         ),
-        // CLI 클라이언트 — Rust halite-cli와 wire-format 호환
+        // CLI 클라이언트 — Rust damson-cli와 wire-format 호환
         .executable(
-            name: "halite-cli",
-            targets: ["halite-cli"]
+            name: "damson-cli",
+            targets: ["damson-cli"]
         ),
     ],
     dependencies: [
@@ -36,38 +36,38 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "HaliteTerminal",
-            path: "Sources/HaliteTerminal"
+            name: "DamsonTerminal",
+            path: "Sources/DamsonTerminal"
             // 추후 Shaders.metal 추가 시 resources에 .process()로 선언
         ),
         .target(
-            name: "HaliteControl",
-            path: "Sources/HaliteControl"
+            name: "DamsonControl",
+            path: "Sources/DamsonControl"
         ),
         .executableTarget(
-            name: "halite",
+            name: "damson",
             dependencies: [
-                "HaliteTerminal",
-                "HaliteControl",
+                "DamsonTerminal",
+                "DamsonControl",
                 .product(name: "Sparkle", package: "Sparkle"),
             ],
-            path: "Sources/halite",
-            resources: [.copy("Resources/Halite.icns")]
+            path: "Sources/damson",
+            resources: [.copy("Resources/Damson.icns")]
         ),
         .executableTarget(
-            name: "halite-cli",
-            dependencies: ["HaliteControl"],
-            path: "Sources/halite-cli"
+            name: "damson-cli",
+            dependencies: ["DamsonControl"],
+            path: "Sources/damson-cli"
         ),
         .testTarget(
-            name: "HaliteTerminalTests",
-            dependencies: ["HaliteTerminal"],
-            path: "Tests/HaliteTerminalTests"
+            name: "DamsonTerminalTests",
+            dependencies: ["DamsonTerminal"],
+            path: "Tests/DamsonTerminalTests"
         ),
         .testTarget(
-            name: "HaliteControlTests",
-            dependencies: ["HaliteControl"],
-            path: "Tests/HaliteControlTests"
+            name: "DamsonControlTests",
+            dependencies: ["DamsonControl"],
+            path: "Tests/DamsonControlTests"
         ),
     ]
 )

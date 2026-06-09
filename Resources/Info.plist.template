@@ -3,22 +3,22 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleExecutable</key>
-	<string>halite</string>
+	<string>damson</string>
 	<key>CFBundleIdentifier</key>
-	<string>dev.halite-swift.terminal</string>
+	<string>app.damson.terminal</string>
 	<key>CFBundleName</key>
-	<string>halite</string>
+	<string>Damson</string>
 	<key>CFBundleDisplayName</key>
-	<string>Halite</string>
+	<string>Damson</string>
 	<key>CFBundleShortVersionString</key>
 	<string>__MARKETING_VERSION__</string>
 	<key>CFBundleVersion</key>
 	<string>__BUILD_NUMBER__</string>
-	<key>HaliteGitHash</key>
+	<key>DamsonGitHash</key>
 	<string>__GIT_HASH__</string>
-	<key>HaliteBuildChannel</key>
+	<key>DamsonBuildChannel</key>
 	<string>__BUILD_CHANNEL__</string>
-	<key>HaliteBuildDate</key>
+	<key>DamsonBuildDate</key>
 	<string>__BUILD_DATE__</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
@@ -33,7 +33,7 @@
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.developer-tools</string>
 	<key>CFBundleIconFile</key>
-	<string>Halite</string>
+	<string>Damson</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSSupportsAutomaticGraphicsSwitching</key>
@@ -41,11 +41,11 @@
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>NSHumanReadableCopyright</key>
-	<string>halite-swift contributors. MIT licensed.</string>
+	<string>damson contributors. MIT licensed.</string>
 
 	<!-- Sparkle 자동업데이트 -->
 	<key>SUFeedURL</key>
-	<string>https://raw.githubusercontent.com/hulryung/halite-swift/main/appcast.xml</string>
+	<string>https://raw.githubusercontent.com/hulryung/damson/main/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>__SPARKLE_PUBLIC_KEY__</string>
 	<!-- 자동 체크 디폴트 비활성 — Settings 토글로 켬 (halite.autoUpdate). -->
