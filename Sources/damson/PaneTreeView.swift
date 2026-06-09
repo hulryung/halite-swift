@@ -595,6 +595,21 @@ final class PaneTreeView: NSView {
         walk(self)
     }
 
+    /// Force every leaf surface to repaint its current grid right now.
+    ///
+    /// Called when this tree is re-shown (tab return). While a tab is backgrounded
+    /// its pane surfaces are removed from the superview, so Metal draw requests for
+    /// grid updates that arrive meanwhile are dropped (no visible drawable) — only
+    /// the version-dedupe key advances. Re-adding the tree focuses just the active
+    /// pane, so the inactive panes would keep their stale last-drawn frame until
+    /// clicked. Walking every leaf and forcing a repaint makes off-screen output
+    /// visible immediately on return, with no click required.
+    func repaintAllLeaves() {
+        for (_, surface) in root.leaves() {
+            surface.repaintNow()
+        }
+    }
+
     /// Re-apply to every wrapper when the active-pane indicator setting changes (active state unchanged).
     func refreshIndicators() {
         func walk(_ view: NSView) {

@@ -341,6 +341,13 @@ final class CompactWindowController: NSWindowController, NSWindowDelegate, TabSw
         ])
         // Restore active + first responder to the last-used pane (undoing the onFocus clobber above).
         tree.setActive(restoreTarget)
+        // Every pane in the incoming tab must repaint its current grid — not just the
+        // focused one. Output that arrived while the tab was backgrounded couldn't be
+        // drawn (the surfaces were off-window, so Metal had no drawable), and only the
+        // active pane gets focused above. Lay out the re-added tree first so the Metal
+        // drawables are sized to the content area, then force every leaf to repaint.
+        contentContainer.layoutSubtreeIfNeeded()
+        tree.repaintAllLeaves()
         if index < tabs.count {
             window?.title = displayTitle(tabs[index])
         }

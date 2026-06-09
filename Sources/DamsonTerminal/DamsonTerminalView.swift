@@ -571,6 +571,11 @@ public final class DamsonSurfaceView: NSView, NSTextInputClient {
     public override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         guard let window = window else { return }
+        // Re-entering a window (tab return, split re-add): the grid may have changed
+        // while we were off-window, where Metal renders silently fail (no drawable).
+        // Force a fresh draw of the current grid so the latest output shows on appear,
+        // for every pane — not just the one that becomes first responder below.
+        repaintNow()
         window.makeFirstResponder(self)
         inputContext?.activate()
         warmupIMEIfNeeded()
@@ -1733,6 +1738,24 @@ public final class DamsonSurfaceView: NSView, NSTextInputClient {
     }
 
     // MARK: - Render
+
+    /// Force a render of the current grid right now, bypassing the version dedupe.
+    ///
+    /// While a pane is off-window (its tab is backgrounded, or it sits in a split
+    /// that was removed from the superview), `gridChanged` still fires and drives
+    /// `renderNow()`. That advances `lastRenderedVersion` to the grid version, but
+    /// the Metal backend's `nextDrawable()` returns nil with no visible drawable,
+    /// so no frame is actually presented. When the pane is shown again the dedupe
+    /// guard then sees `grid.version == lastRenderedVersion` and skips the draw, so
+    /// the pane keeps showing its last on-screen (stale) frame until it's focused.
+    ///
+    /// Resetting the dedupe key forces the next `renderNow()` to push the current
+    /// grid to a now-valid drawable. Called when a pane becomes visible again
+    /// (tab return / re-entering a window).
+    public func repaintNow() {
+        lastRenderedVersion = .max
+        renderNow()
+    }
 
     /// Coalesces multiple grid mutations into a single renderNow call per runloop tick.
     private func scheduleRender() {
