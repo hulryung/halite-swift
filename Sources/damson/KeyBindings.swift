@@ -161,7 +161,7 @@ struct KeyChord: Codable, Equatable {
 struct AppAction {
     enum ID: String, CaseIterable {
         case settings, newWindow, newTab, closeTab, closeWindow
-        case copy, paste, find, findNext, findPrevious
+        case copy, paste, selectAll, copyLastCommandOutput, find, findNext, findPrevious
         case zoomIn, zoomOut, resetZoom, toggleFullScreen, togglePerfHUD, toggleAppleHUD
         case splitHorizontally, splitVertically
         case focusPaneLeft, focusPaneRight, focusPaneDown, focusPaneUp
@@ -201,6 +201,8 @@ struct AppAction {
 
             a(.copy, "Copy", "Edit", .c("c", cmd)),
             a(.paste, "Paste", "Edit", .c("v", cmd)),
+            a(.selectAll, "Select All", "Edit", .c("a", cmd)),
+            a(.copyLastCommandOutput, "Copy Last Command Output", "Edit", .c("c", cmdShift)),
             a(.find, "Find…", "Edit", .c("f", cmd)),
             a(.findNext, "Find Next", "Edit", .c("g", cmd)),
             a(.findPrevious, "Find Previous", "Edit", .c("g", cmdShift)),

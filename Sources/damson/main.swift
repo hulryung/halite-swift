@@ -656,6 +656,9 @@ func installMainMenu() {
     editItem.submenu = editMenu
     editMenu.addItem(item("Copy", #selector(NSText.copy(_:)), .copy))
     editMenu.addItem(item("Paste", #selector(NSText.paste(_:)), .paste))
+    editMenu.addItem(item("Select All", #selector(NSResponder.selectAll(_:)), .selectAll))
+    editMenu.addItem(item("Copy Last Command Output",
+                          #selector(DamsonSurfaceView.copyLastCommandOutput(_:)), .copyLastCommandOutput))
     editMenu.addItem(NSMenuItem.separator())
     editMenu.addItem(item("Find…", Selector(("performFindPanelAction:")), .find))
     editMenu.addItem(item("Find Next", #selector(DamsonSurfaceView.findNextMatch), .findNext))

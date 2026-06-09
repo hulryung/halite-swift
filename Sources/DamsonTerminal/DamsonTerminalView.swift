@@ -178,6 +178,34 @@ public final class DamsonSurfaceView: NSView, NSTextInputClient {
     /// `anchor` is the mouseDown position, `head` is the endpoint that follows mouseDragged.
     private var selectionAnchor: (row: Int, col: Int)?
     private var selectionHead: (row: Int, col: Int)?
+
+    /// Granularity of the in-progress drag, decided at mouseDown (single click =
+    /// per-cell, double = whole-word, triple = whole-line). A drag extends the
+    /// selection by this unit so a word/line drag snaps to word/line boundaries
+    /// (matches Terminal.app / iTerm2). Reset to `.character` on mouseUp.
+    private enum SelectionGranularity { case character, word, line }
+    private var selectionGranularity: SelectionGranularity = .character
+
+    /// When true, the selection is a rectangle (block) — the same column span on
+    /// every row. Toggled on by holding Option (Alt) at mouseDown.
+    private var selectionRectangular: Bool = false
+
+    /// The cell of the most recent click / caret. Used so a bare Shift+click can
+    /// extend from a sensible origin even when there is no live selection yet.
+    private var lastClickCell: (row: Int, col: Int)?
+
+    /// The originating cell of a word/line drag (the double-/triple-click point).
+    /// The drag pivots around this so the originating word/line always stays in
+    /// the selection regardless of which side the pointer moves to.
+    private var selectionDragOrigin: (row: Int, col: Int)?
+
+    /// Auto-scroll timer that runs while dragging past the top/bottom viewport
+    /// edge. Each tick scrolls the view and re-extends `selectionHead` to the
+    /// clamped edge cell so the selection can run beyond the visible region.
+    private var autoScrollTimer: Timer?
+    /// The most recent drag event location (in window coords), kept so the
+    /// auto-scroll tick can re-resolve the edge cell as content scrolls.
+    private var lastDragLocationInWindow: NSPoint?
     /// Accumulated trackpad precision wheel delta (points). Used to throttle wheel delivery to mouse-reporting apps.
     private var wheelReportAccum: CGFloat = 0
 
@@ -665,10 +693,31 @@ public final class DamsonSurfaceView: NSView, NSTextInputClient {
         }
 
         let point = convertEventToCell(event)
+        let shift = event.modifierFlags.contains(.shift)
+        // Holding Option (Alt) at mouseDown switches to rectangular (block) selection.
+        selectionRectangular = event.modifierFlags.contains(.option)
+
+        // Shift+click / Shift+drag — extend the existing selection instead of
+        // resetting it. The anchor stays put; only the head moves to the pointer.
+        // If there's no live anchor, fall back to the last click/caret cell so a
+        // bare Shift+click still produces a selection (Terminal.app / iTerm2 UX).
+        if shift {
+            if selectionAnchor == nil {
+                selectionAnchor = lastClickCell ?? point
+            }
+            selectionGranularity = .character
+            selectionHead = point
+            lastClickCell = point
+            scheduleRender()
+            return
+        }
+
+        selectionDragOrigin = point
         switch event.clickCount {
         case 2:
-            // Double click — word selection (broken at spaces).
-            if let (start, end) = wordBoundsAround(point) {
+            // Double click — smart token / word selection.
+            selectionGranularity = .word
+            if let (start, end) = smartSelectionBounds(point) ?? wordBoundsAround(point) {
                 selectionAnchor = start
                 selectionHead = end
             } else {
@@ -677,14 +726,17 @@ public final class DamsonSurfaceView: NSView, NSTextInputClient {
             }
         case 3:
             // Triple click — select the whole line.
+            selectionGranularity = .line
             let cells = cellsForTextViewRow(point.row)
             selectionAnchor = (point.row, 0)
             selectionHead = (point.row, cells.count)
         default:
-            // Normal click — start a drag selection.
+            // Normal click — start a per-cell drag selection.
+            selectionGranularity = .character
             selectionAnchor = point
             selectionHead = point
         }
+        lastClickCell = point
         scheduleRender()
     }
 
@@ -719,6 +771,17 @@ public final class DamsonSurfaceView: NSView, NSTextInputClient {
         c == " " || c == "\t"
     }
 
+    /// Smart double-click token recognition (URL / path / email / identifier).
+    /// Implemented in Bundle 4; returns nil until then so word selection runs.
+    private func smartSelectionBounds(
+        _ pos: (row: Int, col: Int)
+    ) -> ((row: Int, col: Int), (row: Int, col: Int))? {
+        nil
+    }
+
+    /// Implemented in Bundle 4 (semantic / OSC 133 command output copy).
+    private func copyLastCommandOutputImpl() {}
+
     public override func mouseDragged(with event: NSEvent) {
         // In cell-motion / any-motion mode, forward drag to the PTY too.
         if isMouseReportingEvent(event), session.mouseReportingMode >= 1002 {
@@ -727,11 +790,118 @@ public final class DamsonSurfaceView: NSView, NSTextInputClient {
             return
         }
         guard selectionAnchor != nil else { return }
-        selectionHead = convertEventToCell(event)
+        lastDragLocationInWindow = event.locationInWindow
+        extendSelectionToDragPoint(event.locationInWindow)
+        // Start/stop the auto-scroll timer depending on whether the pointer is
+        // past the top/bottom viewport edge.
+        updateAutoScroll(for: event.locationInWindow)
+        scheduleRender()
+    }
+
+    /// Resolve the drag location to a cell and extend `selectionHead`, snapping
+    /// to word/line boundaries when the drag began as a double-/triple-click.
+    private func extendSelectionToDragPoint(_ locationInWindow: NSPoint) {
+        let point = backend.cell(at: locationInWindow, grid: session.grid, metrics: cellMetrics)
+        let head = (row: point.row, col: point.col)
+        guard selectionAnchor != nil else { return }
+        // The pivot is the originating click cell (falls back to the live anchor).
+        let origin = selectionDragOrigin ?? selectionAnchor!
+        switch selectionGranularity {
+        case .character:
+            selectionHead = head
+        case .word:
+            // Extend by whole words: the originating word always stays selected,
+            // and the head snaps to the word boundary on the side it moved to.
+            let (olo, ohi) = wordSpanOrCell(at: origin)
+            let (hlo, hhi) = wordSpanOrCell(at: head)
+            if (head.row, head.col) >= (origin.row, origin.col) {
+                selectionAnchor = olo
+                selectionHead = hhi
+            } else {
+                selectionAnchor = ohi
+                selectionHead = hlo
+            }
+        case .line:
+            // Extend by whole lines around the originating line.
+            if head.row >= origin.row {
+                selectionAnchor = (origin.row, 0)
+                selectionHead = (head.row, cellsForTextViewRow(head.row).count)
+            } else {
+                selectionAnchor = (origin.row, cellsForTextViewRow(origin.row).count)
+                selectionHead = (head.row, 0)
+            }
+        }
+    }
+
+    /// The word span [start, end) around a cell, or the single cell if it's on
+    /// whitespace. Returns both endpoints as cells so callers can pick a side.
+    private func wordSpanOrCell(
+        at pos: (row: Int, col: Int)
+    ) -> (lo: (row: Int, col: Int), hi: (row: Int, col: Int)) {
+        if let (s, e) = wordBoundsAround(pos) { return (s, e) }
+        return (pos, pos)
+    }
+
+    // MARK: - Auto-scroll while dragging past the viewport edge
+
+    /// Start (or stop) the auto-scroll timer based on whether the pointer sits
+    /// above the top or below the bottom of the visible content. While active,
+    /// each tick scrolls the view and re-extends the selection to the edge.
+    private func updateAutoScroll(for locationInWindow: NSPoint) {
+        let inView = convert(locationInWindow, from: nil)
+        let edge = autoScrollDirection(forViewY: inView.y)
+        if edge == 0 {
+            stopAutoScroll()
+        } else if autoScrollTimer == nil {
+            startAutoScroll()
+        }
+    }
+
+    /// -1 = scroll up (pointer above the top edge), +1 = scroll down (below the
+    /// bottom edge), 0 = inside the viewport. The view is flipped (y grows down).
+    private func autoScrollDirection(forViewY y: CGFloat) -> Int {
+        if y < bounds.minY { return -1 }
+        if y > bounds.maxY { return 1 }
+        return 0
+    }
+
+    private func startAutoScroll() {
+        autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) {
+            [weak self] _ in self?.autoScrollTick()
+        }
+    }
+
+    private func stopAutoScroll() {
+        autoScrollTimer?.invalidate()
+        autoScrollTimer = nil
+    }
+
+    /// One auto-scroll step: nudge the scroll position toward the edge the
+    /// pointer is past, then re-extend the selection head to the (now clamped)
+    /// cell under the pointer so it tracks the freshly revealed rows.
+    private func autoScrollTick() {
+        guard selectionAnchor != nil, let loc = lastDragLocationInWindow else {
+            stopAutoScroll()
+            return
+        }
+        let inView = convert(loc, from: nil)
+        let dir = autoScrollDirection(forViewY: inView.y)
+        guard dir != 0 else { stopAutoScroll(); return }
+        let cellH = max(cellMetrics.height, 1)
+        // Scroll roughly one row per tick; speed up the farther past the edge.
+        let overshoot = dir < 0 ? (bounds.minY - inView.y) : (inView.y - bounds.maxY)
+        let rows = max(1, min(4, Int(overshoot / cellH) + 1))
+        let target = backend.scrollYPixels + CGFloat(dir) * cellH * CGFloat(rows)
+        followingBottom = false
+        backend.setScrollY(max(0, target), animated: false)
+        // Re-resolve the head against the newly scrolled content.
+        extendSelectionToDragPoint(loc)
         scheduleRender()
     }
 
     public override func mouseUp(with event: NSEvent) {
+        stopAutoScroll()
+        selectionGranularity = .character
         if isMouseReportingEvent(event) {
             sendMouseEventToPTY(event: event, button: 0, pressed: false)
             return
@@ -1420,6 +1590,23 @@ public final class DamsonSurfaceView: NSView, NSTextInputClient {
         renderNow()
         followingBottom = true
         scrollViewportToBottom()
+    }
+
+    /// Cmd+A / Edit > Select All — select the whole scrollback + viewport.
+    @objc public override func selectAll(_ sender: Any?) {
+        let grid = session.grid
+        let lastRow = grid.scrollback.count + grid.rows - 1
+        guard lastRow >= 0 else { return }
+        selectionRectangular = false
+        selectionGranularity = .character
+        selectionAnchor = (0, 0)
+        selectionHead = (lastRow, cellsForTextViewRow(lastRow).count)
+        scheduleRender()
+    }
+
+    /// Edit > Copy Last Command Output — fully implemented in Bundle 4.
+    @objc public func copyLastCommandOutput(_ sender: Any?) {
+        copyLastCommandOutputImpl()
     }
 
     /// The selector sent by Edit > Copy / Cmd+C. Pushes the selected text to the pasteboard.
