@@ -1,4 +1,4 @@
-# halite-swift release pipeline
+# damson release pipeline
 
 `swift build -c release` → `.app` bundle → Developer ID 코드사인 →
 Apple notarization → `.dmg`. Sparkle 자동업데이트와 GitHub Actions 자동화는
@@ -49,8 +49,8 @@ MARKETING_VERSION=0.1.0 ./scripts/release.sh
 결과:
 ```
 dist/
-├── Halite.app          # 서명 + 노타라이즈 + staple 완료
-└── Halite-0.1.0.dmg    # 서명 + 노타라이즈 + staple 완료
+├── Damson.app          # 서명 + 노타라이즈 + staple 완료
+└── Damson-0.1.0.dmg    # 서명 + 노타라이즈 + staple 완료
 ```
 
 ## 단계별로
@@ -60,7 +60,7 @@ dist/
 ```sh
 # 1) 빌드만 — 서명 없이 dev 검증
 SKIP_NOTARIZE=1 ./scripts/build-app.sh
-open dist/Halite.app
+open dist/Damson.app
 
 # 2) 서명만 — 노타라이즈는 시간 걸리므로 분리
 SKIP_NOTARIZE=1 ./scripts/sign-and-notarize.sh
@@ -77,14 +77,14 @@ SKIP_NOTARIZE=1 ./scripts/sign-and-notarize.sh
 배포본이 실제로 Gatekeeper를 통과하는지:
 
 ```sh
-spctl --assess --type execute --verbose=4 dist/Halite.app
+spctl --assess --type execute --verbose=4 dist/Damson.app
 # accepted, source=Notarized Developer ID
 ```
 
 `.dmg`도:
 
 ```sh
-spctl --assess --type open --context context:primary-signature dist/Halite-0.1.0.dmg
+spctl --assess --type open --context context:primary-signature dist/Damson-0.1.0.dmg
 ```
 
 ## halite-cli 설치
@@ -93,7 +93,7 @@ spctl --assess --type open --context context:primary-signature dist/Halite-0.1.0
 `/usr/local/bin`에 symlink 거는 게 일반적:
 
 ```sh
-sudo ln -sf /Applications/Halite.app/Contents/Resources/halite-cli \
+sudo ln -sf /Applications/Damson.app/Contents/Resources/halite-cli \
     /usr/local/bin/halite-cli
 halite-cli --list-instances
 ```
@@ -131,16 +131,16 @@ Info.plist의 `SUPublicEDKey`로 자동 박는다. private key는 macOS keychain
 export SPARKLE_PUBLIC_KEY='rxFA7zVTQNxX1cd...='
 MARKETING_VERSION=0.1.0 ./scripts/release.sh
 ./scripts/sparkle-appcast.sh \
-    --dmg dist/Halite-0.1.0.dmg \
+    --dmg dist/Damson-0.1.0.dmg \
     --version 0.1.0 \
     --build 1 \
-    --url 'https://github.com/hulryung/halite-swift/releases/download/v0.1.0/Halite-0.1.0.dmg' \
+    --url 'https://github.com/hulryung/damson/releases/download/v0.1.0/Damson-0.1.0.dmg' \
     > /tmp/entry.xml
 python3 .github/scripts/insert-appcast-entry.py appcast.xml /tmp/entry.xml > appcast.new.xml
 mv appcast.new.xml appcast.xml
 git add appcast.xml && git commit -m "appcast 0.1.0"
 git tag v0.1.0 && git push --tags
-gh release create v0.1.0 dist/Halite-0.1.0.dmg
+gh release create v0.1.0 dist/Damson-0.1.0.dmg
 ```
 
 `SUFeedURL`이 `https://raw.githubusercontent.com/.../main/appcast.xml`로
@@ -187,5 +187,5 @@ git push --tags
 - **Universal binary 미지원** — 현재 빌드 머신 아키텍처(arm64 또는 x86_64)만.
   CI도 arm64(macos-14)에서만 돌아감. Intel 사용자도 지원하려면
   `swift build --arch arm64 --arch x86_64` + `lipo`로 합치는 단계 필요.
-- **App icon 미적용** — `Resources/Halite.icns` 추가하면 자동으로 번들에
+- **App icon 미적용** — `Resources/Damson.icns` 추가하면 자동으로 번들에
   포함되도록 build-app.sh가 미리 처리해 둠.

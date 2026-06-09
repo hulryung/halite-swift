@@ -45,7 +45,7 @@ halite surfaces are **NSTextView/NSScrollView**. Resizing a *live* surface fires
 
 ### Shared motion core — `Motion`
 
-New file `Sources/HaliteTerminal/Motion.swift`. A small stateless helper (enum with static members), no instances. (Placed in the **HaliteTerminal library** rather than the `halite` executable so the gating logic is unit-testable — the executable target has no test target. Public API and call sites are unchanged; callers already `import HaliteTerminal`.)
+New file `Sources/DamsonTerminal/Motion.swift`. A small stateless helper (enum with static members), no instances. (Placed in the **DamsonTerminal library** rather than the `halite` executable so the gating logic is unit-testable — the executable target has no test target. Public API and call sites are unchanged; callers already `import DamsonTerminal`.)
 
 ```
 enum Motion {
@@ -99,7 +99,7 @@ Animation intent is threaded through the existing methods; the disabled/instant 
 
 ### Settings + Reduce Motion
 
-- **`HaliteConfig`** — add `animations: Bool` (default `true`), populated from `UserDefaults` key `halite.animations` (mirror `cursorBlink`).
+- **`DamsonConfig`** — add `animations: Bool` (default `true`), populated from `UserDefaults` key `halite.animations` (mirror `cursorBlink`).
 - **`SettingsView.swift`** — add `@AppStorage("halite.animations") private var animations: Bool = true`, a `Toggle("Animations", isOn: $animations)` near the cursor-blink toggle, and `.onChange(of: animations) { _ in postChanged() }`; load in the config read path (`config.animations = d.object(forKey: "halite.animations") as? Bool ?? true`).
 - `Motion.enabled` ANDs the toggle with `NSWorkspace.shared.accessibilityDisplayShouldReduceMotion`, so Reduce Motion wins regardless of the toggle.
 
@@ -123,7 +123,7 @@ Manual checklist: each of the 5 interactions looks smooth; rapid spam leaves no 
 
 ## Incremental implementation order
 
-1. `Motion` core + `HaliteConfig.animations` + `SettingsView` toggle + Reduce-Motion gate (no behavior change yet).
+1. `Motion` core + `DamsonConfig.animations` + `SettingsView` toggle + Reduce-Motion gate (no behavior change yet).
 2. Tab create (simplest live transform).
 3. Pane split (live transform-in of new pane).
 4. Tab close + Pane close (snapshot overlay out).

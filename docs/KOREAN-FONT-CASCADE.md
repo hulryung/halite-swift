@@ -1,12 +1,12 @@
 # 한글 폰트 cascade 처리
 
-halite-swift는 NSTextView + NSAttributedString 기반 렌더링을 쓴다 (cmux 통합에 필요한
-HaliteTerminal package의 설계). macOS의 system font fallback chain은 *언어* 글리프
+damson는 NSTextView + NSAttributedString 기반 렌더링을 쓴다 (cmux 통합에 필요한
+DamsonTerminal package의 설계). macOS의 system font fallback chain은 *언어* 글리프
 (Hangul/Hanzi 등)는 자동 처리하지만, 자동 fallback이 항상 우리가 원하는 한글 폰트로
 가는 것은 아니다. 또 macOS 버전마다 fallback 우선순위가 미세하게 달라 line height에
 차이가 생기기도 한다.
 
-→ `Sources/HaliteTerminal/FontCascade.swift`의 `fontWithNerdFallback(family:size:)`이
+→ `Sources/DamsonTerminal/FontCascade.swift`의 `fontWithNerdFallback(family:size:)`이
    모든 폰트 생성 지점에서 호출되어, NSFontDescriptor의 `cascadeList`에 한글 fallback을
    **명시적으로** 박는다.
 
@@ -60,7 +60,7 @@ D2Coding은 변형이 많다. 명시적으로 enumerate한 이름 (`koreanMono` 
 
 ## 추가 / 변경 시 주의
 
-`fontWithNerdFallback`은 HaliteSurfaceView의 세 군데에서 호출된다:
+`fontWithNerdFallback`은 DamsonSurfaceView의 세 군데에서 호출된다:
 
 - `init` (윈도우 첫 생성)
 - `applyConfig` (Settings에서 폰트 변경 hot-reload)

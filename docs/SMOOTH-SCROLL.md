@@ -44,7 +44,7 @@ private var displayLink: CVDisplayLink?
 func startDisplayLink() {
     CVDisplayLinkCreateWithActiveCGDisplays(&displayLink)
     CVDisplayLinkSetOutputCallback(displayLink!, { _, _, _, _, _, context in
-        let view = Unmanaged<HaliteSurfaceView>.fromOpaque(context!).takeUnretainedValue()
+        let view = Unmanaged<DamsonSurfaceView>.fromOpaque(context!).takeUnretainedValue()
         view.drawIfDirty()                          // dirty flag 검사 후만 그림
         return kCVReturnSuccess
     }, Unmanaged.passUnretained(self).toOpaque())

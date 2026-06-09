@@ -9,11 +9,11 @@ Produced by the design-metal-renderer workflow (3 designs, adversarial judging, 
   {
     "design": "incremental-seam",
     "total": 53,
-    "verdict": "Strongest design of the three for THIS codebase and integration contract. Its differentiation is structural, not technical: on the renderer guts (passes, atlas, AA, shaping, scroll math, draw trigger, concurrency) it converges with the faithful-port and ghostty-style designs on ~95% of decisions, so it neither leads nor lags on correctness/latency. Where it decisively wins is integrationFit, phasability, and risk — the byte-stable public API by construction, the live A/B harness enabled by the verified backend-independent HaliteSession/Grid model, the shared-cellMetrics catch that prevents toggle-induced SIGWINCH, and the named P7 that retires the legacy path. The two genuine flaws are a scroll seam shaped for the Metal destination (so the legacy backend's P0 conformance is an adapter, not the advertised compile-time proof) and an under-specified host→flipped-content coordinate conversion in cell(at:). Both are fixable spec-precision gaps, not architectural defects. With the four must-fixes addressed, this is the design to implement: it reaches a placeholder-deleting renderer on the same timeline as the rivals while being the only one that can de-risk every phase against the live legacy output.\"",
+    "verdict": "Strongest design of the three for THIS codebase and integration contract. Its differentiation is structural, not technical: on the renderer guts (passes, atlas, AA, shaping, scroll math, draw trigger, concurrency) it converges with the faithful-port and ghostty-style designs on ~95% of decisions, so it neither leads nor lags on correctness/latency. Where it decisively wins is integrationFit, phasability, and risk — the byte-stable public API by construction, the live A/B harness enabled by the verified backend-independent DamsonSession/Grid model, the shared-cellMetrics catch that prevents toggle-induced SIGWINCH, and the named P7 that retires the legacy path. The two genuine flaws are a scroll seam shaped for the Metal destination (so the legacy backend's P0 conformance is an adapter, not the advertised compile-time proof) and an under-specified host→flipped-content coordinate conversion in cell(at:). Both are fixable spec-precision gaps, not architectural defects. With the four must-fixes addressed, this is the design to implement: it reaches a placeholder-deleting renderer on the same timeline as the rivals while being the only one that can de-risk every phase against the live legacy output.\"",
     "mustFix": [
       "§10 `cell(at: pointInHost:)` must explicitly convert the host point into the flipped MetalContentView coordinate space (contentView.convert(pointInHost, from: host)) BEFORE applying `row = floor((y + scrollYPixels - inset)/cellH)`, or the row axis inverts. The forward screenRect path does the symmetric to:host conversion; make the inverse path symmetric. Validate against the verified current convertEventToCell (:974-985), which relies on NSTextView being flipped-by-default.",
       "Either define the legacy scalar-scroll adapter explicitly (how LegacyTextBackend maps scrollYPixels / setScrollY(animated:) / handleScrollWheel onto clipView.bounds.origin.y + reflectScrolledClipView + didLiveScrollNotification, verified as the current mechanism), OR scope the 'P0 proves the seam' claim to render + cell-geometry and concede that scroll behavior is not faithfully exercised by the legacy backend until the Metal backend lands. Do not let the headline compile-time-proof claim cover scroll silently.",
-      "Resolve the `makeDefaultLibrary(bundle: .module)` shader-load path for the HaliteTerminal LIBRARY target as the stated P1 build gate before P2 builds on it — confirm `.process(\"MetalRender/Shaders.metal\")` resolves via Bundle.module (it is used in the executable target but unproven for this library target), with the embedded-source `makeLibrary(source:)` fallback ready.",
+      "Resolve the `makeDefaultLibrary(bundle: .module)` shader-load path for the DamsonTerminal LIBRARY target as the stated P1 build gate before P2 builds on it — confirm `.process(\"MetalRender/Shaders.metal\")` resolves via Bundle.module (it is used in the executable target but unproven for this library target), with the embedded-source `makeLibrary(source:)` fallback ready.",
       "Add an explicit A/B parity caveat for the deliberately-reproduced `markedText.count` IME advance bug so a future wcwidth-correct fix is not flagged as an A/B regression; tie the harness's pass criteria to 'matches legacy EXCEPT known-divergence list' rather than strict pixel-equality."
     ]
   },
@@ -32,7 +32,7 @@ Produced by the design-metal-renderer workflow (3 designs, adversarial judging, 
   {
     "design": "faithful-port",
     "total": 38,
-    "verdict": "Technically the most thorough and correct core renderer of the three on the load-bearing seams (6-part key, sync gate, main-thread concurrency, on-demand draw, cellMetrics, IME firstRect, public API stability) — fully competitive with the rivals on correctness, latency-safety, and integration fit (~8 each). But its differentiating scope is its undoing for THIS task: the headline value (full Rust-pipeline parity via P4-P8) is exactly the scope the contract excludes, and P6/P7 build on image/effect/particle data that the halite-swift model and VTParser provably do not produce (grep-confirmed zero support). It scores well on the core and drops hard on effort-realism and risk relative to the leaner ghostty-style and the safer incremental-seam designs. Strip P4-P8 and verify the ligature default and it would be a strong P0-P3 plan; as written, the lavish unrequired, model-blocked phasing is a liability, not rigor.",
+    "verdict": "Technically the most thorough and correct core renderer of the three on the load-bearing seams (6-part key, sync gate, main-thread concurrency, on-demand draw, cellMetrics, IME firstRect, public API stability) — fully competitive with the rivals on correctness, latency-safety, and integration fit (~8 each). But its differentiating scope is its undoing for THIS task: the headline value (full Rust-pipeline parity via P4-P8) is exactly the scope the contract excludes, and P6/P7 build on image/effect/particle data that the damson model and VTParser provably do not produce (grep-confirmed zero support). It scores well on the core and drops hard on effort-realism and risk relative to the leaner ghostty-style and the safer incremental-seam designs. Strip P4-P8 and verify the ligature default and it would be a strong P0-P3 plan; as written, the lavish unrequired, model-blocked phasing is a liability, not rigor.",
     "mustFix": [
       "Cut or quarantine P6 (images) and P7 (effects/post-fx/particles) until VTParser + Grid + Cell gain image-placement parsing and storage. As written these phases port image_pass.rs/effects.rs against a model that produces no image, sixel, Kitty, or particle data (grep-confirmed zero hits in Sources/). Either descope them entirely to match the contract (reproduce current placeholder visuals) or add explicit parser+model milestones before them and re-estimate effort.",
       "Resolve the ligature-default question empirically, not by assertion. Either default ligatures OFF (matching both rival designs and the recipe), or pixel-diff Menlo and a ligature font (Fira Code) against the current NSTextView renderer at P3 to prove 'visually identical' before shipping default-on. Do not ship the current unverified claim that NSAttributedString shaping makes default-on byte-identical.",
@@ -53,22 +53,22 @@ This is my final deliverable.
 
 ---
 
-# Halite-Swift Metal Renderer — Phased Implementation Plan
+# Damson-Swift Metal Renderer — Phased Implementation Plan
 
 **For maintainer approval before coding.** Self-contained; the companion architecture doc holds the per-decision rationale and the verified line-number catalog.
 
 ## What this is
 
-Replace the temporary M3 render placeholder — `NSScrollView` + child `NSTextView` + full `NSAttributedString` rebuild every frame (`HaliteTerminalView.swift:41-45`, explicitly flagged "M4 이후 CAMetalLayer + 자체 렌더러로 교체") — with a `CAMetalLayer` instanced renderer, **behind a runtime toggle**, reaching exact visual parity, then retiring the legacy path.
+Replace the temporary M3 render placeholder — `NSScrollView` + child `NSTextView` + full `NSAttributedString` rebuild every frame (`DamsonTerminalView.swift:41-45`, explicitly flagged "M4 이후 CAMetalLayer + 자체 렌더러로 교체") — with a `CAMetalLayer` instanced renderer, **behind a runtime toggle**, reaching exact visual parity, then retiring the legacy path.
 
 **Strategy:** extract a `TerminalRenderBackend` protocol, make the *existing* NSTextView path conform first (zero visible change), then build the Metal backend as a second conformer selectable live. The toggle doubles as an A/B pixel-diff oracle on a running terminal. Every phase ends in a buildable, dogfoodable `swift run halite`.
 
-**Conventions (SwiftPM, not cmux):** dogfood with `swift run halite` (legacy) and `HALITE_METAL=1 swift run halite` (Metal). Tests in `Tests/HaliteTerminalTests/` are XCTest, **auto-discovered — no project-file wiring, no two-commit red/green policy**. All cited line numbers verified against the live tree this session.
+**Conventions (SwiftPM, not cmux):** dogfood with `swift run halite` (legacy) and `HALITE_METAL=1 swift run halite` (Metal). Tests in `Tests/DamsonTerminalTests/` are XCTest, **auto-discovered — no project-file wiring, no two-commit red/green policy**. All cited line numbers verified against the live tree this session.
 
 ## Hard invariants held at every phase
 
-- **Public API byte-stable:** `HaliteSurfaceView: NSView` + `init(session:)` (`:147`, consumed directly by `PaneTree.swift:26`, `main.swift:368`, `CompactWindowController`); all `@objc public` selectors (find/zoom/copy/paste/find-panel/split); the `HaliteTerminalView` representable; the full `NSTextInputClient` conformance; `HaliteSession`/`Grid`/`Cell` read surfaces. The `CAMetalLayer` lives *inside* a backend-owned subview — the host class never changes.
-- **Input path never regresses:** keyboard→PTY, IME (incl. Hangul BS-cancel + warmup), mouse reporting (SGR/X10, button 64/65), selection, Cmd-click/hover URLs all stay in `HaliteSurfaceView`, routed to the backend only for coordinate conversion.
+- **Public API byte-stable:** `DamsonSurfaceView: NSView` + `init(session:)` (`:147`, consumed directly by `PaneTree.swift:26`, `main.swift:368`, `CompactWindowController`); all `@objc public` selectors (find/zoom/copy/paste/find-panel/split); the `DamsonTerminalView` representable; the full `NSTextInputClient` conformance; `DamsonSession`/`Grid`/`Cell` read surfaces. The `CAMetalLayer` lives *inside* a backend-owned subview — the host class never changes.
+- **Input path never regresses:** keyboard→PTY, IME (incl. Hangul BS-cancel + warmup), mouse reporting (SGR/X10, button 64/65), selection, Cmd-click/hover URLs all stay in `DamsonSurfaceView`, routed to the backend only for coordinate conversion.
 - **6-part composite dirty key untouched** (`renderNow :1543-1566`: `version + markedText + selKey + findKey + hoverKey + blinkKey`). Both backends inherit it verbatim. The sync-output torn-frame gate (`scheduleRender :1517`, 150ms safety flush) stays above the backend call.
 - **Concurrency unchanged:** `PTYHost` hops every chunk to main (`PTYHost.swift:173`) before `parser.feed`→grid mutation. Parse, mutate, and render all serialize on main; `Grid` has no lock. The Metal path stays on-demand on main; the scroll-animation display-link re-reads only the pre-built GPU buffer, never `session.grid`. **No `gridLock`/double-buffer is introduced — that would add a race that does not exist today.**
 - **Typing latency:** per-keystroke Metal work (atlas-cached glyph lookup + instance write) is strictly less than today's `setAttributedString` + `ensureLayout`. No app-level display link for typing; the scroll link is transient (animation-only).
@@ -77,13 +77,13 @@ Replace the temporary M3 render placeholder — `NSScrollView` + child `NSTextVi
 
 ## Phase 0 — Extract the seam (no Metal, no visible change)
 
-**Goal.** Put the `TerminalRenderBackend` protocol between `HaliteSurfaceView` and its render/geometry/scroll mechanism, with the current NSTextView path as the first conformer. Prove the seam holds before any Metal exists: input/IME/mouse geometry can no longer reach `textView.convert` except through the legacy backend, or it won't compile.
+**Goal.** Put the `TerminalRenderBackend` protocol between `DamsonSurfaceView` and its render/geometry/scroll mechanism, with the current NSTextView path as the first conformer. Prove the seam holds before any Metal exists: input/IME/mouse geometry can no longer reach `textView.convert` except through the legacy backend, or it won't compile.
 
 **Files.**
 - NEW `RenderBackend.swift` — `protocol TerminalRenderBackend`; `struct RenderState` (markedText, selection, find matches, active-find, hovered-URL, blink flags — exactly the view-local state the 6-part key tracks); `enum RenderBackendKind { case legacyText, metal }`.
 - NEW `LegacyTextBackend.swift` — wraps the current `NSScrollView`/`PassiveTextView`; implements `render`, `cell(at:)`, `screenRect(forCell:)`, and the scalar scroll adapter (`scrollYPixels` getter = `clipView.bounds.origin.y` `:356`; `setScrollY` = `scroll(to:)`+`reflectScrolledClipView` `:370/:391`; `setScrollY(animated:)` = `clipView.animator().setBoundsOrigin` `:870`; `handleScrollWheel` = native momentum).
-- NEW `MetalRenderConfig.swift` — toggle resolution: live override > env `HALITE_METAL=1` > `UserDefaults "HaliteMetalRenderer"` > `.legacyText`.
-- EDIT `HaliteTerminalView.swift` — move `scrollView`/`textView`/`cursorLayer` behind `legacyBackend`; `renderNow()` tail becomes `backend.render(grid:theme:state:)`; geometry calls (`convertEventToCell :974`, `firstRect :1474`, `updateCursorLayer :1737`) route through the protocol; `switchBackend(to:)` (tear down old contentView, install new, copy `scrollYPixels`, force full render).
+- NEW `MetalRenderConfig.swift` — toggle resolution: live override > env `HALITE_METAL=1` > `UserDefaults "DamsonMetalRenderer"` > `.legacyText`.
+- EDIT `DamsonTerminalView.swift` — move `scrollView`/`textView`/`cursorLayer` behind `legacyBackend`; `renderNow()` tail becomes `backend.render(grid:theme:state:)`; geometry calls (`convertEventToCell :974`, `firstRect :1474`, `updateCursorLayer :1737`) route through the protocol; `switchBackend(to:)` (tear down old contentView, install new, copy `scrollYPixels`, force full render).
 
 **Deliverable.** Identical app, now factored through one backend protocol with the toggle wired (defaults `.legacyText`).
 
@@ -95,14 +95,14 @@ Replace the temporary M3 render placeholder — `NSScrollView` + child `NSTextVi
 
 ## Phase 1 — Metal on screen: background + ASCII text + coordinate/IME correctness
 
-**Goal — the make-or-break phase, all front-loaded.** First Metal pixels, and three of the four named unknowns proven at once: `CAMetalLayer` hosted inside `HaliteSurfaceView`, the glyph atlas + on-demand draw, and **IME cursor-rect placement** (candidate window must land *on* the cursor). The fourth unknown (atlas growth) is deferred to P6; only the basic atlas is proven here.
+**Goal — the make-or-break phase, all front-loaded.** First Metal pixels, and three of the four named unknowns proven at once: `CAMetalLayer` hosted inside `DamsonSurfaceView`, the glyph atlas + on-demand draw, and **IME cursor-rect placement** (candidate window must land *on* the cursor). The fourth unknown (atlas growth) is deferred to P6; only the basic atlas is proven here.
 
 *Decision flagged for approval:* the architecture split bg (its P1) and text (its P2) for debug isolation. **This plan folds them** so the first dogfoodable Metal frame is *readable* and exercises the atlas + baseline immediately — the higher-risk surfaces. Trade-off: a larger first Metal diff. If you prefer isolation, we split into 1a (bg + block-cursor-inverse, no glyphs) and 1b (ASCII text); the exit criteria below partition cleanly.
 
 **Why coordinate-rect, not preedit, lands here.** `firstRect` and `cell(at:)` need only `MetalContentView` + scalar `scrollYPixels` + the `CoordinateMap` arithmetic — **not glyphs and not the preedit visual overlay.** So IME *candidate placement* is provable in Phase 1; the preedit *wash/underline* visual is parity polish in P4.
 
 **Files.**
-- NEW `MetalRender/MetalDevice.swift` — shared `MTLDevice`/`MTLCommandQueue`, pipeline factory, feature probe, and **the library-load gate (highest-risk unknown):** `device.makeDefaultLibrary(bundle: .module)`. `Bundle.module` is currently used **only** in the executable target (`AppBundleTrampoline.swift:90,93`), never in `HaliteTerminal` — this path is unproven for a library target and is the *first thing validated*. Documented fallback: embed shader source as a Swift string and `device.makeLibrary(source:)`. **Decide here before P2 builds on it.**
+- NEW `MetalRender/MetalDevice.swift` — shared `MTLDevice`/`MTLCommandQueue`, pipeline factory, feature probe, and **the library-load gate (highest-risk unknown):** `device.makeDefaultLibrary(bundle: .module)`. `Bundle.module` is currently used **only** in the executable target (`AppBundleTrampoline.swift:90,93`), never in `DamsonTerminal` — this path is unproven for a library target and is the *first thing validated*. Documented fallback: embed shader source as a Swift string and `device.makeLibrary(source:)`. **Decide here before P2 builds on it.**
 - NEW `MetalRender/MetalContentView.swift` — `NSView`, `isFlipped = true` (**flip localized here, not the host** — fixes must-fix A by construction), `makeBackingLayer → CAMetalLayer` (`.bgra8Unorm_srgb`, `framebufferOnly`, `maximumDrawableCount=3`, `allowsNextDrawableTimeout`).
 - NEW `MetalRender/CoordinateMap.swift` — **pure-function** row/col↔pixel arithmetic (flip/`convert` as a thin AppKit shim around it); `cell(at:)`, `screenRect(forCell:)`, `firstRect`. The forward path applies `yViewport = yContent − scrollYPixels`; the inverse does `contentView.convert(point, from: host)` **first** into the flipped view, *then* `row = floor((p.y + scrollYPixels − inset)/cellH)`.
 - NEW `MetalRender/GlyphAtlas.swift` (mask page R8, `ShelfPacker`, glyph key map), `GlyphRasterizer.swift` (`CTFontDrawGlyphs`→`CGBitmapContext`), `RenderTypes.swift` (repr-C `Uniforms`/`BgInstance`/`GlyphInstance`), `Shaders.metal` (bg + glyph-mask vertex/fragment).
@@ -110,7 +110,7 @@ Replace the temporary M3 render placeholder — `NSScrollView` + child `NSTextVi
 - NEW `MetalRender/InstanceBuilder.swift` — `Grid` + `RenderState` → instance arrays (no Metal types; the hot path).
 - NEW shared `cellMetrics` provider — computed **once, backend-independent** (`cellW = ("M").size(font).width`; `cellH = measuredLineHeight("M\nM\nM"/3)` `:400`), consumed by both backends so flipping the toggle reports identical `(cols,rows)` and **never fires SIGWINCH**.
 - EDIT `Package.swift` — `resources: [.process("MetalRender/Shaders.metal")]`.
-- EDIT `HaliteTerminalView.swift` — `viewDidChangeBackingProperties`/`viewDidChangeEffectiveAppearance`/`layout` forward to backend; `firstRect`/`convertEventToCell` delegate to `backend`.
+- EDIT `DamsonTerminalView.swift` — `viewDidChangeBackingProperties`/`viewDidChangeEffectiveAppearance`/`layout` forward to backend; `firstRect`/`convertEventToCell` delegate to `backend`.
 
 **Deliverable.** `HALITE_METAL=1 swift run halite` shows a readable shell (`ls`, prompt, `vim`) in Metal: correct background colors, monospace ASCII text at the calibrated baseline, block-cursor-as-inverse, and **the Korean/Japanese IME candidate window landing on the cursor**. Legacy still default.
 
@@ -130,7 +130,7 @@ Replace the temporary M3 render placeholder — `NSScrollView` + child `NSTextVi
 **Goal.** Every static visual attribute matches legacy pixel-for-pixel.
 
 **Files.**
-- NEW `MetalRender/ColorResolver.swift` — ports `HaliteTheme.nsColor`/`paletteColor` + `CellAttrs.resolvedColors` (`Cell.swift:45`): default→theme, palette 0-15→ANSI, 16-231→6×6×6 cube, 232-255→grayscale ramp, `.rgb`→absolute sRGB, inverse swap. Dynamic system colors (selection/find/orange/yellow/blue) resolved per-`NSAppearance`.
+- NEW `MetalRender/ColorResolver.swift` — ports `DamsonTheme.nsColor`/`paletteColor` + `CellAttrs.resolvedColors` (`Cell.swift:45`): default→theme, palette 0-15→ANSI, 16-231→6×6×6 cube, 232-255→grayscale ramp, `.rgb`→absolute sRGB, inverse swap. Dynamic system colors (selection/find/orange/yellow/blue) resolved per-`NSAppearance`.
 - EDIT `InstanceBuilder.swift` — bg priority chain (selection > activeFind > find > cellBg, one `BgInstance`/cell), fg asymmetry (selection keeps fg; find forces black; active-find orange/black; find yellow/black), hover-blue-last (fg override + blue underline, unconditional), wide/CJK (lead-cell glyph at natural width, left-aligned, continuation cell skipped for glyph but gets 2×-wide `BgInstance`).
 - EDIT `GlyphRasterizer.swift` — bold CTFont slot (weight only, no ANSI brightening); **italic stays dead** (SGR 3 parsed, never drawn). `CTFontCreateForString` cascade via `FontCascade` (delete manual CJK span-split).
 - NEW `Shaders.metal` overlay pass + `OverlayInstance` — SGR underline, strikethrough, hyperlink (OSC-8) underline fg α0.5, Cmd-hover blue underline.
@@ -151,7 +151,7 @@ Replace the temporary M3 render placeholder — `NSScrollView` + child `NSTextVi
 - NEW `MetalRender/ScrollModel.swift` — scalar `scrollYPixels`; integer/fractional split (`scrollInt` selects scrollback rows; `scrollFrac` slides the viewport sub-cell + 1 overdraw row + scissor); critically-damped spring; momentum via macOS `phase`/`momentumPhase` (**integrate, don't simulate**); rubber-band at edges.
 - NEW `MetalRender/AnimationLink.swift` — **transient** display link (macOS 14+ `NSView.displayLink`; macOS 13 `CVDisplayLink` hopping to main), started on animation begin, invalidated the instant the spring settles or the surface is occluded/miniaturized/off-window. `renderScrollOnly(scrollYPixels:)` rotates the ring slot and writes only the uniform — **never re-reads `session.grid`**.
 - EDIT `MetalTerminalBackend.swift` — `renderScrollOnly` path.
-- EDIT `HaliteTerminalView.swift` — port emergent behaviors: `followingBottom` (`:131`, updated only on user scroll intent), alt-screen/sync-output grid-top anchor (`followTargetY :843`), scrollback-eviction anchor (`scrollbackPushCount − scrollback.count`), 0.18s snap-to-cursor on input with the `isSnappingToCursor` guard (`:861`), alt-screen transition re-engages follow.
+- EDIT `DamsonTerminalView.swift` — port emergent behaviors: `followingBottom` (`:131`, updated only on user scroll intent), alt-screen/sync-output grid-top anchor (`followTargetY :843`), scrollback-eviction anchor (`scrollbackPushCount − scrollback.count`), 0.18s snap-to-cursor on input with the `isSnappingToCursor` guard (`:861`), alt-screen transition re-engages follow.
 
 **Deliverable.** Trackpad sub-pixel scroll, momentum, rubber-band, follow-bottom, TUI grid-top anchoring (Claude Code / Ink), snap-to-cursor on input — matching or exceeding legacy.
 
@@ -244,15 +244,15 @@ Image/sixel/Kitty pass, offscreen-scene + post-fx blit, particles, CRT, procedur
 
 # SYNTHESIZED ARCHITECTURE (detail)
 
-Confirmed: zero image/sixel/Kitty/DCS data source in VTParser/Grid/Cell — deferring the image pass is bulletproof (nothing would populate it). And `Bundle.module` is only used in the executable target today, not the library — confirming the `makeDefaultLibrary(bundle: .module)` P1 build gate is genuinely unproven for the `HaliteTerminal` library and must be validated. I have everything. Writing the synthesis now.
+Confirmed: zero image/sixel/Kitty/DCS data source in VTParser/Grid/Cell — deferring the image pass is bulletproof (nothing would populate it). And `Bundle.module` is only used in the executable target today, not the library — confirming the `makeDefaultLibrary(bundle: .module)` P1 build gate is genuinely unproven for the `DamsonTerminal` library and must be validated. I have everything. Writing the synthesis now.
 
 ---
 
-# Halite-Swift Metal Renderer — Definitive Architecture
+# Damson-Swift Metal Renderer — Definitive Architecture
 
 **Spine: incremental-seam** (panel winner, 53). Grafted with **ghostty-style's lean 4-pass altitude** ("reproduce the *current* placeholder, defer effects the placeholder lacks") and **faithful-port's parity catalog + explicit baseline formula**. The differentiation that wins is *structural*: a backend protocol behind a byte-stable public API, a live runtime toggle that doubles as an A/B pixel-diff harness, shared backend-independent `cellMetrics`, and a named final phase that retires the legacy path. The renderer guts are the leaner rivals' guts.
 
-All claims below are verified against the live tree (line numbers cited are real: 6-part key at `HaliteTerminalView.swift:1543-1566`, `measuredLineHeight` at `:400-409`, `convertEventToCell` at `:974-985`, `firstRect` at `:1474-1496`, block-cursor inverse at `:1822-1823`, PTYHost main-hop at `PTYHost.swift:173`, NSScrollView scroll mechanism at `:356/:370/:391/:395`, `gridChanged` PassthroughSubject at `HaliteSession.swift:33`). Grep confirmed **zero** sixel/Kitty/image/DCS data source in `VTParser/Grid/Cell`, and `Bundle.module` is used today only in the executable target — both facts shape decisions below.
+All claims below are verified against the live tree (line numbers cited are real: 6-part key at `DamsonTerminalView.swift:1543-1566`, `measuredLineHeight` at `:400-409`, `convertEventToCell` at `:974-985`, `firstRect` at `:1474-1496`, block-cursor inverse at `:1822-1823`, PTYHost main-hop at `PTYHost.swift:173`, NSScrollView scroll mechanism at `:356/:370/:391/:395`, `gridChanged` PassthroughSubject at `DamsonSession.swift:33`). Grep confirmed **zero** sixel/Kitty/image/DCS data source in `VTParser/Grid/Cell`, and `Bundle.module` is used today only in the executable target — both facts shape decisions below.
 
 ---
 
@@ -282,11 +282,11 @@ The spine **already** resolves four other rival must-fixes for free, by structur
 
 ## 1. Module / file layout
 
-All new files in `Sources/HaliteTerminal/` (the library consumed by both `cmux` and `halite.app`). `HaliteSurfaceView` stays where it is.
+All new files in `Sources/DamsonTerminal/` (the library consumed by both `cmux` and `halite.app`). `DamsonSurfaceView` stays where it is.
 
 ```
-Sources/HaliteTerminal/
-  HaliteTerminalView.swift        (EDIT) host; render/geometry calls go through `backend`
+Sources/DamsonTerminal/
+  DamsonTerminalView.swift        (EDIT) host; render/geometry calls go through `backend`
   RenderBackend.swift             (NEW)  TerminalRenderBackend protocol + shared value types
   LegacyTextBackend.swift         (NEW)  wraps current NSScrollView+NSTextView path; conforms; deleted at P8
   MetalRenderConfig.swift         (NEW)  toggle source (Debug menu > env > UserDefaults), thickening knob
@@ -314,13 +314,13 @@ Sources/HaliteTerminal/
 
 ```swift
 .target(
-    name: "HaliteTerminal",
-    path: "Sources/HaliteTerminal",
+    name: "DamsonTerminal",
+    path: "Sources/DamsonTerminal",
     resources: [.process("MetalRender/Shaders.metal")]
 )
 ```
 
-**Verified pitfall (P1 build gate, must-fix C):** `HaliteTerminal` is a **library** target. `.process()` compiles `Shaders.metal` into the *module* bundle. The backend must load with `device.makeDefaultLibrary(bundle: .module)` — **not** `makeDefaultLibrary()` (which searches the main app bundle, nil for a library). `Bundle.module` is currently used **only** in the executable target (`AppBundleTrampoline.swift:90`), so this path is *unproven* for the library and is the first thing P1 validates. Documented fallback: embed shader source as a Swift string constant and `device.makeLibrary(source:options:)`. **Decide in P1 before P2 builds on it.**
+**Verified pitfall (P1 build gate, must-fix C):** `DamsonTerminal` is a **library** target. `.process()` compiles `Shaders.metal` into the *module* bundle. The backend must load with `device.makeDefaultLibrary(bundle: .module)` — **not** `makeDefaultLibrary()` (which searches the main app bundle, nil for a library). `Bundle.module` is currently used **only** in the executable target (`AppBundleTrampoline.swift:90`), so this path is *unproven* for the library and is the first thing P1 validates. Documented fallback: embed shader source as a Swift string constant and `device.makeLibrary(source:options:)`. **Decide in P1 before P2 builds on it.**
 
 **Responsibility split:** `InstanceBuilder` is the only allocation-sensitive code and touches no Metal type → unit-testable against a `Grid` snapshot with no GPU. `GlyphAtlas`/`GlyphRasterizer` are the only CoreText-rasterization callers. `LineShaper` is the only CTLine caller. Each hot-path-sensitive surface is isolated and individually profileable.
 
@@ -337,12 +337,12 @@ protocol TerminalRenderBackend: AnyObject {
 
     // Lifecycle
     func install(in host: NSView)
-    func updateConfig(_ config: HaliteConfig)
+    func updateConfig(_ config: DamsonConfig)
     func backingPropertiesChanged(scale: CGFloat)
     func appearanceChanged(_ appearance: NSAppearance)
 
     // The single draw entrypoint — called from renderNow() AFTER the 6-part dedupe decides to draw.
-    func render(grid: Grid, theme: HaliteTheme, state: RenderState)
+    func render(grid: Grid, theme: DamsonTheme, state: RenderState)
 
     // Geometry (the input-path seam)
     func cell(at pointInHost: CGPoint) -> (row: Int, col: Int)
@@ -373,9 +373,9 @@ struct RenderState {
 }
 ```
 
-### 2.1 What `HaliteSurfaceView` keeps (byte-stable — verified)
+### 2.1 What `DamsonSurfaceView` keeps (byte-stable — verified)
 
-`public final class HaliteSurfaceView: NSView, NSTextInputClient` (`:45`), `public init(session:)` (`:147`), all `@objc public` selectors, and the entire `NSTextInputClient` conformance stay **byte-identical**. The host keeps: `keyDown`/`doCommand`, the full `NSTextInputClient` (insertText/setMarkedText/unmarkText, Hangul BS-cancel, IME warmup), `mouseDown/Dragged/Up`, scroll-wheel mouse-reporting (button 64/65), Cmd-click/hover URL handling, `updateTrackingAreas`, `menu(for:)`, the `FindOverlayView` subview, and the bell-flash CALayer. The only stored-prop change: the internal `scrollView`/`textView`/`cursorLayer` move *behind* the backend (legacy keeps them; metal replaces them).
+`public final class DamsonSurfaceView: NSView, NSTextInputClient` (`:45`), `public init(session:)` (`:147`), all `@objc public` selectors, and the entire `NSTextInputClient` conformance stay **byte-identical**. The host keeps: `keyDown`/`doCommand`, the full `NSTextInputClient` (insertText/setMarkedText/unmarkText, Hangul BS-cancel, IME warmup), `mouseDown/Dragged/Up`, scroll-wheel mouse-reporting (button 64/65), Cmd-click/hover URL handling, `updateTrackingAreas`, `menu(for:)`, the `FindOverlayView` subview, and the bell-flash CALayer. The only stored-prop change: the internal `scrollView`/`textView`/`cursorLayer` move *behind* the backend (legacy keeps them; metal replaces them).
 
 ### 2.2 `renderNow()` after the change — trigger untouched, only the tail branches
 
@@ -395,10 +395,10 @@ The sync-output gate (`scheduleRender` → `armSyncFlush`, the `inSyncOutputMode
 
 ```swift
 enum RenderBackendKind { case legacyText, metal }
-// resolution: live Debug override > env HALITE_METAL=1 > UserDefaults "HaliteMetalRenderer" > .legacyText
+// resolution: live Debug override > env HALITE_METAL=1 > UserDefaults "DamsonMetalRenderer" > .legacyText
 ```
 
-`switchBackend(to:)` tears down the old `contentView`, installs the new one, copies `scrollYPixels`, forces a full render. Because `HaliteSession`/`Grid` are view-independent (verified: `gridChanged` PassthroughSubject `:33`, rendering reads `grid` not the output path), **this works on a live terminal** — flip backends mid-session and pixel-compare against legacy. No rival can do this. Default ships `.legacyText` until parity is proven at P8.
+`switchBackend(to:)` tears down the old `contentView`, installs the new one, copies `scrollYPixels`, forces a full render. Because `DamsonSession`/`Grid` are view-independent (verified: `gridChanged` PassthroughSubject `:33`, rendering reads `grid` not the output path), **this works on a live terminal** — flip backends mid-session and pixel-compare against legacy. No rival can do this. Default ships `.legacyText` until parity is proven at P8.
 
 ### 2.4 Scroll-seam honesty (must-fix B) — stated, not hidden
 
@@ -408,13 +408,13 @@ The protocol's scroll members are shaped for the Metal destination (a scalar `sc
 
 ---
 
-## 3. CAMetalLayer integration into `HaliteSurfaceView`
+## 3. CAMetalLayer integration into `DamsonSurfaceView`
 
 ### 3.1 The Metal layer lives *inside* the backend's contentView
 
 A Metal swap **cannot change the host's class** (cmux/halite.app consumers + AutoLayout anchors at `PaneTree.swift:26`), and SMOOTH-SCROLL forbids `CAMetalLayer` inside `NSScrollView`. So:
 
-- `HaliteSurfaceView : NSView` — **unchanged, unflipped**. Honors host AutoLayout anchors, hosts `FindOverlayView` subview + bell-flash sublayer.
+- `DamsonSurfaceView : NSView` — **unchanged, unflipped**. Honors host AutoLayout anchors, hosts `FindOverlayView` subview + bell-flash sublayer.
 - `LegacyTextBackend.contentView` = the current `NSScrollView`.
 - `MetalTerminalBackend.contentView` = a `MetalContentView` (layer-backed by `CAMetalLayer`), pinned to the host with the same four AutoLayout anchors.
 
@@ -566,7 +566,7 @@ glyphInstance.cellOrigin.y = rowTop + (baseline − bearingY)      // bearingY f
 | 3 | **Glyph (color)** | `glyph_v`/`glyph_color_f` | `.one`/`.oneMinusSourceAlpha` | `GlyphInstance` (page=color) | emoji / color glyphs (fg ignored) |
 | 4 | **Overlay** | `overlay_v`/`overlay_f` | `.sourceAlpha`/`.oneMinusSourceAlpha` | `OverlayInstance` | SGR underline, strikethrough, **bar/underline cursor**, **hyperlink underline + hover**, **IME preedit underline/wash** |
 
-One `MTLCommandBuffer`, one drawable, four `drawPrimitives(.triangleStrip, vertexStart:0, vertexCount:4, instanceCount:n)` calls — vertexless (corner from `vertex_id`). (The Rust per-pane `queue.submit` workaround is irrelevant — halite-swift is one surface per view.)
+One `MTLCommandBuffer`, one drawable, four `drawPrimitives(.triangleStrip, vertexStart:0, vertexCount:4, instanceCount:n)` calls — vertexless (corner from `vertex_id`). (The Rust per-pane `queue.submit` workaround is irrelevant — damson is one surface per view.)
 
 ### 6.3 Instance layouts (`RenderTypes.swift` ⇄ `Shaders.metal`, repr-C, static-asserted)
 
@@ -672,7 +672,7 @@ All trivial. No compute, no depth, no MSAA, no post-fx. Loaded via `makeDefaultL
 ## 8. Render-fidelity decisions (the quirks, reproduced deliberately)
 
 ### 8.1 Color resolution
-`ColorResolver` ports `HaliteTheme.nsColor`/`paletteColor` + `CellAttrs.resolvedColors` exactly: `.default`→theme fg, palette 0-15→ANSI, 16-231→6×6×6 cube `[0,95,135,175,215,255]`, 232-255→`(n-232)*10+8`, `.rgb`→absolute sRGB (`srgbRed:`, theme-independent). **Inverse** swaps fg↔bg (theme.background as fg when bg was nil). Packed to device RGBA8 once per run, cached per `CellAttrs`.
+`ColorResolver` ports `DamsonTheme.nsColor`/`paletteColor` + `CellAttrs.resolvedColors` exactly: `.default`→theme fg, palette 0-15→ANSI, 16-231→6×6×6 cube `[0,95,135,175,215,255]`, 232-255→`(n-232)*10+8`, `.rgb`→absolute sRGB (`srgbRed:`, theme-independent). **Inverse** swaps fg↔bg (theme.background as fg when bg was nil). Packed to device RGBA8 once per run, cached per `CellAttrs`.
 
 ### 8.2 Bold / italic
 Bold = bold CTFont (or synthetic-bold matrix if the family lacks one), **weight only, no ANSI 0-7→8-15 brightening**. Italic stays **dead** — the atlas could carry a bit but `InstanceBuilder` never sets it; only REGULAR/BOLD slots populate.
@@ -733,7 +733,7 @@ Covered by §5.6 — `firstRect` returns the cell rect, glyph baseline inside th
 
 ## 10. Resize → cols/rows → reportSize
 
-`reportSizeIfChanged()` stays in `HaliteSurfaceView`, **unchanged in logic** (verified `:418-474`), two seam edits:
+`reportSizeIfChanged()` stays in `DamsonSurfaceView`, **unchanged in logic** (verified `:418-474`), two seam edits:
 - Width from `bounds.width` (points) **minus zero scroller** — the Metal layer has no scroller, so the current `-scrollerWidth (~15pt)` term is **dropped** (legacy keeps it).
 - Keep `window.contentRect` + conditional `tabBarReservation = 36pt` (verified `:453/:474`) — else spurious SIGWINCH on every 1↔2-tab native-tab-bar toggle.
 - `cellW`/`cellH` from the **shared** metrics (§3.2). `cols = floor(usableW/cellW)`, `rows = floor(usableH/cellH)`, deduped on `(cols,rows)` → `session.resize` → grid + TIOCSWINSZ + `gridChanged`.

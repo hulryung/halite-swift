@@ -14,11 +14,11 @@
 
 | File | Created/Modified | Responsibility | Touched by |
 |---|---|---|---|
-| `Sources/HaliteTerminal/Motion.swift` | **Created** | Shared stateless motion helper: `enabled` gate (toggle AND not Reduce Motion), test-only pure `isEnabled(...)`, `duration` (0.16), `timing` (easeOut), `snapshot(of:)`, `overlay(image:frame:in:)`, `run(_:done:)`. Lives in the HaliteTerminal **library** (not the `halite` executable) so the gate is unit-testable. | Task 1 |
-| `Sources/HaliteTerminal/HaliteConfig.swift` | **Modified** | Adds `public var animations: Bool` (default `true`), mirrored on `cursorBlink`. | Task 1 |
-| `Sources/halite/SettingsView.swift` | **Modified** | Adds the `@AppStorage("halite.animations")` toggle in the Cursor section, its `.onChange`, **and** the `fromUserDefaults()` read in the `extension HaliteConfig` that lives in this same file (`object(forKey:) as? Bool ?? true`). | Task 1 |
-| `Tests/HaliteTerminalTests/MotionTests.swift` | **Created** | Gating truth-table + `snapshot(of:)` non-nil/nil + timing-constant tests. The only automated coverage feasible (executable targets are untestable). | Task 1 (created); Task 7 (re-run only) |
-| `Tests/HaliteTerminalTests/HaliteTerminalTests.swift` | **Modified** | One added assertion in `testConfigDefaults` for the new `animations` default. | Task 1 |
+| `Sources/DamsonTerminal/Motion.swift` | **Created** | Shared stateless motion helper: `enabled` gate (toggle AND not Reduce Motion), test-only pure `isEnabled(...)`, `duration` (0.16), `timing` (easeOut), `snapshot(of:)`, `overlay(image:frame:in:)`, `run(_:done:)`. Lives in the DamsonTerminal **library** (not the `halite` executable) so the gate is unit-testable. | Task 1 |
+| `Sources/DamsonTerminal/DamsonConfig.swift` | **Modified** | Adds `public var animations: Bool` (default `true`), mirrored on `cursorBlink`. | Task 1 |
+| `Sources/halite/SettingsView.swift` | **Modified** | Adds the `@AppStorage("halite.animations")` toggle in the Cursor section, its `.onChange`, **and** the `fromUserDefaults()` read in the `extension DamsonConfig` that lives in this same file (`object(forKey:) as? Bool ?? true`). | Task 1 |
+| `Tests/DamsonTerminalTests/MotionTests.swift` | **Created** | Gating truth-table + `snapshot(of:)` non-nil/nil + timing-constant tests. The only automated coverage feasible (executable targets are untestable). | Task 1 (created); Task 7 (re-run only) |
+| `Tests/DamsonTerminalTests/DamsonTerminalTests.swift` | **Modified** | One added assertion in `testConfigDefaults` for the new `animations` default. | Task 1 |
 | `Sources/halite/CompactWindowController.swift` | **Modified** | Tab-lifecycle animations: `TabTransition` enum; `selectTab(_:transition:)` create + switch branches; `addTab`/`addNewTab` create; `closeTab` snapshot-overlay close; `contentContainer` made layer-backed. | Task 2 (create), Task 4 (close), Task 6 (switch) |
 | `Sources/halite/PaneTreeView.swift` | **Modified** | Pane-lifecycle animations: `PaneAnimation` + `ClosingEdge` enums; `rebuild(animation:)`; `findWrapper(for:in:)`; `animateSplitIn(newLeaf:direction:)`; `split(direction:)` and `closeActive()` gating + capture. | Task 3 (split), Task 5 (close) |
 
@@ -28,22 +28,22 @@ No new files or production-code changes in Task 7 (pure QA pass).
 
 ## Task 1: Motion core + settings plumbing (no behavior change)
 
-Establishes the shared `Motion` helper, the `HaliteConfig.animations` field, the `SettingsView` toggle, and the gating unit tests. **No interaction is animated yet** — nothing reads `Motion.enabled` after this task. The toggle persists and the gate is correct, but it has **no visible effect until Task 2** wires callers. That no-op is expected, not a bug.
+Establishes the shared `Motion` helper, the `DamsonConfig.animations` field, the `SettingsView` toggle, and the gating unit tests. **No interaction is animated yet** — nothing reads `Motion.enabled` after this task. The toggle persists and the gate is correct, but it has **no visible effect until Task 2** wires callers. That no-op is expected, not a bug.
 
 **Files:**
 
-- **Create** `Sources/HaliteTerminal/Motion.swift` — the shared motion helper (`enabled` gate, `duration`, `timing`, `snapshot(of:)`, `overlay(...)`, `run(...)`, plus a test-only pure `isEnabled(...)`).
-  - **Deviation note:** the approved design (§Architecture, spec lines 46/48) says `Sources/halite/Motion.swift`. Placed in the **HaliteTerminal library** instead because the `halite` executable is not unit-testable (Package.swift test targets depend only on HaliteTerminal/HaliteControl, never on the executable — confirmed Package.swift lines 62–71), and Testing (spec lines 116–120) requires automated coverage of `Motion.enabled` + `snapshot(of:)`. The **public API and all call sites are identical** — callers already `import HaliteTerminal`, so they write `Motion.enabled` exactly as the spec shows. This is a justified deviation, not a bug; the public API is byte-for-byte what the spec prescribes.
-- **Modify** `Sources/HaliteTerminal/HaliteConfig.swift` — add `public var animations: Bool` (after `cursorBlink`, line 28), the init parameter (after `cursorBlink: Bool = false,` at line 49) and the assignment (after `self.cursorBlink = cursorBlink` at line 61).
-- **Modify** `Sources/halite/SettingsView.swift` — this single file requires **two** edits: (1) in the SwiftUI `HaliteSettingsView` struct, add `@AppStorage("halite.animations")` (new line 15, after the `cursorBlink` declaration at line 14), a `Toggle("Animations", ...)` in the Cursor section (new line after line 99), and an `.onChange` (new line after line 123); (2) in the `extension HaliteConfig { static func fromUserDefaults() ... }` that lives **in the same file** (lines 210–247), add the read right after the `cursorBlink` read (line 229).
-- **Create** `Tests/HaliteTerminalTests/MotionTests.swift` — gating truth table + snapshot tests.
-- **Modify** `Tests/HaliteTerminalTests/HaliteTerminalTests.swift` — add one assertion to `testConfigDefaults` (after the `XCTAssertFalse(config.argv.isEmpty)` line at line 18) for the new field's default.
+- **Create** `Sources/DamsonTerminal/Motion.swift` — the shared motion helper (`enabled` gate, `duration`, `timing`, `snapshot(of:)`, `overlay(...)`, `run(...)`, plus a test-only pure `isEnabled(...)`).
+  - **Deviation note:** the approved design (§Architecture, spec lines 46/48) says `Sources/halite/Motion.swift`. Placed in the **DamsonTerminal library** instead because the `halite` executable is not unit-testable (Package.swift test targets depend only on DamsonTerminal/DamsonControl, never on the executable — confirmed Package.swift lines 62–71), and Testing (spec lines 116–120) requires automated coverage of `Motion.enabled` + `snapshot(of:)`. The **public API and all call sites are identical** — callers already `import DamsonTerminal`, so they write `Motion.enabled` exactly as the spec shows. This is a justified deviation, not a bug; the public API is byte-for-byte what the spec prescribes.
+- **Modify** `Sources/DamsonTerminal/DamsonConfig.swift` — add `public var animations: Bool` (after `cursorBlink`, line 28), the init parameter (after `cursorBlink: Bool = false,` at line 49) and the assignment (after `self.cursorBlink = cursorBlink` at line 61).
+- **Modify** `Sources/halite/SettingsView.swift` — this single file requires **two** edits: (1) in the SwiftUI `DamsonSettingsView` struct, add `@AppStorage("halite.animations")` (new line 15, after the `cursorBlink` declaration at line 14), a `Toggle("Animations", ...)` in the Cursor section (new line after line 99), and an `.onChange` (new line after line 123); (2) in the `extension DamsonConfig { static func fromUserDefaults() ... }` that lives **in the same file** (lines 210–247), add the read right after the `cursorBlink` read (line 229).
+- **Create** `Tests/DamsonTerminalTests/MotionTests.swift` — gating truth table + snapshot tests.
+- **Modify** `Tests/DamsonTerminalTests/DamsonTerminalTests.swift` — add one assertion to `testConfigDefaults` (after the `XCTAssertFalse(config.argv.isEmpty)` line at line 18) for the new field's default.
 
 ---
 
-- [ ] **Step 1: Create `Motion.swift` in the HaliteTerminal library.**
+- [ ] **Step 1: Create `Motion.swift` in the DamsonTerminal library.**
 
-Create `Sources/HaliteTerminal/Motion.swift` with this exact content:
+Create `Sources/DamsonTerminal/Motion.swift` with this exact content:
 
 ```swift
 import AppKit
@@ -53,10 +53,10 @@ import AppKit
 ///
 /// 위치 메모: 디자인 스펙은 `Sources/halite/Motion.swift`라고 적었지만,
 /// halite 실행 타깃은 단위 테스트가 불가능하다(Package.swift의 test 타깃은
-/// HaliteTerminal/HaliteControl 라이브러리에만 의존). 스펙 Testing 절이
+/// DamsonTerminal/DamsonControl 라이브러리에만 의존). 스펙 Testing 절이
 /// `enabled` 진리표와 `snapshot(of:)` 자동 커버리지를 요구하므로
-/// 테스트 가능한 HaliteTerminal 라이브러리에 둔다. 호출 측 코드는 동일하다
-/// (호출자들은 이미 `import HaliteTerminal`).
+/// 테스트 가능한 DamsonTerminal 라이브러리에 둔다. 호출 측 코드는 동일하다
+/// (호출자들은 이미 `import DamsonTerminal`).
 public enum Motion {
 
     /// 모든 라이프사이클 애니메이션의 지속 시간. 0.16s — 기존 스크롤 스냅/벨 플래시와 동일한 감각.
@@ -131,9 +131,9 @@ public enum Motion {
 
 **Why `allowsImplicitAnimation = true` matters (the load-bearing contract):** with it on, a bare assignment to a layer property inside `body` — e.g. `layer.opacity = 1` or `layer.transform = CATransform3DIdentity` — is implicitly animated over `duration`/`timing` instead of snapping. Tasks 2 (tab create) and 5 (pane close) rely on this: they mutate `layer.opacity`/`layer.transform`/`overlay.position` inside `Motion.run` and expect them to animate. If a manual run shows content snapping instead of animating, this flag is the first thing to check. (Tasks 4 and 6 use explicit `CABasicAnimation` instead — see those tasks for why.)
 
-- [ ] **Step 2: Add the `animations` field to `HaliteConfig`.**
+- [ ] **Step 2: Add the `animations` field to `DamsonConfig`.**
 
-In `Sources/HaliteTerminal/HaliteConfig.swift`, add the stored property right after `cursorBlink` (line 28):
+In `Sources/DamsonTerminal/DamsonConfig.swift`, add the stored property right after `cursorBlink` (line 28):
 
 ```swift
     public var cursorBlink: Bool
@@ -157,7 +157,7 @@ Add the assignment immediately after `self.cursorBlink = cursorBlink` in the ini
 
 - [ ] **Step 3: Add the Settings toggle + the `fromUserDefaults()` read (both live in `SettingsView.swift`).**
 
-This step edits **two distinct pieces of `Sources/halite/SettingsView.swift`**: the SwiftUI `HaliteSettingsView` struct (the `@AppStorage`/`Toggle`/`.onChange`), and the `extension HaliteConfig` (the `fromUserDefaults()` factory) that lives in the **same file** at lines 210–247. Do not relocate the factory — the File Structure table already accounts for both edits being in this one file.
+This step edits **two distinct pieces of `Sources/halite/SettingsView.swift`**: the SwiftUI `DamsonSettingsView` struct (the `@AppStorage`/`Toggle`/`.onChange`), and the `extension DamsonConfig` (the `fromUserDefaults()` factory) that lives in the **same file** at lines 210–247. Do not relocate the factory — the File Structure table already accounts for both edits being in this one file.
 
 **(a)** Add the `@AppStorage` as a new line 15, immediately after the `cursorBlink` declaration at line 14:
 
@@ -180,7 +180,7 @@ This step edits **two distinct pieces of `Sources/halite/SettingsView.swift`**: 
         .onChange(of: animations) { _ in postChanged() }
 ```
 
-**(d)** In the `extension HaliteConfig`'s `fromUserDefaults()` (in this same file), add the read right after the `cursorBlink` read at line 229. **Use `object(forKey:) as? Bool ?? true`, NOT `d.bool(forKey:)`** — `animations` defaults to **true**, and `d.bool(forKey:)` returns `false` for an absent key, which would make the default OFF (the opposite of the spec):
+**(d)** In the `extension DamsonConfig`'s `fromUserDefaults()` (in this same file), add the read right after the `cursorBlink` read at line 229. **Use `object(forKey:) as? Bool ?? true`, NOT `d.bool(forKey:)`** — `animations` defaults to **true**, and `d.bool(forKey:)` returns `false` for an absent key, which would make the default OFF (the opposite of the spec):
 
 ```swift
         config.cursorBlink = d.bool(forKey: "halite.cursorBlink")
@@ -189,12 +189,12 @@ This step edits **two distinct pieces of `Sources/halite/SettingsView.swift`**: 
 
 - [ ] **Step 4: Create the gating + snapshot unit tests.**
 
-Create `Tests/HaliteTerminalTests/MotionTests.swift` with this exact content:
+Create `Tests/DamsonTerminalTests/MotionTests.swift` with this exact content:
 
 ```swift
 import XCTest
 import AppKit
-@testable import HaliteTerminal
+@testable import DamsonTerminal
 
 final class MotionTests: XCTestCase {
 
@@ -240,7 +240,7 @@ final class MotionTests: XCTestCase {
 
 - [ ] **Step 5: Add the field-default assertion to the existing config test.**
 
-In `Tests/HaliteTerminalTests/HaliteTerminalTests.swift`, inside `testConfigDefaults()`, add one line after the last assertion (the `XCTAssertFalse(config.argv.isEmpty)` at line 18) to verify the new field defaults to `true`:
+In `Tests/DamsonTerminalTests/DamsonTerminalTests.swift`, inside `testConfigDefaults()`, add one line after the last assertion (the `XCTAssertFalse(config.argv.isEmpty)` at line 18) to verify the new field defaults to `true`:
 
 ```swift
         XCTAssertFalse(config.argv.isEmpty)
@@ -249,7 +249,7 @@ In `Tests/HaliteTerminalTests/HaliteTerminalTests.swift`, inside `testConfigDefa
 
 - [ ] **Step 6: Build and run the tests; confirm expected output.**
 
-Run from `/Users/dkkang/dev/halite-swift/.claude/worktrees/tab-pane-animation`:
+Run from `/Users/dkkang/dev/damson/.claude/worktrees/tab-pane-animation`:
 
 ```bash
 swift build
@@ -264,10 +264,10 @@ swift test --filter MotionTests
 Expected: 7 tests, all passing — ends with `Test Suite 'MotionTests' passed` and `Executed 7 tests, with 0 failures`.
 
 ```bash
-swift test --filter HaliteTerminalTests
+swift test --filter DamsonTerminalTests
 ```
 
-Expected: the full HaliteTerminal target passes, including the updated `testConfigDefaults` (now asserting `config.animations == true`) — `Executed N tests, with 0 failures` (N is the prior count + the new MotionTests).
+Expected: the full DamsonTerminal target passes, including the updated `testConfigDefaults` (now asserting `config.animations == true`) — `Executed N tests, with 0 failures` (N is the prior count + the new MotionTests).
 
 - [ ] **Step 7: Manual smoke check of the toggle (optional but quick).**
 
@@ -280,18 +280,18 @@ Open Settings (Cmd+,) → Cursor section → confirm the new **Animations** togg
 - [ ] **Step 8: Commit.**
 
 ```bash
-git add Sources/HaliteTerminal/Motion.swift Sources/HaliteTerminal/HaliteConfig.swift Sources/halite/SettingsView.swift Tests/HaliteTerminalTests/MotionTests.swift Tests/HaliteTerminalTests/HaliteTerminalTests.swift
+git add Sources/DamsonTerminal/Motion.swift Sources/DamsonTerminal/DamsonConfig.swift Sources/halite/SettingsView.swift Tests/DamsonTerminalTests/MotionTests.swift Tests/DamsonTerminalTests/DamsonTerminalTests.swift
 git commit -m "Motion core + animations setting (no behavior change)
 
 Add shared Motion helper (enabled gate honoring halite.animations + macOS
 Reduce Motion, duration 0.16/easeOut, snapshot/overlay/run with
-allowsImplicitAnimation) in HaliteTerminal so the gate is unit-testable. Add
-HaliteConfig.animations (default true) and a Settings toggle mirroring
+allowsImplicitAnimation) in DamsonTerminal so the gate is unit-testable. Add
+DamsonConfig.animations (default true) and a Settings toggle mirroring
 cursorBlink. No interaction reads Motion.enabled yet; toggle persists with no
 visible effect until callers are wired."
 ```
 
-**Verification before claiming done:** `swift build` succeeds, `swift test --filter HaliteTerminalTests` reports 0 failures, and the new toggle appears in Settings. Motion is unused by production code at this point — that is the intended end state of Task 1.
+**Verification before claiming done:** `swift build` succeeds, `swift test --filter DamsonTerminalTests` reports 0 failures, and the new toggle appears in Settings. Motion is unused by production code at this point — that is the intended end state of Task 1.
 
 ---
 
@@ -299,7 +299,7 @@ visible effect until callers are wired."
 
 Animate the **tab-create** interaction: when a brand-new tab's `PaneTreeView` is shown, its backing layer fades in (`opacity` 0→1) and scales up (`transform` 0.98→1.0) over 0.16s easeOut. All other `selectTab` paths (keyboard nav, tab-bar click, close-show-next, session restore) stay instant and byte-identical to today.
 
-Depends on **Task 1** (`Sources/HaliteTerminal/Motion.swift` with `Motion.enabled`, `Motion.run`, `Motion.duration`, `Motion.timing`; `Motion.run` enables `allowsImplicitAnimation`, which this task's bare `layer.opacity`/`layer.transform` mutations rely on). This task adds NO new imports — `CompactWindowController.swift` already has `import AppKit` and `import HaliteTerminal`, so `Motion.*` and `CATransform3D*` resolve.
+Depends on **Task 1** (`Sources/DamsonTerminal/Motion.swift` with `Motion.enabled`, `Motion.run`, `Motion.duration`, `Motion.timing`; `Motion.run` enables `allowsImplicitAnimation`, which this task's bare `layer.opacity`/`layer.transform` mutations rely on). This task adds NO new imports — `CompactWindowController.swift` already has `import AppKit` and `import DamsonTerminal`, so `Motion.*` and `CATransform3D*` resolve.
 
 **Why `Motion.run` (implicit animation) here, vs. explicit `CABasicAnimation` for tab close (Task 4):** tab-create animates the **backing layer of an NSView** (`tree.layer`), which `Motion.run`'s `allowsImplicitAnimation` drives directly when you assign `layer.opacity`/`layer.transform`. Tab close (Task 4) animates a **free-standing detached `CALayer`** (a snapshot overlay with no NSView, hence no `.animator()` proxy), so it uses an explicit `CABasicAnimation` instead. The two patterns differ because the layer types differ; both source duration/timing from `Motion`.
 
@@ -310,7 +310,7 @@ Depends on **Task 1** (`Sources/HaliteTerminal/Motion.swift` with `Motion.enable
   - `addTab(tree: PaneTreeView)` → `addTab(tree: PaneTreeView, transition: TabTransition = .none)` (line 147); forward `transition` into its `selectTab(tabs.count - 1)` call (line 167).
   - `addNewTab()` (lines 139-144) → pass `.create` into `addTab` (line 142).
   - Restore loop (line 65) and all other `selectTab` callers (68, 103, 222, 265, 271, 279) keep the default `.none` — no edits to those lines in this task.
-- Test: **None automated.** `selectTab` lives in the `halite` executable target, which no SwiftPM test target depends on (Package.swift: `HaliteTerminalTests`→`HaliteTerminal`, `HaliteControlTests`→`HaliteControl` only), so it cannot be unit-tested. Verification for this task is `swift build` + manual run + manual disabled-path check (Steps 5–6). Do NOT add a `selectTab` test to `MotionTests.swift` — it will not compile.
+- Test: **None automated.** `selectTab` lives in the `halite` executable target, which no SwiftPM test target depends on (Package.swift: `DamsonTerminalTests`→`DamsonTerminal`, `DamsonControlTests`→`DamsonControl` only), so it cannot be unit-tested. Verification for this task is `swift build` + manual run + manual disabled-path check (Steps 5–6). Do NOT add a `selectTab` test to `MotionTests.swift` — it will not compile.
 
 ---
 
@@ -376,8 +376,8 @@ Depends on **Task 1** (`Sources/HaliteTerminal/Motion.swift` with `Motion.enable
 
   ```swift
       @discardableResult
-      func addNewTab() -> HaliteSession {
-          let session = HaliteSession(config: HaliteConfig.fromUserDefaults())
+      func addNewTab() -> DamsonSession {
+          let session = DamsonSession(config: DamsonConfig.fromUserDefaults())
           addTab(tree: PaneTreeView(rootSession: session))
           return session
       }
@@ -387,8 +387,8 @@ Depends on **Task 1** (`Sources/HaliteTerminal/Motion.swift` with `Motion.enable
 
   ```swift
       @discardableResult
-      func addNewTab() -> HaliteSession {
-          let session = HaliteSession(config: HaliteConfig.fromUserDefaults())
+      func addNewTab() -> DamsonSession {
+          let session = DamsonSession(config: DamsonConfig.fromUserDefaults())
           addTab(tree: PaneTreeView(rootSession: session), transition: .create)
           return session
       }
@@ -581,7 +581,7 @@ When the user splits a pane (`Cmd+D` horizontal / `Cmd+Shift+D` vertical), the e
 
 Gating: `split(direction:)` reads `Motion.enabled` LIVE. When `false` (toggle off OR macOS Reduce Motion on), it calls `rebuild(animation: .none)` — byte-for-byte the current instant code path. Pane split is live-transform only (no snapshot), so the only gate is `Motion.enabled`; there is no snapshot-nil fallback to consider for this interaction.
 
-**Depends on:** Task 1 (`Motion` in the HaliteTerminal library — `Motion.enabled`, `Motion.duration`, `Motion.timing`) and Task 2 (tab-create animation; establishes the live-transform pattern). `PaneTreeView.swift` already has `import AppKit` and `import HaliteTerminal` (lines 1–2), so `Motion.x` resolves with **no new imports**.
+**Depends on:** Task 1 (`Motion` in the DamsonTerminal library — `Motion.enabled`, `Motion.duration`, `Motion.timing`) and Task 2 (tab-create animation; establishes the live-transform pattern). `PaneTreeView.swift` already has `import AppKit` and `import DamsonTerminal` (lines 1–2), so `Motion.x` resolves with **no new imports**.
 
 **Files:**
 - Modify `Sources/halite/PaneTreeView.swift`
@@ -590,7 +590,7 @@ Gating: `split(direction:)` reads `Motion.enabled` LIVE. When `false` (toggle of
   - Change `rebuild()` (currently lines 148–156) to `rebuild(animation: PaneAnimation = .none)` and dispatch to the split animation after the subviews are rebuilt.
   - Add two private helpers to `PaneTreeView`: `findWrapper(for:in:)` (locate the new wrapper post-rebuild by `leaf === newLeaf`) and `animateSplitIn(newLeaf:direction:)` (force layout, run the transform+opacity animation). Place them in a new `// MARK: - Split/Close animation helpers` region, right after `addSubviewsForNode` ends (after line 188, before the `// MARK: - Border 색 갱신` comment at line 190). **These two helpers are defined here once; Task 5 reuses them by name from this same marked region and does NOT re-declare them.**
   - `PaneLeafWrapper` (lines 212–240) already sets `wantsLayer = true` in `init` (line 223), so `wrapper.layer` is non-nil — no change needed there.
-- Test: No automated test for this task. Pane-split motion is visual/timing and is verified **manually** per the design spec (§Testing, "Motion is visual/timing — verified manually"). The gating truth-table (`Motion.isEnabled`) is already covered by `Tests/HaliteTerminalTests/MotionTests.swift` from Task 1. This task adds a precise manual-verification step plus an assertion that the disabled path's final view hierarchy is unchanged.
+- Test: No automated test for this task. Pane-split motion is visual/timing and is verified **manually** per the design spec (§Testing, "Motion is visual/timing — verified manually"). The gating truth-table (`Motion.isEnabled`) is already covered by `Tests/DamsonTerminalTests/MotionTests.swift` from Task 1. This task adds a precise manual-verification step plus an assertion that the disabled path's final view hierarchy is unchanged.
 
 ---
 
@@ -732,7 +732,7 @@ Gating: `split(direction:)` reads `Motion.enabled` LIVE. When `false` (toggle of
 
           // Set the final state on the MODEL layer first, then add explicit
           // "from → identity" animations (same idiom as the bell-flash
-          // CABasicAnimation in HaliteTerminalView). The model values are at their
+          // CABasicAnimation in DamsonTerminalView). The model values are at their
           // final identity/1.0 state BEFORE add(), so when the animation finishes
           // (or is removed) the layer rests where it already is. Driven by
           // Motion.duration / Motion.timing only.
@@ -768,18 +768,18 @@ Gating: `split(direction:)` reads `Motion.enabled` LIVE. When `false` (toggle of
 
 - [ ] **Step 5 — Build. Expected: clean build.**
 
-  Run from `/Users/dkkang/dev/halite-swift/.claude/worktrees/tab-pane-animation`:
+  Run from `/Users/dkkang/dev/damson/.claude/worktrees/tab-pane-animation`:
 
   ```bash
   swift build
   ```
 
-  Expected result: `Build complete!` with no errors or warnings. If `Motion` is "cannot find in scope," Task 1 (Motion.swift in the HaliteTerminal library) is not yet in place — that is a prerequisite, not a Task 3 bug.
+  Expected result: `Build complete!` with no errors or warnings. If `Motion` is "cannot find in scope," Task 1 (Motion.swift in the DamsonTerminal library) is not yet in place — that is a prerequisite, not a Task 3 bug.
 
 - [ ] **Step 6 — Run the unit tests. Expected: existing Motion gating tests still green.**
 
   ```bash
-  swift test --filter HaliteTerminalTests
+  swift test --filter DamsonTerminalTests
   ```
 
   Expected result: all tests pass, including `MotionTests` from Task 1 (the `Motion.isEnabled` truth table). Task 3 adds no new automated tests (pane-split motion is visual), so the count is unchanged from Task 2. This step confirms Task 3 did not regress the library or the gating logic.
@@ -817,7 +817,7 @@ Gating: `split(direction:)` reads `Motion.enabled` LIVE. When `false` (toggle of
 
 - [ ] **Step 9 — Commit.**
 
-  From `/Users/dkkang/dev/halite-swift/.claude/worktrees/tab-pane-animation`:
+  From `/Users/dkkang/dev/damson/.claude/worktrees/tab-pane-animation`:
 
   ```bash
   git add Sources/halite/PaneTreeView.swift
@@ -843,13 +843,13 @@ Only the **content area** animates (per spec scope) — the tab-bar button itsel
 **Depends on:** Task 1 (`Motion` core — `Motion.enabled`, `Motion.snapshot(of:)`, `Motion.overlay(image:frame:in:)`, `Motion.duration`, `Motion.timing`) and Task 2 (which introduced the `TabTransition` enum + the `selectTab(_:transition:)` signature).
 **Independent of:** Task 2's `.create`/Task 6's `.switch` behavior — this task calls `selectTab(currentIndex)` with the **default `.none`** transition (the next tab is shown instantly; only the snapshot moves), so it does not depend on, and must not pass, a `.switch`/`.create` transition.
 
-**Why an explicit `CABasicAnimation` (not `Motion.run`):** `Motion.overlay` returns a **detached** `CALayer` added via `host.layer?.addSublayer(...)` (it is *not* an NSView's backing layer, so it has no `.animator()` proxy). For a free-standing sublayer the robust, in-house idiom is an explicit `CABasicAnimation` — exactly what `HaliteTerminalView.handleBell()` (lines 283–301) already does for its flash overlay. We reuse that idiom here, but source the duration/timing from `Motion.duration` / `Motion.timing` (never hardcoded `0.16` / `.easeOut` at the call site). `Motion.run` (implicit animation via `allowsImplicitAnimation`) remains the right tool for the *view*-backing-layer tasks (tab create/switch live layer); it is intentionally not used for this detached-layer slide. This architectural split — implicit animation for view-backing layers, explicit `CABasicAnimation` for detached overlay layers — is consistent across the whole plan.
+**Why an explicit `CABasicAnimation` (not `Motion.run`):** `Motion.overlay` returns a **detached** `CALayer` added via `host.layer?.addSublayer(...)` (it is *not* an NSView's backing layer, so it has no `.animator()` proxy). For a free-standing sublayer the robust, in-house idiom is an explicit `CABasicAnimation` — exactly what `DamsonTerminalView.handleBell()` (lines 283–301) already does for its flash overlay. We reuse that idiom here, but source the duration/timing from `Motion.duration` / `Motion.timing` (never hardcoded `0.16` / `.easeOut` at the call site). `Motion.run` (implicit animation via `allowsImplicitAnimation`) remains the right tool for the *view*-backing-layer tasks (tab create/switch live layer); it is intentionally not used for this detached-layer slide. This architectural split — implicit animation for view-backing layers, explicit `CABasicAnimation` for detached overlay layers — is consistent across the whole plan.
 
 **Files:**
 - Modify: `Sources/halite/CompactWindowController.swift`
   - `setupViews()` (lines 110–112): add `contentContainer.wantsLayer = true` so the overlay's host is already layer-backed (avoids a first-time backing-switch hiccup mid-close).
   - `closeTab(_:)` (lines 212–223): capture+overlay the closing tab content **before** teardown, gate on visibility, animate the overlay out **after** `selectTab`.
-- Test: none. `CompactWindowController` lives in the `halite` **executable** target, which has no test target (Package.swift lines 62–71; same reason `Motion` lives in `HaliteTerminal` — see Task 1's placement note). The non-visual gate logic is covered by `MotionTests` (Task 1); this task's behavior is **visual/timing**, verified manually per the spec's Testing section.
+- Test: none. `CompactWindowController` lives in the `halite` **executable** target, which has no test target (Package.swift lines 62–71; same reason `Motion` lives in `DamsonTerminal` — see Task 1's placement note). The non-visual gate logic is covered by `MotionTests` (Task 1); this task's behavior is **visual/timing**, verified manually per the spec's Testing section.
 
 ---
 
@@ -992,12 +992,12 @@ Key correctness points baked in:
 - [ ] **Step 4: Build the whole package**
 
 Run: `swift build`
-Expected: `Build complete!` with no errors. (Confirms `Motion.enabled`, `Motion.snapshot(of:)`, and `Motion.overlay(image:frame:in:)` resolve from the `halite` executable via the existing `import HaliteTerminal`, and that `closeTab` still type-checks.)
+Expected: `Build complete!` with no errors. (Confirms `Motion.enabled`, `Motion.snapshot(of:)`, and `Motion.overlay(image:frame:in:)` resolve from the `halite` executable via the existing `import DamsonTerminal`, and that `closeTab` still type-checks.)
 
 - [ ] **Step 5: Run the full test suite (confirm nothing regressed)**
 
 Run: `swift test`
-Expected: All suites pass (the Task 1 `MotionTests` plus the pre-existing `HaliteTerminalTests` / `HaliteControlTests`), ending with `Test Suite 'All tests' passed`. No tests are added in this task (executable target is untestable); this run only confirms no regression.
+Expected: All suites pass (the Task 1 `MotionTests` plus the pre-existing `DamsonTerminalTests` / `DamsonControlTests`), ending with `Test Suite 'All tests' passed`. No tests are added in this task (executable target is untestable); this run only confirms no regression.
 
 - [ ] **Step 6: MANUAL verification — animated path**
 
@@ -1259,7 +1259,7 @@ Notes:
 
 - [ ] **Step 5: Build**
 
-Run from `/Users/dkkang/dev/halite-swift/.claude/worktrees/tab-pane-animation`:
+Run from `/Users/dkkang/dev/damson/.claude/worktrees/tab-pane-animation`:
 
 ```bash
 swift build
@@ -1273,7 +1273,7 @@ Expected: `Build complete!` with no errors or warnings. (Compiles the new `.clos
 swift test
 ```
 
-Expected: all suites green, ending in `Test Suite 'All tests' passed` with 0 failures (the `MotionTests` from Task 1 plus the existing `HaliteTerminalTests` / `HaliteControlTests`). Pane-close itself has no unit test (visual/timing); this run proves the change did not break compilation or existing behavior.
+Expected: all suites green, ending in `Test Suite 'All tests' passed` with 0 failures (the `MotionTests` from Task 1 plus the existing `DamsonTerminalTests` / `DamsonControlTests`). Pane-close itself has no unit test (visual/timing); this run proves the change did not break compilation or existing behavior.
 
 - [ ] **Step 7: MANUAL verification — animation ON path**
 
@@ -1325,7 +1325,7 @@ This task animates **switching between two existing tabs** (tab-bar click, `Cmd+
 
 **Builds on:** Task 2 (tab create), which already introduced the `TabTransition` enum with **all three cases** (`.none`, `.create`, `.switch(fromIndex:)`), the `selectTab(_ index: Int, transition: TabTransition = .none)` signature, the unconditional reset block, and the `.create` animation branch. This task **adds** the `.switch(fromIndex:)` animation branch and routes the four switch call sites through it. **The enum is NOT redeclared here** — it already has the `.switch` case from Task 2. Task 2's `.none`/`.create` handling (the reset block + the `if case .create ...` check) is untouched. It also relies on the `Motion` helper from Task 1 (`Motion.enabled`, `Motion.snapshot`, `Motion.overlay`, `Motion.duration`, `Motion.timing`, `Motion.run`).
 
-**Technique note (why explicit `CABasicAnimation`, not `.animator()`):** the outgoing overlay is a bare `CALayer` (from `Motion.overlay`) — bare layers are not driven by `NSView.animator()`, so we animate them with explicit `CABasicAnimation`, exactly the proven bell-flash idiom (`HaliteTerminalView.swift:291`). The incoming `PaneTreeView` is pinned by Auto Layout constraints (`CompactWindowController.swift:177-182`); we must **not** animate its frame (that would fight constraints and resize the live surface → SIGWINCH reflow storm, the very thing Approach A avoids). Instead we animate its **layer's** `transform` + `opacity` — purely visual, zero reflow — also via explicit `CABasicAnimation`, with the initial values committed action-free (`CATransaction.setDisableActions(true)`). `PaneTreeView` is layer-backed (`wantsLayer = true`, `PaneTreeView.swift:23`), so `tree.layer` is non-nil. A single `Motion.run` group provides one completion handler that removes the overlay and restores the live layer to identity.
+**Technique note (why explicit `CABasicAnimation`, not `.animator()`):** the outgoing overlay is a bare `CALayer` (from `Motion.overlay`) — bare layers are not driven by `NSView.animator()`, so we animate them with explicit `CABasicAnimation`, exactly the proven bell-flash idiom (`DamsonTerminalView.swift:291`). The incoming `PaneTreeView` is pinned by Auto Layout constraints (`CompactWindowController.swift:177-182`); we must **not** animate its frame (that would fight constraints and resize the live surface → SIGWINCH reflow storm, the very thing Approach A avoids). Instead we animate its **layer's** `transform` + `opacity` — purely visual, zero reflow — also via explicit `CABasicAnimation`, with the initial values committed action-free (`CATransaction.setDisableActions(true)`). `PaneTreeView` is layer-backed (`wantsLayer = true`, `PaneTreeView.swift:23`), so `tree.layer` is non-nil. A single `Motion.run` group provides one completion handler that removes the overlay and restores the live layer to identity.
 
 **Files:**
 - Modify: `Sources/halite/CompactWindowController.swift`
@@ -1334,7 +1334,7 @@ This task animates **switching between two existing tabs** (tab-bar click, `Cmd+
   - `tabBar.onTabSelected` callback (line 103) → pass `.switch(fromIndex:)`
   - `selectNextTab(_:)` (263-266), `selectPreviousTab(_:)` (269-272), `selectTabByNumber(_:)` (275-280) → pass `.switch(fromIndex:)`
   - **No change to the `TabTransition` enum** (Task 2 already defined all three cases).
-- Test: `Tests/HaliteTerminalTests/MotionTests.swift` — no change required (switch logic is visual; the disabled-path correctness is asserted manually per the spec, see Step 6). The gating truth-table + snapshot tests from Task 1 already cover `Motion`. No new automated test is feasible for the crossfade itself (visual/timing — the project's norm, design §Testing).
+- Test: `Tests/DamsonTerminalTests/MotionTests.swift` — no change required (switch logic is visual; the disabled-path correctness is asserted manually per the spec, see Step 6). The gating truth-table + snapshot tests from Task 1 already cover `Motion`. No new automated test is feasible for the crossfade itself (visual/timing — the project's norm, design §Testing).
 
 ---
 
@@ -1561,7 +1561,7 @@ The create path (`addTab`/`addNewTab`), close path (`closeTab`), and restore-ini
 
 - [ ] **Step 5: Build the package**
 
-Run (from `/Users/dkkang/dev/halite-swift/.claude/worktrees/tab-pane-animation`):
+Run (from `/Users/dkkang/dev/damson/.claude/worktrees/tab-pane-animation`):
 
 ```bash
 swift build
@@ -1577,7 +1577,7 @@ Run:
 swift test
 ```
 
-Expected: all suites green, ending `Test Suite 'All tests' passed` with 0 failures (the Task-1 `MotionTests` plus the existing `HaliteTerminalTests` / `HaliteControlTests`). This is the **disabled-path / non-visual regression guard**: switch logic is layer-only and never alters the final view hierarchy, first responder, `currentIndex`, or window title, so no existing test changes behavior. (There is no automated test for the crossfade itself — visual/timing, verified manually in Step 7 per design §Testing.)
+Expected: all suites green, ending `Test Suite 'All tests' passed` with 0 failures (the Task-1 `MotionTests` plus the existing `DamsonTerminalTests` / `DamsonControlTests`). This is the **disabled-path / non-visual regression guard**: switch logic is layer-only and never alters the final view hierarchy, first responder, `currentIndex`, or window title, so no existing test changes behavior. (There is no automated test for the crossfade itself — visual/timing, verified manually in Step 7 per design §Testing.)
 
 - [ ] **Step 7: MANUAL verification — animation ON**
 
@@ -1629,14 +1629,14 @@ This is the closing task. By now Tasks 1–6 have shipped: `Motion` core + `hali
 
 **Prerequisite:** all of Tasks 1–6 must have their commits on the feature branch before Task 7 begins. Task 7 verifies the integrated whole; it cannot check anything if any earlier task's changes are unbuilt or uncommitted. Confirm with `git log --oneline` that the six task commits are present before starting.
 
-**Why the disabled-path end-state check is manual, not an XCTest:** the spec (design doc line 119) wants an automated test that `selectTab`/`rebuild` reach the correct final view hierarchy + first-responder synchronously when animations are disabled. That is **not writable as an XCTest**: `CompactWindowController.selectTab(_:)` and `PaneTreeView.rebuild(animation:)` both live in the `halite` **executable** target, and (Package.swift lines 62–71) the test targets depend only on `HaliteTerminal`/`HaliteControl` — SwiftPM cannot `@testable import` an executable. So the *pure* `Motion` gating logic is covered by `MotionTests` (created in Task 1, re-run in Step 1), and the disabled-path end-state of `selectTab`/`rebuild` is verified **manually** in Steps 5 and 6 below.
+**Why the disabled-path end-state check is manual, not an XCTest:** the spec (design doc line 119) wants an automated test that `selectTab`/`rebuild` reach the correct final view hierarchy + first-responder synchronously when animations are disabled. That is **not writable as an XCTest**: `CompactWindowController.selectTab(_:)` and `PaneTreeView.rebuild(animation:)` both live in the `halite` **executable** target, and (Package.swift lines 62–71) the test targets depend only on `DamsonTerminal`/`DamsonControl` — SwiftPM cannot `@testable import` an executable. So the *pure* `Motion` gating logic is covered by `MotionTests` (created in Task 1, re-run in Step 1), and the disabled-path end-state of `selectTab`/`rebuild` is verified **manually** in Steps 5 and 6 below.
 
 **Files:**
 - Create: _none_ (pure QA task — no new source or test files).
 - Modify: _none_ (no production code change; if QA uncovers a regression, fix it under the relevant earlier task, not here).
-- Test: `Tests/HaliteTerminalTests/MotionTests.swift` — **re-run only** as a regression gate (created in Task 1; Task 7 adds no new cases).
+- Test: `Tests/DamsonTerminalTests/MotionTests.swift` — **re-run only** as a regression gate (created in Task 1; Task 7 adds no new cases).
 
-All commands run from `/Users/dkkang/dev/halite-swift/.claude/worktrees/tab-pane-animation`.
+All commands run from `/Users/dkkang/dev/damson/.claude/worktrees/tab-pane-animation`.
 
 ---
 
@@ -1648,7 +1648,7 @@ All commands run from `/Users/dkkang/dev/halite-swift/.claude/worktrees/tab-pane
   ```
   Expected result: the suite runs and reports **0 failures** (e.g. `Test Suite 'MotionTests' passed`, "Executed N tests, with 0 failures"). These cover the only logic SwiftPM can unit-test: `Motion.isEnabled(toggledOn:reduceMotionEnabled:)` for all four toggle×Reduce-Motion combinations, plus `Motion.snapshot(of:)` returning non-nil for a sized `NSView` and nil for a zero-size one.
 
-  Note: `swift test HaliteTerminalTests.MotionTests` is invalid syntax — always use `--filter`. To run the whole library suite instead: `swift test --filter HaliteTerminalTests` (expected: 0 failures).
+  Note: `swift test DamsonTerminalTests.MotionTests` is invalid syntax — always use `--filter`. To run the whole library suite instead: `swift test --filter DamsonTerminalTests` (expected: 0 failures).
 
 - [ ] **Step 2 — Clean build of the app.**
 
@@ -1713,6 +1713,6 @@ All commands run from `/Users/dkkang/dev/halite-swift/.claude/worktrees/tab-pane
 
   Task 7 introduces **no production or test code** of its own — it is a verification pass. If every check in Steps 1–6 passed, there is nothing to commit for this task (the animation code was committed under Tasks 1–6); record QA sign-off in the PR description instead. If QA *did* surface a regression, fix it under the originating earlier task and re-run Steps 1–6, rather than committing a fix under Task 7. Only if you intentionally added a new automated `MotionTests` case while here would you commit it:
   ```bash
-  git add Tests/HaliteTerminalTests/MotionTests.swift && git commit -m "test(motion): add gating case found during final QA"
+  git add Tests/DamsonTerminalTests/MotionTests.swift && git commit -m "test(motion): add gating case found during final QA"
   ```
   (Skip this commit if no test was added — the normal case for a pure-QA task.)
