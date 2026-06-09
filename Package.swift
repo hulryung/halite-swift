@@ -7,22 +7,22 @@ let package = Package(
         .macOS(.v13),
     ],
     products: [
-        // 엔진 라이브러리 — cmux와 halite.app이 공유
+        // 엔진 라이브러리 — cmux와 Damson.app이 공유
         .library(
             name: "DamsonTerminal",
             targets: ["DamsonTerminal"]
         ),
-        // halite ↔ damson-cli IPC wire format (서버/클라이언트 공유)
+        // damson ↔ damson-cli IPC wire format (서버/클라이언트 공유)
         .library(
             name: "DamsonControl",
             targets: ["DamsonControl"]
         ),
-        // 독립 앱 (개발 중에는 `swift run halite`, 배포는 추후 Xcode 프로젝트)
+        // 독립 앱 (개발 중에는 `swift run damson`, 배포는 추후 Xcode 프로젝트)
         .executable(
             name: "damson",
             targets: ["damson"]
         ),
-        // CLI 클라이언트 — Rust damson-cli와 wire-format 호환
+        // CLI 클라이언트 — damson 서버에 명령 전송
         .executable(
             name: "damson-cli",
             targets: ["damson-cli"]

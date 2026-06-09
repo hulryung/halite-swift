@@ -64,7 +64,7 @@ PUBDATE="$(LC_ALL=C date -u "+%a, %d %b %Y %H:%M:%S +0000")"
 
 cat <<EOF
         <item>
-            <title>halite $VERSION</title>
+            <title>Damson $VERSION</title>
             <pubDate>$PUBDATE</pubDate>
             <sparkle:version>$BUILD</sparkle:version>
             <sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>

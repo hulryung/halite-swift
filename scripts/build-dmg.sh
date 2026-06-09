@@ -20,7 +20,7 @@ fi
 VERSION="$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist" 2>/dev/null || echo "0.0.0")"
 
 DMG="$REPO_ROOT/dist/Damson-$VERSION.dmg"
-STAGE_DIR="$(mktemp -d -t halite-dmg-stage)"
+STAGE_DIR="$(mktemp -d -t damson-dmg-stage)"
 trap 'rm -rf "$STAGE_DIR"' EXIT
 
 echo "==> staging at $STAGE_DIR"

@@ -9,8 +9,8 @@ import Foundation
 ///
 /// 디버깅용 `DAMSON_NO_TRAMPOLINE=1`이 set 되어 있으면 skip.
 enum AppBundleTrampoline {
-    /// halite Rust와 일치시킨 bundle id / name / 경로 — LaunchServices가 동일 식별자로
-    /// 두 구현을 같은 등록으로 다루도록 (charset of conventions).
+    /// damson의 bundle id / name / 경로 — LaunchServices가 이 식별자로 GUI 앱 등록을
+    /// 안정적으로 잡도록 고정한다.
     private static let bundleID = "app.damson.terminal"
     private static let bundleName = "damson"
     private static let appDirName = "Damson.app"

@@ -423,7 +423,7 @@ struct ThemePreview: View {
         VStack(alignment: .leading, spacing: 3) {
             Group {
                 Text("➜ ").foregroundColor(col(2))
-                    + Text("~/dev/halite ").foregroundColor(col(4))
+                    + Text("~/dev/damson ").foregroundColor(col(4))
                     + Text("git:(").foregroundColor(fg)
                     + Text("main").foregroundColor(col(1))
                     + Text(")").foregroundColor(fg)
@@ -578,7 +578,7 @@ extension DamsonConfig {
                 config.theme = theme
             }
         }
-        // 새 터미널의 시작 디렉토리는 사용자의 홈 디렉토리. 그렇지 않으면 halite를 띄운
+        // 새 터미널의 시작 디렉토리는 사용자의 홈 디렉토리. 그렇지 않으면 damson을 띄운
         // working directory(예: Xcode 빌드, /tmp, 어딘가에서 cmd 실행)가 그대로 상속되어
         // 매번 cd를 쳐야 함. (호출처에서 "현재 디렉토리 상속" 정책 시 덮어쓸 수 있음.)
         config.cwd = NSHomeDirectory()

@@ -4,16 +4,16 @@ damson를 cmux에 끼우고 ghostty를 제거하는 작업 범위.
 
 ## 무엇을 의존하는가
 
-cmux는 **`DamsonTerminal` Swift Package(엔진 라이브러리)만** 의존한다. `halite.app`은 별개 산출물이며 cmux와 무관.
+cmux는 **`DamsonTerminal` Swift Package(엔진 라이브러리)만** 의존한다. `Damson.app`은 별개 산출물이며 cmux와 무관.
 
 ```
 ~/dev/damson/
 ├── Package.swift                       ← cmux가 이걸 의존
-├── Sources/DamsonTerminal/              ← 엔진 라이브러리 (cmux + halite.app 공통)
-└── Apps/halite/                         ← 독립 .app (cmux 무시)
+├── Sources/DamsonTerminal/              ← 엔진 라이브러리 (cmux + Damson.app 공통)
+└── Apps/damson/                         ← 독립 .app (cmux 무시)
 ```
 
-cmux 입장에서는 ghostty C 헤더/xcframework가 빠지고, 자리에 Swift 패키지가 들어오는 것뿐. `halite.app`의 존재는 cmux 빌드/런타임에 영향 없음.
+cmux 입장에서는 ghostty C 헤더/xcframework가 빠지고, 자리에 Swift 패키지가 들어오는 것뿐. `Damson.app`의 존재는 cmux 빌드/런타임에 영향 없음.
 
 ## 기본 전략
 
@@ -46,13 +46,13 @@ cmux 입장에서는 ghostty C 헤더/xcframework가 빠지고, 자리에 Swift 
 | `Packages/DamsonTerminal/` | damson Swift Package vendored 또는 서브모듈 |
 | `Sources/DamsonTerminalView.swift` (신규) | `DamsonSession` 생성/소멸, cmux config → `DamsonConfig` 변환, 콜백을 cmux 모델로 라우팅 |
 | `Sources/DamsonConfigBuilder.swift` (신규) | `GhosttyConfig`가 했던 일을 `DamsonConfig`로. 폰트/팔레트/스크롤백/IME 옵션 매핑 |
-| `Sources/WorkspaceSurfaceConfig.swift` | ghostty surface config 구조에서 halite session config로 |
+| `Sources/WorkspaceSurfaceConfig.swift` | ghostty surface config 구조에서 damson session config로 |
 | `Sources/Workspace.swift`, `Sources/TabManager.swift` | `TerminalSurface`(ghostty)와 함께 또는 대체하는 `DamsonSurfaceModel` |
-| `Sources/Panels/TerminalPanel.swift` | 어느 엔진을 쓰는지 분기 (전환기) 또는 halite로 단일화 (완전 이행 후) |
-| `Sources/AppearanceSettings.swift` | ghostty 전용 옵션 제거, halite 옵션으로 (대부분 1:1 매핑) |
+| `Sources/Panels/TerminalPanel.swift` | 어느 엔진을 쓰는지 분기 (전환기) 또는 damson로 단일화 (완전 이행 후) |
+| `Sources/AppearanceSettings.swift` | ghostty 전용 옵션 제거, damson 옵션으로 (대부분 1:1 매핑) |
 | 단축키 시스템 | `ghostty_surface_binding_action` 호출이 사라지고, 키 라우팅을 cmux가 완전히 책임. `KeyboardShortcutSettings`에 영향 없음 |
 | `GhosttyCrashReportMetadata` | `DamsonCrashReportMetadata`로 대체. 현재 surface, scrollback size 등 |
-| `cmuxTests/` | ghostty 의존 테스트들을 halite 의존으로. 핵심 회귀(typing latency, IME, splits, drag tabs)는 그대로 유지 |
+| `cmuxTests/` | ghostty 의존 테스트들을 damson 의존으로. 핵심 회귀(typing latency, IME, splits, drag tabs)는 그대로 유지 |
 
 ## API 매핑 표
 

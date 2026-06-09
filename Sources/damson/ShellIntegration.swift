@@ -14,7 +14,7 @@ enum ShellIntegration {
         guard let shellPath, isZsh(shellPath), let dir = ensureZdotdir() else {
             return [:]
         }
-        return ["ZDOTDIR": dir, "HALITE_SHELL_INTEGRATION": "1"]
+        return ["ZDOTDIR": dir, "DAMSON_SHELL_INTEGRATION": "1"]
     }
 
     private static func isZsh(_ path: String) -> Bool {
@@ -53,22 +53,22 @@ enum ShellIntegration {
         }
         let hook = """
 
-        # --- halite shell integration ---
+        # --- damson shell integration ---
         # 매 프롬프트마다: OSC 7로 cwd 보고(새 split/탭이 cwd 상속) + OSC 133;A로
         # 프롬프트 줄 마크(⌘↑/⌘↓ 프롬프트 점프).
-        _halite_precmd() {
+        _damson_precmd() {
           printf '\\033]7;file://%s%s\\033\\\\' "${HOST}" "${PWD}"
           printf '\\033]133;A\\033\\\\'
         }
         autoload -Uz add-zsh-hook 2>/dev/null
         if (( $+functions[add-zsh-hook] )); then
-          add-zsh-hook -d precmd _halite_precmd 2>/dev/null
-          add-zsh-hook precmd _halite_precmd
+          add-zsh-hook -d precmd _damson_precmd 2>/dev/null
+          add-zsh-hook precmd _damson_precmd
         else
-          precmd_functions+=(_halite_precmd)
+          precmd_functions+=(_damson_precmd)
         fi
-        _halite_precmd
-        # --- end halite shell integration ---
+        _damson_precmd
+        # --- end damson shell integration ---
 
         """
         return [

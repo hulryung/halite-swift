@@ -1,8 +1,8 @@
 import Foundation
 import DamsonControl
 
-// damson-cli — halite 인스턴스에 명령을 보내는 CLI.
-// Rust halite의 damson-cli와 wire-format 호환.
+// damson-cli — damson 인스턴스에 명령을 보내는 CLI.
+// damson 서버와 NDJSON wire-format으로 통신.
 //
 // 사용법:
 //   damson-cli new-tab

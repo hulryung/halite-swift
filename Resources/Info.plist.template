@@ -48,7 +48,7 @@
 	<string>https://raw.githubusercontent.com/hulryung/damson/main/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>__SPARKLE_PUBLIC_KEY__</string>
-	<!-- 자동 체크 디폴트 비활성 — Settings 토글로 켬 (halite.autoUpdate). -->
+	<!-- 자동 체크 디폴트 비활성 — Settings 토글로 켬 (damson.autoUpdate). -->
 	<key>SUEnableAutomaticChecks</key>
 	<false/>
 	<key>SUEnableInstallerLauncherService</key>

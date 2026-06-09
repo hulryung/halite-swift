@@ -107,8 +107,8 @@ final class WireTests: XCTestCase {
 
     func testRuntimeDirHonorsXDG() {
         let orig = ProcessInfo.processInfo.environment["XDG_RUNTIME_DIR"]
-        setenv("XDG_RUNTIME_DIR", "/tmp/halite-xdg-test", 1)
-        XCTAssertEqual(damsonRuntimeDir(), "/tmp/halite-xdg-test/damson")
+        setenv("XDG_RUNTIME_DIR", "/tmp/damson-xdg-test", 1)
+        XCTAssertEqual(damsonRuntimeDir(), "/tmp/damson-xdg-test/damson")
         if let v = orig {
             setenv("XDG_RUNTIME_DIR", v, 1)
         } else {

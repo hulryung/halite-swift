@@ -8,7 +8,7 @@ import XCTest
 /// make, so the image exercises color, attributes, CJK width, emoji, hyperlinks,
 /// and the cursor exactly as on screen.
 ///
-/// Output path: `$HALITE_SHOT` if set, else `/tmp/halite_parity.png`.
+/// Output path: `$DAMSON_SHOT` if set, else `/tmp/damson_parity.png`.
 final class MetalRenderImageTests: XCTestCase {
 
     /// Replicates `DamsonTerminalView.measuredLineHeight` so the atlas cell box
@@ -121,12 +121,12 @@ final class MetalRenderImageTests: XCTestCase {
         XCTAssertGreaterThan(differing, 100, "frame looks blank — pipeline drew nothing")
 
         // Write the PNG for visual inspection.
-        let outPath = ProcessInfo.processInfo.environment["HALITE_SHOT"] ?? "/tmp/halite_parity.png"
+        let outPath = ProcessInfo.processInfo.environment["DAMSON_SHOT"] ?? "/tmp/damson_parity.png"
         guard let png = rep.representation(using: .png, properties: [:]) else {
             return XCTFail("PNG encode failed")
         }
         try png.write(to: URL(fileURLWithPath: outPath))
-        print("HALITE_PARITY_PNG=\(outPath) (\(cg.width)x\(cg.height), \(differing) non-bg sample px)")
+        print("DAMSON_PARITY_PNG=\(outPath) (\(cg.width)x\(cg.height), \(differing) non-bg sample px)")
     }
 
     /// Render a ligature sheet with a ligature-capable font, ligatures off vs on,
@@ -163,13 +163,13 @@ final class MetalRenderImageTests: XCTestCase {
 
         let off = try sheet(ligatures: false)
         let on = try sheet(ligatures: true)
-        let dir = ProcessInfo.processInfo.environment["HALITE_SHOT_DIR"] ?? "/tmp"
-        for (name, img) in [("halite_lig_off.png", off), ("halite_lig_on.png", on)] {
+        let dir = ProcessInfo.processInfo.environment["DAMSON_SHOT_DIR"] ?? "/tmp"
+        for (name, img) in [("damson_lig_off.png", off), ("damson_lig_on.png", on)] {
             let rep = NSBitmapImageRep(cgImage: img)
             if let png = rep.representation(using: .png, properties: [:]) {
                 try png.write(to: URL(fileURLWithPath: "\(dir)/\(name)"))
             }
         }
-        print("HALITE_LIG_FONT=\(family)  off=\(dir)/halite_lig_off.png  on=\(dir)/halite_lig_on.png")
+        print("DAMSON_LIG_FONT=\(family)  off=\(dir)/damson_lig_off.png  on=\(dir)/damson_lig_on.png")
     }
 }

@@ -1,9 +1,8 @@
 import Foundation
 
-/// damson-cli ↔ halite 서버 간의 NDJSON wire-format 타입.
-/// Rust halite의 `docs/CLI.md` 명세와 동일하게 직렬화되도록 인코딩/디코딩을
-/// 수동 구현. 그래서 같은 `damson-cli`(Rust)도 우리 damson 서버와 통신
-/// 가능하고, 우리 `damson-cli`(Swift)도 Rust halite 서버에 붙음.
+/// damson-cli ↔ damson 서버 간의 NDJSON wire-format 타입.
+/// 인코딩/디코딩을 수동 구현한다. (포맷은 Rust halite의 `docs/CLI.md`
+/// CLI 명세에서 유래했으나, 이제 damson 자체 포맷이다.)
 
 public enum SplitDir: String, Codable, Sendable {
     case horizontal

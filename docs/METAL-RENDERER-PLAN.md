@@ -47,7 +47,7 @@ Produced by the design-metal-renderer workflow (3 designs, adversarial judging, 
 
 # PHASED IMPLEMENTATION PLAN
 
-Excellent advice. The advisor caught the two real spec violations: §13's phase order doesn't satisfy "Phase 1 = first Metal pixels" or "front-load all 4 unknowns (especially IME cursor-rect, stranded at P4)." I'll restructure so Phase 1 lands bg + ASCII text + coordinate-map/IME-cursor-rect together, splitting coordinate correctness from preedit visual. I'll use SwiftPM conventions (`swift run halite`, auto-discovered tests, no pbxproj/two-commit policy), and give every phase the full five-field template with rollback nuance for shared refactors.
+Excellent advice. The advisor caught the two real spec violations: §13's phase order doesn't satisfy "Phase 1 = first Metal pixels" or "front-load all 4 unknowns (especially IME cursor-rect, stranded at P4)." I'll restructure so Phase 1 lands bg + ASCII text + coordinate-map/IME-cursor-rect together, splitting coordinate correctness from preedit visual. I'll use SwiftPM conventions (`swift run damson`, auto-discovered tests, no pbxproj/two-commit policy), and give every phase the full five-field template with rollback nuance for shared refactors.
 
 This is my final deliverable.
 
@@ -61,9 +61,9 @@ This is my final deliverable.
 
 Replace the temporary M3 render placeholder — `NSScrollView` + child `NSTextView` + full `NSAttributedString` rebuild every frame (`DamsonTerminalView.swift:41-45`, explicitly flagged "M4 이후 CAMetalLayer + 자체 렌더러로 교체") — with a `CAMetalLayer` instanced renderer, **behind a runtime toggle**, reaching exact visual parity, then retiring the legacy path.
 
-**Strategy:** extract a `TerminalRenderBackend` protocol, make the *existing* NSTextView path conform first (zero visible change), then build the Metal backend as a second conformer selectable live. The toggle doubles as an A/B pixel-diff oracle on a running terminal. Every phase ends in a buildable, dogfoodable `swift run halite`.
+**Strategy:** extract a `TerminalRenderBackend` protocol, make the *existing* NSTextView path conform first (zero visible change), then build the Metal backend as a second conformer selectable live. The toggle doubles as an A/B pixel-diff oracle on a running terminal. Every phase ends in a buildable, dogfoodable `swift run damson`.
 
-**Conventions (SwiftPM, not cmux):** dogfood with `swift run halite` (legacy) and `HALITE_METAL=1 swift run halite` (Metal). Tests in `Tests/DamsonTerminalTests/` are XCTest, **auto-discovered — no project-file wiring, no two-commit red/green policy**. All cited line numbers verified against the live tree this session.
+**Conventions (SwiftPM, not cmux):** dogfood with `swift run damson` (legacy) and `DAMSON_METAL=1 swift run damson` (Metal). Tests in `Tests/DamsonTerminalTests/` are XCTest, **auto-discovered — no project-file wiring, no two-commit red/green policy**. All cited line numbers verified against the live tree this session.
 
 ## Hard invariants held at every phase
 
@@ -82,12 +82,12 @@ Replace the temporary M3 render placeholder — `NSScrollView` + child `NSTextVi
 **Files.**
 - NEW `RenderBackend.swift` — `protocol TerminalRenderBackend`; `struct RenderState` (markedText, selection, find matches, active-find, hovered-URL, blink flags — exactly the view-local state the 6-part key tracks); `enum RenderBackendKind { case legacyText, metal }`.
 - NEW `LegacyTextBackend.swift` — wraps the current `NSScrollView`/`PassiveTextView`; implements `render`, `cell(at:)`, `screenRect(forCell:)`, and the scalar scroll adapter (`scrollYPixels` getter = `clipView.bounds.origin.y` `:356`; `setScrollY` = `scroll(to:)`+`reflectScrolledClipView` `:370/:391`; `setScrollY(animated:)` = `clipView.animator().setBoundsOrigin` `:870`; `handleScrollWheel` = native momentum).
-- NEW `MetalRenderConfig.swift` — toggle resolution: live override > env `HALITE_METAL=1` > `UserDefaults "DamsonMetalRenderer"` > `.legacyText`.
+- NEW `MetalRenderConfig.swift` — toggle resolution: live override > env `DAMSON_METAL=1` > `UserDefaults "DamsonMetalRenderer"` > `.legacyText`.
 - EDIT `DamsonTerminalView.swift` — move `scrollView`/`textView`/`cursorLayer` behind `legacyBackend`; `renderNow()` tail becomes `backend.render(grid:theme:state:)`; geometry calls (`convertEventToCell :974`, `firstRect :1474`, `updateCursorLayer :1737`) route through the protocol; `switchBackend(to:)` (tear down old contentView, install new, copy `scrollYPixels`, force full render).
 
 **Deliverable.** Identical app, now factored through one backend protocol with the toggle wired (defaults `.legacyText`).
 
-**Verify.** `swift run halite` — visually and behaviorally identical to today: typing, IME (Korean/Japanese candidate window on the cursor), selection drag, find highlight, Cmd-hover URLs, blink, scrollback, zoom, resize-no-spurious-SIGWINCH. *Unit:* `RenderState` equality drives the dirty key identically (snapshot-equality test). Pixel-diff a screenshot before/after the refactor — must be identical.
+**Verify.** `swift run damson` — visually and behaviorally identical to today: typing, IME (Korean/Japanese candidate window on the cursor), selection drag, find highlight, Cmd-hover URLs, blink, scrollback, zoom, resize-no-spurious-SIGWINCH. *Unit:* `RenderState` equality drives the dirty key identically (snapshot-equality test). Pixel-diff a screenshot before/after the refactor — must be identical.
 
 **Rollback.** Phase 0 is a **shared refactor — the toggle does not protect it** (the legacy path is now routed through new code for both backends). Rollback is `git revert`, not a flag flip. Treat the diff as byte-identical-critical: review the geometry routing line-by-line.
 
@@ -112,7 +112,7 @@ Replace the temporary M3 render placeholder — `NSScrollView` + child `NSTextVi
 - EDIT `Package.swift` — `resources: [.process("MetalRender/Shaders.metal")]`.
 - EDIT `DamsonTerminalView.swift` — `viewDidChangeBackingProperties`/`viewDidChangeEffectiveAppearance`/`layout` forward to backend; `firstRect`/`convertEventToCell` delegate to `backend`.
 
-**Deliverable.** `HALITE_METAL=1 swift run halite` shows a readable shell (`ls`, prompt, `vim`) in Metal: correct background colors, monospace ASCII text at the calibrated baseline, block-cursor-as-inverse, and **the Korean/Japanese IME candidate window landing on the cursor**. Legacy still default.
+**Deliverable.** `DAMSON_METAL=1 swift run damson` shows a readable shell (`ls`, prompt, `vim`) in Metal: correct background colors, monospace ASCII text at the calibrated baseline, block-cursor-as-inverse, and **the Korean/Japanese IME candidate window landing on the cursor**. Legacy still default.
 
 **Verify.**
 - *Build gate:* shader library loads via `.module` (or the source fallback engages) — log which path succeeded.
@@ -121,7 +121,7 @@ Replace the temporary M3 render placeholder — `NSScrollView` + child `NSTextVi
 
 **Scroll note (so the phase is genuinely dogfoodable).** The Metal backend gets **functional non-animated scalar scroll from this phase**: `handleScrollWheel` adjusts `scrollYPixels` and triggers an on-demand re-render. P5 adds *only* spring/momentum/sub-pixel animation on top. You can scroll scrollback in every Metal phase.
 
-**Rollback.** `HALITE_METAL` off / default `.legacyText` → legacy unaffected. **Exception:** the shared `cellMetrics` provider is live for both backends (must-fix #5 guard) — if it regresses sizing, that is git-revert, not toggle-flip. Scrutinize it for byte-identical cols/rows against legacy.
+**Rollback.** `DAMSON_METAL` off / default `.legacyText` → legacy unaffected. **Exception:** the shared `cellMetrics` provider is live for both backends (must-fix #5 guard) — if it regresses sizing, that is git-revert, not toggle-flip. Scrutinize it for byte-identical cols/rows against legacy.
 
 ---
 
@@ -205,7 +205,7 @@ Replace the temporary M3 render placeholder — `NSScrollView` + child `NSTextVi
 
 **Recommendation:** delete the legacy backend (anti-bitrot — a second live path rots fast). The alternative is keeping it as a permanent fallback behind a hidden flag; not recommended given the dual-maintenance cost, but it's your call.
 
-**Verify.** Default `swift run halite` is Metal; full dogfood matrix; `LegacyTextBackend`/NSScrollView symbols gone; public API surface unchanged (host `halite.app` builds and runs against the byte-stable symbols).
+**Verify.** Default `swift run damson` is Metal; full dogfood matrix; `LegacyTextBackend`/NSScrollView symbols gone; public API surface unchanged (host `Damson.app` builds and runs against the byte-stable symbols).
 
 **Rollback.** This is the one phase the toggle can't cover (it's deleted). Rollback = `git revert` the deletion. Keep P5→P6 as separate commits so revert is clean.
 
@@ -282,7 +282,7 @@ The spine **already** resolves four other rival must-fixes for free, by structur
 
 ## 1. Module / file layout
 
-All new files in `Sources/DamsonTerminal/` (the library consumed by both `cmux` and `halite.app`). `DamsonSurfaceView` stays where it is.
+All new files in `Sources/DamsonTerminal/` (the library consumed by both `cmux` and `Damson.app`). `DamsonSurfaceView` stays where it is.
 
 ```
 Sources/DamsonTerminal/
@@ -395,7 +395,7 @@ The sync-output gate (`scheduleRender` → `armSyncFlush`, the `inSyncOutputMode
 
 ```swift
 enum RenderBackendKind { case legacyText, metal }
-// resolution: live Debug override > env HALITE_METAL=1 > UserDefaults "DamsonMetalRenderer" > .legacyText
+// resolution: live Debug override > env DAMSON_METAL=1 > UserDefaults "DamsonMetalRenderer" > .legacyText
 ```
 
 `switchBackend(to:)` tears down the old `contentView`, installs the new one, copies `scrollYPixels`, forces a full render. Because `DamsonSession`/`Grid` are view-independent (verified: `gridChanged` PassthroughSubject `:33`, rendering reads `grid` not the output path), **this works on a live terminal** — flip backends mid-session and pixel-compare against legacy. No rival can do this. Default ships `.legacyText` until parity is proven at P8.
@@ -412,7 +412,7 @@ The protocol's scroll members are shaped for the Metal destination (a scalar `sc
 
 ### 3.1 The Metal layer lives *inside* the backend's contentView
 
-A Metal swap **cannot change the host's class** (cmux/halite.app consumers + AutoLayout anchors at `PaneTree.swift:26`), and SMOOTH-SCROLL forbids `CAMetalLayer` inside `NSScrollView`. So:
+A Metal swap **cannot change the host's class** (cmux/Damson.app consumers + AutoLayout anchors at `PaneTree.swift:26`), and SMOOTH-SCROLL forbids `CAMetalLayer` inside `NSScrollView`. So:
 
 - `DamsonSurfaceView : NSView` — **unchanged, unflipped**. Honors host AutoLayout anchors, hosts `FindOverlayView` subview + bell-flash sublayer.
 - `LegacyTextBackend.contentView` = the current `NSScrollView`.

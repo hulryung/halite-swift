@@ -25,13 +25,13 @@ security find-identity -p codesigning -v
 **방법 A — keychain profile (권장)**
 
 ```sh
-xcrun notarytool store-credentials halite-notary \
+xcrun notarytool store-credentials damson-notary \
     --apple-id you@example.com \
     --team-id TEAMID \
     --password "xxxx-xxxx-xxxx-xxxx"   # app-specific password
 ```
 
-이후 `NOTARY_KEYCHAIN_PROFILE=halite-notary`만 설정.
+이후 `NOTARY_KEYCHAIN_PROFILE=damson-notary`만 설정.
 
 **방법 B — env로 매번 전달**
 
@@ -42,7 +42,7 @@ xcrun notarytool store-credentials halite-notary \
 
 ```sh
 export APPLE_SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)'
-export NOTARY_KEYCHAIN_PROFILE=halite-notary
+export NOTARY_KEYCHAIN_PROFILE=damson-notary
 MARKETING_VERSION=0.1.0 ./scripts/release.sh
 ```
 
@@ -87,15 +87,15 @@ spctl --assess --type execute --verbose=4 dist/Damson.app
 spctl --assess --type open --context context:primary-signature dist/Damson-0.1.0.dmg
 ```
 
-## halite-cli 설치
+## damson-cli 설치
 
-`.app` 번들 안에 `Contents/Resources/halite-cli`로 들어가 있음. 사용자가
+`.app` 번들 안에 `Contents/Resources/damson-cli`로 들어가 있음. 사용자가
 `/usr/local/bin`에 symlink 거는 게 일반적:
 
 ```sh
-sudo ln -sf /Applications/Damson.app/Contents/Resources/halite-cli \
-    /usr/local/bin/halite-cli
-halite-cli --list-instances
+sudo ln -sf /Applications/Damson.app/Contents/Resources/damson-cli \
+    /usr/local/bin/damson-cli
+damson-cli --list-instances
 ```
 
 향후 Settings UI에서 "Install Command-Line Tool…" 버튼 추가 예정.

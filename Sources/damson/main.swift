@@ -5,7 +5,7 @@ import DamsonTerminal
 import SwiftUI
 
 // 독립 damson.app의 진입점.
-// SwiftPM 실행: `swift run halite`
+// SwiftPM 실행: `swift run damson`
 // 추후 정식 .app 배포는 별도 Xcode 프로젝트로 그래듀에이션.
 
 // raw binary로 실행됐다면 .app으로 wrap + relaunch.
@@ -148,7 +148,7 @@ final class DamsonAppDelegate: NSObject, NSApplicationDelegate {
         // macOS press-and-hold(악센트 팝업) 제어. 켜져 있으면 키를 길게 눌러도
         // 텍스트 입력 시스템이 "악센트 대기"로 가로채 키 반복이 억제된다(키에 따라
         // 들쭉날쭉 — f/q/x 등은 아예 반복 안 됨). 터미널은 모든 키가 반복돼야 하므로
-        // 기본은 OFF(반복). 설정 토글(halite.pressAndHold)이 ON이면 macOS 기본(악센트
+        // 기본은 OFF(반복). 설정 토글(damson.pressAndHold)이 ON이면 macOS 기본(악센트
         // 팝업)으로. 미설정 → false → ApplePressAndHoldEnabled=false.
         let pressAndHold = UserDefaults.standard.bool(forKey: "damson.pressAndHold")
         UserDefaults.standard.set(pressAndHold, forKey: "ApplePressAndHoldEnabled")
@@ -170,7 +170,7 @@ final class DamsonAppDelegate: NSObject, NSApplicationDelegate {
         )
         // 키바인딩 변경 → 메뉴 재빌드 (뷰 훅은 store를 라이브로 읽으므로 갱신 불필요).
         NotificationCenter.default.addObserver(
-            forName: .haliteKeybindingsChanged, object: nil, queue: .main
+            forName: .damsonKeybindingsChanged, object: nil, queue: .main
         ) { _ in installMainMenu() }
         bindControlSocket()
         // Sparkle은 lazy init — 첫 access 시점에 자동 시작.
@@ -199,7 +199,7 @@ final class DamsonAppDelegate: NSObject, NSApplicationDelegate {
         do {
             let path = try server.start(handler: { [weak self] cmd in
                 // handler는 worker thread에서 호출됨 → main으로 hop 후 결과 대기.
-                guard let self = self else { return .err("halite is shutting down") }
+                guard let self = self else { return .err("damson is shutting down") }
                 let sem = DispatchSemaphore(value: 0)
                 var resp: ControlResponse = .err("dispatch lost")
                 DispatchQueue.main.async {
@@ -208,7 +208,7 @@ final class DamsonAppDelegate: NSObject, NSApplicationDelegate {
                 }
                 let r = sem.wait(timeout: .now() + 2.0)
                 if r == .timedOut {
-                    return .err("timeout waiting for halite to process command")
+                    return .err("timeout waiting for damson to process command")
                 }
                 return resp
             })
@@ -377,10 +377,10 @@ final class DamsonAppDelegate: NSObject, NSApplicationDelegate {
             alert.messageText = busy == 1
                 ? "A process is still running."
                 : "\(busy) processes are still running."
-            alert.informativeText = "Quitting halite will terminate "
+            alert.informativeText = "Quitting Damson will terminate "
                 + (busy == 1 ? "it." : "them.") + " Quit anyway?"
         } else {
-            alert.messageText = "halite has \(total) open tabs/panes."
+            alert.messageText = "Damson has \(total) open tabs/panes."
             alert.informativeText = "Quitting will close them all. Quit anyway?"
         }
         alert.addButton(withTitle: "Quit")     // .alertFirstButtonReturn (default / Return)
@@ -465,7 +465,7 @@ final class DamsonAppDelegate: NSObject, NSApplicationDelegate {
 
 // MARK: - 최소 메뉴바
 
-/// Rebuilt whenever keybindings change (`.haliteKeybindingsChanged`). All shortcut
+/// Rebuilt whenever keybindings change (`.damsonKeybindingsChanged`). All shortcut
 /// equivalents come from `KeyBindingStore` rather than being hardcoded, so a remap
 /// in Settings takes effect by just calling this again.
 func installMainMenu() {

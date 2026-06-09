@@ -238,7 +238,7 @@ struct AppAction {
 // MARK: - KeyBindingStore — defaults + user overrides, persisted to UserDefaults
 
 /// Resolves the effective chord for each action: user override > disabled > default.
-/// Persisted as JSON under `halite.keybindings`. Posts `.haliteKeybindingsChanged`
+/// Persisted as JSON under `damson.keybindings`. Posts `.damsonKeybindingsChanged`
 /// on every mutation so the menu rebuilds and the view hook re-reads live.
 final class KeyBindingStore {
     static let shared = KeyBindingStore()
@@ -303,7 +303,7 @@ final class KeyBindingStore {
         if let data = try? JSONEncoder().encode(overrides) {
             UserDefaults.standard.set(data, forKey: Self.defaultsKey)
         }
-        NotificationCenter.default.post(name: .haliteKeybindingsChanged, object: nil)
+        NotificationCenter.default.post(name: .damsonKeybindingsChanged, object: nil)
     }
 
     // MARK: menu application
@@ -368,5 +368,5 @@ final class KeyBindingStore {
 }
 
 extension Notification.Name {
-    static let haliteKeybindingsChanged = Notification.Name("DamsonKeybindingsChanged")
+    static let damsonKeybindingsChanged = Notification.Name("DamsonKeybindingsChanged")
 }

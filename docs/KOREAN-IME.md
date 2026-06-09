@@ -76,19 +76,19 @@ halite Rust 문서 (`~/dev/halite/docs/KOREAN-IME.md`)가 7가지 가설을 다 
 
 ## 해법
 
-### Layer 1: `.app` trampoline (`Sources/halite/AppBundleTrampoline.swift`)
+### Layer 1: `.app` trampoline (`Sources/damson/AppBundleTrampoline.swift`)
 
-raw binary로 실행되면 자기 자신을 `~/Library/Caches/halite/Damson.app` 안에 minimal bundle로 wrap한 뒤 `open -F` (fresh, saved-state 복원 안 함)로 relaunch하고 원본은 `exit(0)`.
+raw binary로 실행되면 자기 자신을 `~/Library/Caches/damson/Damson.app` 안에 minimal bundle로 wrap한 뒤 `open -F` (fresh, saved-state 복원 안 함)로 relaunch하고 원본은 `exit(0)`.
 
 ```
-~/Library/Caches/halite/Damson.app/
+~/Library/Caches/damson/Damson.app/
 ├── Contents/
 │   ├── Info.plist    # CFBundleExecutable, CFBundleIdentifier, NSHighResolutionCapable 등 최소 필드
 │   └── MacOS/
-│       └── halite    # 매 launch마다 새 binary 복사
+│       └── damson    # 매 launch마다 새 binary 복사
 ```
 
-비활성화: `HALITE_NO_TRAMPOLINE=1` 환경변수.
+비활성화: `DAMSON_NO_TRAMPOLINE=1` 환경변수.
 
 ### Layer 2: IME warmup (`Sources/DamsonTerminal/DamsonTerminalView.swift`)
 
@@ -130,8 +130,8 @@ OpenJDK 같은 대형 프로젝트도 같은 메커니즘으로 막혀있어, Ap
 
 ## 관련 파일
 
-- `Sources/halite/AppBundleTrampoline.swift` — Layer 1
-- `Sources/halite/main.swift` — `AppBundleTrampoline.relaunchInAppBundleIfNeeded()` 첫 줄 호출
+- `Sources/damson/AppBundleTrampoline.swift` — Layer 1
+- `Sources/damson/main.swift` — `AppBundleTrampoline.relaunchInAppBundleIfNeeded()` 첫 줄 호출
 - `Sources/DamsonTerminal/DamsonTerminalView.swift` — Layer 2 (`warmupIMEIfNeeded` + `isWarmingUpIME` 플래그)
 
 ## 참고

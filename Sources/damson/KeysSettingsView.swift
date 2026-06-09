@@ -2,7 +2,7 @@ import SwiftUI
 
 /// The "Keys" settings tab — rebind every app shortcut, disable it, or reset to
 /// default. Edits go straight to `KeyBindingStore`, which persists + posts
-/// `.haliteKeybindingsChanged` (rebuilding the menu live).
+/// `.damsonKeybindingsChanged` (rebuilding the menu live).
 struct KeysSettingsTab: View {
     private let store = KeyBindingStore.shared
     /// Bumped on every store change to force a re-read (the store isn't Observable).
@@ -26,7 +26,7 @@ struct KeysSettingsTab: View {
         }
         .formStyle(.grouped)
         .id(version)
-        .onReceive(NotificationCenter.default.publisher(for: .haliteKeybindingsChanged)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .damsonKeybindingsChanged)) { _ in
             version &+= 1
         }
     }

@@ -3,12 +3,12 @@ import Foundation
 import Darwin
 #endif
 
-/// `runtimeDir()` — halite control socket이 사는 디렉토리.
+/// `damsonRuntimeDir()` — damson control socket이 사는 디렉토리.
 /// 우선순위:
-///   1. `$XDG_RUNTIME_DIR/halite`
-///   2. `$TMPDIR/halite-{uid}` (macOS 기본 — TMPDIR이 항상 set)
-///   3. `/tmp/halite-{uid}` (최후 fallback)
-/// Rust halite의 `runtime_dir`과 동일 (cross-impl 호환).
+///   1. `$XDG_RUNTIME_DIR/damson`
+///   2. `$TMPDIR/damson-{uid}` (macOS 기본 — TMPDIR이 항상 set)
+///   3. `/tmp/damson-{uid}` (최후 fallback)
+/// (디렉토리 규칙은 Rust halite의 `runtime_dir`에서 유래.)
 public func damsonRuntimeDir() -> String {
     let env = ProcessInfo.processInfo.environment
     if let xdg = env["XDG_RUNTIME_DIR"], !xdg.isEmpty {
@@ -22,14 +22,14 @@ public func damsonRuntimeDir() -> String {
     return "/tmp/damson-\(uid)"
 }
 
-/// 디스크에서 발견된 한 halite 인스턴스.
+/// 디스크에서 발견된 한 damson 인스턴스.
 public struct DamsonInstance: Sendable {
     public let pid: Int
     public let socketPath: String
     public let mtime: Date?
 }
 
-/// 실행 중인 halite 인스턴스 목록 (newest first).
+/// 실행 중인 damson 인스턴스 목록 (newest first).
 /// "실행 중" = socket file 존재 + connect 시 즉시 `ECONNREFUSED`가 아님.
 public func listDamsonInstances() -> [DamsonInstance] {
     let dir = damsonRuntimeDir()

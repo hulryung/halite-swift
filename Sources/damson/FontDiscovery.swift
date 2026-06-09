@@ -1,6 +1,6 @@
 import AppKit
 
-/// 시스템에 설치된 monospace 폰트 가족 목록을 enumerate하고, halite의 기본 폰트
+/// 시스템에 설치된 monospace 폰트 가족 목록을 enumerate하고, damson의 기본 폰트
 /// 선택 정책을 적용.
 ///
 /// Nerd Font가 설치돼 있으면 우선 사용 (Starship/Powerlevel10k의 powerline 글리프가
@@ -63,7 +63,7 @@ enum FontDiscovery {
             || family.contains(" NFP")
     }
 
-    /// halite의 디폴트 폰트 가족 = **JetBrainsMono Nerd Font Mono** (NFM).
+    /// damson의 디폴트 폰트 가족 = **JetBrainsMono Nerd Font Mono** (NFM).
     ///
     /// Latin 글자는 NF와 100% 동일하면서, Nerd 아이콘을 **1셀 폭으로 축소**해 터미널
     /// cell-grid에 맞춘다. 비-Mono(NF)는 아이콘 잉크가 1셀을 넘어(예: U+F43A 클럭

@@ -138,7 +138,7 @@ public extension DamsonTheme {
         presets.first { $0.name == name }
     }
 
-    /// xterm 기본에 가까운 다크 테마 (halite 디폴트).
+    /// xterm 기본에 가까운 다크 테마 (damson 디폴트).
     static var defaultDark: DamsonTheme {
         DamsonTheme(
             name: "Default Dark",

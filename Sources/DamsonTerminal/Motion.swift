@@ -3,8 +3,8 @@ import AppKit
 /// 탭/페인 생성·전환·닫기·분할에 공통으로 쓰는 모션 헬퍼.
 /// 상태 없는 정적 멤버만 — 인스턴스 없음.
 ///
-/// 위치 메모: 디자인 스펙은 `Sources/halite/Motion.swift`라고 적었지만,
-/// halite 실행 타깃은 단위 테스트가 불가능하다(Package.swift의 test 타깃은
+/// 위치 메모: 디자인 스펙은 `Sources/damson/Motion.swift`라고 적었지만,
+/// damson 실행 타깃은 단위 테스트가 불가능하다(Package.swift의 test 타깃은
 /// DamsonTerminal/DamsonControl 라이브러리에만 의존). 스펙 Testing 절이
 /// `enabled` 진리표와 `snapshot(of:)` 자동 커버리지를 요구하므로
 /// 테스트 가능한 DamsonTerminal 라이브러리에 둔다. 호출 측 코드는 동일하다

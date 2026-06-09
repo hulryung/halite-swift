@@ -5,7 +5,7 @@ import DamsonControl
 import Darwin
 #endif
 
-/// Damson-cli ↔ halite 통신용 Unix domain socket 서버.
+/// damson-cli ↔ damson 통신용 Unix domain socket 서버.
 ///
 /// 라이프사이클:
 ///   1. `start(handler:)` — runtime dir 생성(0o700), stale socket sweep,
@@ -24,7 +24,7 @@ final class ControlSocketServer {
     /// handler: command → response. worker thread에서 호출됨.
     typealias Handler = (ControlCommand) -> ControlResponse
 
-    /// 실패 시 throw. socketPath는 `~/halite-{uid}/{pid}.sock` 형태.
+    /// 실패 시 throw. socketPath는 `damsonRuntimeDir()/{pid}.sock` 형태.
     @discardableResult
     func start(handler: @escaping Handler) throws -> String {
         let dir = damsonRuntimeDir()

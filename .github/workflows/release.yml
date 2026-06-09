@@ -61,7 +61,7 @@ jobs:
           APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         run: |
-          KEYCHAIN="$RUNNER_TEMP/halite-signing.keychain-db"
+          KEYCHAIN="$RUNNER_TEMP/damson-signing.keychain-db"
           KEYCHAIN_PWD="$(uuidgen)"
           echo "$APPLE_CERTIFICATE_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
           security create-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN"
@@ -102,7 +102,7 @@ jobs:
             gh release upload "$TAG" "$DMG" --clobber
           else
             gh release create "$TAG" "$DMG" \
-              --title "halite $VERSION" \
+              --title "Damson $VERSION" \
               --generate-notes \
               --target "$GITHUB_SHA"
           fi

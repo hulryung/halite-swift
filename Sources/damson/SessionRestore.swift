@@ -58,11 +58,11 @@ enum SessionRestore {
         UserDefaults.standard.bool(forKey: "damson.restoreScrollback")
     }
 
-    /// scrollback 파일 디렉토리 (~/Library/Application Support/halite/scrollback).
+    /// scrollback 파일 디렉토리 (~/Library/Application Support/Damson/scrollback).
     private static var scrollbackDir: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory() + "/Library/Application Support")
-        return base.appendingPathComponent("halite/scrollback", isDirectory: true)
+        return base.appendingPathComponent("Damson/scrollback", isDirectory: true)
     }
 
     /// 직렬화된 scrollback. 같은 속성의 연속 셀을 run으로 묶어 색·배경·속성을 보존하면서도

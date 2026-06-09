@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# build-app.sh — swift build -c release, 그 결과 binary 두 개(halite, damson-cli)를
+# build-app.sh — swift build -c release, 그 결과 binary 두 개(damson, damson-cli)를
 # 정상 .app 번들 구조로 묶음.
 #
 # 출력: $REPO/dist/Damson.app
@@ -39,10 +39,10 @@ swift build -c release --product damson-cli
 # (지금은 빌드 머신 아키텍처만; CI에서 universal 처리).
 
 BIN_DIR="$(swift build -c release --show-bin-path)"
-HALITE_BIN="$BIN_DIR/damson"
+DAMSON_BIN="$BIN_DIR/damson"
 CLI_BIN="$BIN_DIR/damson-cli"
 
-if [[ ! -x "$HALITE_BIN" || ! -x "$CLI_BIN" ]]; then
+if [[ ! -x "$DAMSON_BIN" || ! -x "$CLI_BIN" ]]; then
     echo "error: built binaries missing under $BIN_DIR" >&2
     exit 1
 fi
@@ -52,7 +52,7 @@ rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 
 # 실행 가능 본체.
-cp "$HALITE_BIN" "$MACOS_DIR/damson"
+cp "$DAMSON_BIN" "$MACOS_DIR/damson"
 chmod 0755 "$MACOS_DIR/damson"
 
 # damson-cli — Resources에 두고 사용자가 /usr/local/bin에 symlink 거는 방식.
