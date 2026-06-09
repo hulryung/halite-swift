@@ -179,7 +179,7 @@ final class TmuxIntegrationController {
         // A leaf cell looks like: digitsxdigits,digits,digits,digits
         // We walk tokens split on the structural delimiters and find the first one of the
         // form `WxH` followed by three comma-separated integers where the 4th is the id.
-        var chars = Array(layout)
+        let chars = Array(layout)
         var i = 0
         // skip checksum + comma if the layout starts with "<hex>," and the hex has no 'x'
         // Find first occurrence of a `WxH,` cell and read its trailing id.
