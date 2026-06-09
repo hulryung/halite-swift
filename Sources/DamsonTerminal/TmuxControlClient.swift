@@ -1,0 +1,177 @@
+import Foundation
+
+/// Drives a single `tmux -CC` control-mode connection: spawns tmux on a PTY, splits its
+/// stdout into lines, feeds them to `TmuxControlParser`, and fans the decoded events out
+/// to public callbacks. Input back to tmux (key input, resize, raw commands) is written to
+/// the PTY as ordinary one-line tmux commands.
+///
+/// Lifecycle and callbacks all run on the main queue (the PTY backend already hops there),
+/// so the orchestration layer can touch AppKit directly.
+///
+/// See docs/TMUX-INTEGRATION.md §6.2. This is the P1 heart: framing, `%output` decode, and
+/// the window/session notifications needed to map tmux windows → Damson tabs.
+public final class TmuxControlClient {
+    // MARK: - Public callbacks (docs §6.2)
+
+    public var onWindowAdd: ((TmuxWindowID) -> Void)?
+    public var onWindowClose: ((TmuxWindowID) -> Void)?
+    public var onWindowRenamed: ((TmuxWindowID, String) -> Void)?
+    public var onWindowPaneChanged: ((TmuxWindowID, TmuxPaneID) -> Void)?
+    public var onLayoutChange: ((TmuxWindowID, TmuxLayout) -> Void)?
+    public var onPaneOutput: ((TmuxPaneID, Data) -> Void)?
+    public var onPaneExit: ((TmuxPaneID) -> Void)?
+    public var onSessionChanged: ((TmuxSessionID, String) -> Void)?
+    public var onSessionWindowChanged: ((TmuxSessionID, TmuxWindowID) -> Void)?
+    /// Reply to a command we sent (matched on its command number). Best-effort; P1 doesn't
+    /// yet correlate replies to specific senders, but exposes them for debugging.
+    public var onCommandReply: ((TmuxCommandReply) -> Void)?
+    /// The control connection ended (`%exit`) or the tmux process itself exited.
+    public var onExit: ((Int32?) -> Void)?
+    /// Any control line we recognized as protocol but didn't act on, for logging.
+    public var onUnhandled: ((String) -> Void)?
+
+    // MARK: - Internals
+
+    private let backend: SessionIOBackend
+    private let parser = TmuxControlParser()
+    /// Stdout bytes that haven't yet formed a complete line.
+    private var lineBuffer = Data()
+    private var didExit = false
+    /// Last client size we told tmux (so we don't spam refresh-client on no-op resizes).
+    private var lastSize: (cols: Int, rows: Int)?
+
+    /// Inject a custom backend (e.g. for tests). Defaults to a local `PTYHost` so the
+    /// real client forkpty's tmux itself.
+    public init(backend: SessionIOBackend = PTYHost()) {
+        self.backend = backend
+        backend.onData = { [weak self] data in self?.ingest(data) }
+        backend.onExit = { [weak self] code in self?.handleProcessExit(code) }
+    }
+
+    /// Spawn `tmux -CC` attached to `target` (a `-t` target session) or, when nil, a new
+    /// session. tmux is found on `PATH` via `/usr/bin/env`. Sizes the control client to
+    /// `cols`×`rows`.
+    ///
+    /// Note: tmux's own control-mode handshake is over stdin/stdout of the spawned process.
+    /// We run it on a PTY (forkpty) like a normal child; control mode does not require a TTY
+    /// for stdout but tmux is happy on one, and a PTY gives us the same teardown story as
+    /// local sessions.
+    public func attach(target: String? = nil, cols: Int = 80, rows: Int = 24) throws {
+        var argv = ["/usr/bin/env", "tmux", "-CC"]
+        if let target = target, !target.isEmpty {
+            // Attach to an existing session by name/id.
+            argv += ["attach-session", "-t", target]
+        } else {
+            // Start a brand-new session.
+            argv += ["new-session"]
+        }
+        lastSize = (cols, rows)
+        var env = ProcessInfo.processInfo.environment
+        env["TERM"] = "xterm-256color"
+        try backend.spawn(argv: argv, env: env, cwd: nil, cols: cols, rows: rows)
+    }
+
+    // MARK: - Writers to tmux (docs §4.8)
+
+    /// Send input bytes to a pane via `send-keys -t %N -H <hex…>`. The `-H` form takes
+    /// space-separated hex byte values and is encoding-agnostic (no quoting/escaping pitfalls
+    /// that `-l` literal text would have with control bytes or shell metacharacters).
+    public func sendKeys(to pane: TmuxPaneID, data: Data) {
+        guard !data.isEmpty else { return }
+        let hex = data.map { String(format: "%02x", $0) }.joined(separator: " ")
+        sendCommand("send-keys -t \(pane.token) -H \(hex)")
+    }
+
+    /// Tell tmux the control client's size: `refresh-client -C <cols>,<rows>`. Coalesces
+    /// identical sizes. tmux sizes its windows to the smallest attached client.
+    public func setClientSize(cols: Int, rows: Int) {
+        guard cols > 0, rows > 0 else { return }
+        if let last = lastSize, last.cols == cols, last.rows == rows { return }
+        lastSize = (cols, rows)
+        sendCommand("refresh-client -C \(cols),\(rows)")
+    }
+
+    /// Write a raw one-line tmux command to the control client's stdin (newline appended).
+    public func sendCommand(_ line: String) {
+        guard !didExit else { return }
+        var cmd = line
+        if !cmd.hasSuffix("\n") { cmd += "\n" }
+        if let data = cmd.data(using: .utf8) {
+            backend.write(data)
+        }
+    }
+
+    /// Kill a specific pane: `kill-pane -t %N`.
+    public func killPane(_ pane: TmuxPaneID) {
+        sendCommand("kill-pane -t \(pane.token)")
+    }
+
+    /// Detach the control client cleanly.
+    public func terminate() {
+        backend.terminate()
+    }
+
+    // MARK: - stdout → lines → events
+
+    /// Split incoming bytes on `\n`, strip a trailing `\r`, and feed each complete line to
+    /// the parser. Partial trailing data is held until the next chunk completes the line.
+    private func ingest(_ data: Data) {
+        lineBuffer.append(data)
+        while let nl = lineBuffer.firstIndex(of: 0x0A) {
+            var lineData = lineBuffer.subdata(in: lineBuffer.startIndex..<nl)
+            // tmux uses CRLF line endings on control output; drop a trailing CR.
+            if lineData.last == 0x0D { lineData.removeLast() }
+            // Advance the buffer past the newline.
+            lineBuffer.removeSubrange(lineBuffer.startIndex...nl)
+            let line = String(decoding: lineData, as: UTF8.self)
+            if let event = parser.feed(line: line) {
+                dispatch(event)
+            }
+        }
+    }
+
+    private func dispatch(_ event: TmuxControlEvent) {
+        switch event {
+        case .commandReply(let reply):
+            onCommandReply?(reply)
+        case .output(let pane, let data):
+            onPaneOutput?(pane, data)
+        case .windowAdd(let w):
+            onWindowAdd?(w)
+        case .windowClose(let w):
+            onWindowClose?(w)
+        case .windowRenamed(let w, let name):
+            onWindowRenamed?(w, name)
+        case .windowPaneChanged(let w, let p):
+            onWindowPaneChanged?(w, p)
+        case .layoutChange(let layout):
+            onLayoutChange?(layout.window, layout)
+        case .sessionChanged(let s, let name):
+            onSessionChanged?(s, name)
+        case .sessionWindowChanged(let s, let w):
+            onSessionWindowChanged?(s, w)
+        case .sessionsChanged:
+            break  // P1: nothing to do; window-add/close drive the tab set.
+        case .paneExit(let p):
+            onPaneExit?(p)
+        case .exit(let reason):
+            handleControlExit(reason: reason)
+        case .unhandled(let line):
+            onUnhandled?(line)
+            NSLog("tmux: unhandled control line: %@", line)
+        }
+    }
+
+    private func handleControlExit(reason: String?) {
+        guard !didExit else { return }
+        didExit = true
+        if let reason = reason { NSLog("tmux: %%exit %@", reason) }
+        onExit?(nil)
+    }
+
+    private func handleProcessExit(_ code: Int32) {
+        guard !didExit else { return }
+        didExit = true
+        onExit?(code)
+    }
+}
