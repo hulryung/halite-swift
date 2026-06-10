@@ -31,6 +31,11 @@ final class TmuxIntegrationController {
     private var windowTitles: [TmuxWindowID: String] = [:]
     /// The pane tmux reports as active for a window, so a reconcile can restore focus to it.
     private var windowActivePane: [TmuxWindowID: TmuxPaneID] = [:]
+    /// The last parsed layout per window — its N-ary structure (matching tmux's own) lets us
+    /// recompute the full client cell size from per-pane sizes for resize negotiation (P3).
+    private var windowLayouts: [TmuxWindowID: TmuxLayoutTree] = [:]
+    /// Each pane's most recently reported display size in cells (from its surface layout).
+    private var paneSizes: [TmuxPaneID: (cols: Int, rows: Int)] = [:]
 
     // Per-pane state.
     private var sessions: [TmuxPaneID: DamsonSession] = [:]
@@ -114,6 +119,7 @@ final class TmuxIntegrationController {
     /// existing ones), fold the N-ary layout into a binary `PaneNode` tree, and apply it.
     /// Panes that left this window are dropped. Idempotent — the same layout twice converges.
     private func reconcile(window win: TmuxWindowID, layout: TmuxLayoutTree) {
+        windowLayouts[win] = layout
         let desired = layout.paneIDs
         let desiredSet = Set(desired)
 
@@ -212,14 +218,25 @@ final class TmuxIntegrationController {
         sessions.first { $0.value === session }?.key
     }
 
-    /// A pane's display area resized. Only a *sole-pane* window maps 1:1 onto the
-    /// control-client size, so only then do we forward it; multi-pane per-pane sizing is P3
-    /// (so one pane can't shrink the whole client).
+    /// A pane's display area resized (P3 resize negotiation). Record the pane's new cell
+    /// size, then recompute the *full* client size from the window's layout and tell tmux —
+    /// which re-lays-out its panes to fill the Damson window and re-emits `%layout-change`.
+    /// This is correct for multi-pane windows, not just a sole pane: one pane shrinking no
+    /// longer collapses the whole client (the P2 limitation).
     private func paneResized(_ pane: TmuxPaneID, cols: Int, rows: Int) {
+        paneSizes[pane] = (cols, rows)
         guard let win = paneToWindow[pane] else { return }
-        let paneCount = paneToWindow.values.filter { $0 == win }.count
-        guard paneCount == 1 else { return }
-        client.setClientSize(cols: cols, rows: rows)
+        sendClientSize(for: win)
+    }
+
+    /// Compute the window's full size in cells from its layout + per-pane sizes and send it
+    /// to tmux (coalesced). Skips until every pane in the layout has reported a size (e.g. a
+    /// pane just created by a split hasn't laid out yet) so we never send a half-formed size.
+    private func sendClientSize(for win: TmuxWindowID) {
+        guard let layout = windowLayouts[win],
+              let size = layout.totalCellSize({ [weak self] in self?.paneSizes[$0] })
+        else { return }
+        client.setClientSize(cols: size.cols, rows: size.rows)
     }
 
     // MARK: - Window lifecycle
@@ -238,6 +255,7 @@ final class TmuxIntegrationController {
         windowTrees.removeValue(forKey: win)
         windowTitles.removeValue(forKey: win)
         windowActivePane.removeValue(forKey: win)
+        windowLayouts.removeValue(forKey: win)
         for (pane, owner) in paneToWindow where owner == win { dropPaneRefs(pane) }
     }
 
@@ -249,6 +267,7 @@ final class TmuxIntegrationController {
         paneLeaves.removeValue(forKey: pane)
         paneToWindow.removeValue(forKey: pane)
         pendingOutput.removeValue(forKey: pane)
+        paneSizes.removeValue(forKey: pane)
     }
 
     private func teardown() {

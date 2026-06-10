@@ -41,6 +41,36 @@ public indirect enum TmuxLayoutTree: Equatable {
         }
     }
 
+    /// The total terminal size in cells this layout occupies, given each leaf pane's measured
+    /// display size via `sizeOf`. A split sums its children along the split axis **plus one
+    /// border cell per divider** (how tmux accounts for pane borders) and takes the max across
+    /// the other axis. Returns nil if any leaf has no measured size yet — so a caller never
+    /// sends a half-formed client size while a freshly-split pane is still laying out.
+    ///
+    /// Used for resize negotiation: the host computes this from its native pane sizes and
+    /// sends it as `refresh-client -C`, so tmux re-lays-out panes to fill the window.
+    public func totalCellSize(
+        _ sizeOf: (TmuxPaneID) -> (cols: Int, rows: Int)?
+    ) -> (cols: Int, rows: Int)? {
+        switch self {
+        case let .leaf(pane, _, _, _, _):
+            return sizeOf(pane)
+        case let .split(orientation, _, _, _, _, children):
+            var sizes: [(cols: Int, rows: Int)] = []
+            for child in children {
+                guard let s = child.totalCellSize(sizeOf) else { return nil }
+                sizes.append(s)
+            }
+            let dividers = children.count - 1
+            switch orientation {
+            case .horizontal:
+                return (sizes.reduce(0) { $0 + $1.cols } + dividers, sizes.map(\.rows).max() ?? 0)
+            case .vertical:
+                return (sizes.map(\.cols).max() ?? 0, sizes.reduce(0) { $0 + $1.rows } + dividers)
+            }
+        }
+    }
+
     // MARK: - Parsing
 
     /// Parse a tmux layout string into a structured tree, or nil if malformed.

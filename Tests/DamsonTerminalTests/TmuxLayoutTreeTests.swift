@@ -82,6 +82,53 @@ final class TmuxLayoutTreeTests: XCTestCase {
 
     // MARK: - Malformed input resilience
 
+    // MARK: - totalCellSize (resize negotiation)
+
+    func testTotalCellSizeSinglePane() {
+        let tree = TmuxLayoutTree.parse("e7b2,80x24,0,0,1")!
+        let size = tree.totalCellSize { _ in (cols: 100, rows: 40) }
+        XCTAssertEqual(size?.cols, 100)
+        XCTAssertEqual(size?.rows, 40)
+    }
+
+    func testTotalCellSizeHorizontalAddsDividerColumn() {
+        // Two side-by-side panes %1, %2 each measured 40×24 → 40 + 40 + 1 border = 81 cols,
+        // rows = max(24, 24) = 24.
+        let tree = TmuxLayoutTree.parse("e7b2,80x24,0,0{40x24,0,0,1,39x24,41,0,2}")!
+        let size = tree.totalCellSize { _ in (cols: 40, rows: 24) }
+        XCTAssertEqual(size?.cols, 81)
+        XCTAssertEqual(size?.rows, 24)
+    }
+
+    func testTotalCellSizeVerticalAddsDividerRow() {
+        // Two stacked panes %1, %2 each 80×12 → cols = max(80,80) = 80, rows = 12+12+1 = 25.
+        let tree = TmuxLayoutTree.parse("abcd,80x24,0,0[80x12,0,0,1,80x11,0,13,2]")!
+        let size = tree.totalCellSize { _ in (cols: 80, rows: 12) }
+        XCTAssertEqual(size?.cols, 80)
+        XCTAssertEqual(size?.rows, 25)
+    }
+
+    func testTotalCellSizeNilUntilAllLeavesMeasured() {
+        // If a pane has no measured size yet, the whole computation is withheld.
+        let tree = TmuxLayoutTree.parse("e7b2,80x24,0,0{40x24,0,0,1,39x24,41,0,2}")!
+        let size = tree.totalCellSize { pane in pane == TmuxPaneID(1) ? (cols: 40, rows: 24) : nil }
+        XCTAssertNil(size)
+    }
+
+    func testTotalCellSizeNestedThreeWay() {
+        // Vertical outer: top %1 (80×12) over a horizontal row of %2|%3 (each 40×11).
+        // Inner row cols = 40+40+1 = 81, rows = 11. Outer cols = max(80, 81) = 81,
+        // rows = 12 + 11 + 1 divider = 24.
+        let s = "ffff,80x24,0,0[80x12,0,0,1,80x11,0,13{40x11,0,13,2,39x11,41,13,3}]"
+        let tree = TmuxLayoutTree.parse(s)!
+        let sizes: [TmuxPaneID: (cols: Int, rows: Int)] = [
+            TmuxPaneID(1): (80, 12), TmuxPaneID(2): (40, 11), TmuxPaneID(3): (40, 11),
+        ]
+        let size = tree.totalCellSize { sizes[$0] }
+        XCTAssertEqual(size?.cols, 81)
+        XCTAssertEqual(size?.rows, 24)
+    }
+
     func testMalformedReturnsNil() {
         XCTAssertNil(TmuxLayoutTree.parse(""))
         XCTAssertNil(TmuxLayoutTree.parse("garbage"))

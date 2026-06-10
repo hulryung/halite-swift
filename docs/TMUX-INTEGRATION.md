@@ -513,15 +513,15 @@ tmux 3.6b를 `tmux -C`로 직접 구동해 다음을 확인했고, 이게 P2 설
   컨트롤러는 **단독 pane window일 때만** client size로 전달(멀티-pane per-pane 사이징은 P3) →
   한 pane이 전체 client를 줄여버리는 버그 방지.
 
-### 11.4 P2가 아직 커버하지 않는 것 (P3로 연기)
+### 11.4 P2가 아직 커버하지 않는 것
 
-- **per-pane resize 협상**: 멀티-pane window에서 Damson 창 리사이즈가 tmux로 전달되지 않음
-  (셀 크기 불일치 시 letterbox = §8 허용 제약). 단독 pane window 리사이즈만 tmux에 반영.
-  각 Damson pane grid는 자기 픽셀 영역 크기로 잡히므로 tmux pane 크기와 어긋날 수 있다(여백/클립).
+- **per-pane resize 협상** — **P3-1에서 구현됨(§12).**
 - **기존 멀티-window 세션 attach 열거**: `list-windows` 질의 + command-reply 상관(§11.1) 미구현.
   주 시나리오(Damson에서 `tmux -C` 새 세션 → 그 안에서 `claude` split)는 `%layout-change`로 완전 동작.
-- **사용자發 pane 닫기(Cmd+W)**: tmux-backed 탭에서 로컬로 닫아도 다음 `%layout-change`가 되살린다
-  (kill-pane 전달 미구현). 현재는 tmux 쪽 조작으로 닫는 것이 일관적.
+- **사용자發 pane 닫기/분할(Cmd+W / Cmd+D)** — **P2 폴리시에서 구현됨**: tmux 탭에서 Cmd+D/Cmd+⇧D는
+  `split-window -h/-v`, Cmd+W는 `kill-pane`을 발행하고 tmux가 `%layout-change`로 되돌려 네이티브 split을
+  구동한다(control mode는 `send-keys`가 tmux 키 테이블을 우회하므로 `Ctrl-b` prefix 바인딩이 동작하지
+  않는다 — iTerm2와 동일. 네이티브 단축키가 그 자리를 대신한다).
 
 ### 11.5 수동 테스트 절차 (GUI 필요)
 
@@ -534,3 +534,35 @@ tmux 3.6b를 `tmux -C`로 직접 구동해 다음을 확인했고, 이게 P2 설
 - **헤드리스 증명**: 실제 tmux `split-window`가 2-pane `%layout-change`를 내고 파서가
   horizontal 2-leaf 트리로 파싱함을 `testSplitWindowYieldsTwoPaneLayout`로 검증.
   **on-screen 렌더**(네이티브 split 시각 확인)는 디스플레이 필요 → GUI 재테스트로 남긴다.
+
+---
+
+## 12. P3-1 구현 노트 (resize 협상, 실제 구현됨)
+
+목표: Damson 창을 리사이즈하면 tmux가 pane들을 다시 배치해 창을 꽉 채운다 — **멀티-pane window도**.
+
+### 12.1 메커니즘
+
+1. 각 tmux pane surface가 레이아웃마다 자기 표시 영역의 셀 크기(cols×rows)를 계산해
+   `session.resize`→`TmuxPaneBackend.resize`→**`onResize(pane, cols, rows)`** 콜백으로 컨트롤러에 보고.
+2. 컨트롤러는 `paneSizes[pane]`를 갱신하고, 그 window의 **전체 client 셀 크기**를 재계산:
+   `TmuxLayoutTree.totalCellSize { paneSizes[$0] }` — leaf는 보고된 크기, split은 **분할 축으로 합산
+   + divider당 border cell 1개**(tmux의 pane border 회계와 동일), 반대 축은 max. layout의 모든 pane이
+   아직 크기를 보고하지 않았으면 nil → 반쯤 형성된 크기를 보내지 않는다(예: 방금 split된 pane이
+   레이아웃 전).
+3. `refresh-client -C <cols>,<rows>` 전송(동일 크기 coalesce). tmux가 pane들을 재배치 →
+   `%layout-change` → reconcile → 네이티브 split이 새 비율로 갱신. **fixed point로 수렴**(같은 비율 →
+   같은 픽셀 분할 → 같은 보고 크기).
+
+### 12.2 P2와의 차이
+
+- P2: 단독 pane window만 client 크기를 구동(한 pane이 전체 client를 줄이는 버그 방지로 멀티-pane은 무시).
+- P3-1: **layout 구조를 알기 때문에** per-pane 보고를 전체 크기로 올바르게 합성 → 멀티-pane window도
+  리사이즈가 tmux에 반영된다. border cell 회계로 Damson 네이티브 분할(1px divider)과 tmux 셀 경계가
+  ≤1 cell 오차로 맞아 letterbox가 사라진다.
+
+### 12.3 테스트
+
+- `totalCellSize` 산술(단일/horizontal+divider/vertical+divider/미보고 시 nil/중첩 3-way)을
+  `TmuxLayoutTreeTests`로 단위 검증.
+- 실제 창 리사이즈→tmux 재배치의 on-screen 확인은 디스플레이 필요 → GUI 재테스트로 남긴다.
