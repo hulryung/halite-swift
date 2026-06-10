@@ -18,6 +18,18 @@ final class PaneTreeView: NSView {
     /// Called when the last leaf is closed (the host — the tab controller — closes the tab/window).
     var onAllPanesClosed: (() -> Void)?
 
+    /// When set, a user split request (Cmd+D / Cmd+Shift+D) is handed to this hook *instead*
+    /// of mutating the tree locally. Used by tmux-backed tabs so a split issues a tmux
+    /// `split-window` (tmux then drives the native split via `%layout-change`). Returning
+    /// true means "handled externally — don't split locally". The argument is the active
+    /// pane's session so the host can map it to a tmux pane id.
+    var onSplitRequest: ((SplitDirection, DamsonSession) -> Bool)?
+
+    /// When set, a user close-pane request (Cmd+W) is handed to this hook instead of closing
+    /// the leaf locally — tmux-backed tabs issue `kill-pane` and let `%layout-change` collapse
+    /// the split. Returning true means "handled externally". Argument is the active session.
+    var onCloseRequest: ((DamsonSession) -> Bool)?
+
     /// Pane lifecycle animation intent threaded through `rebuild`. `.none` is the
     /// instant/legacy path; `.split` animates the newly-created pane in from the
     /// divider edge; `.close` slides the closing pane's snapshot out to its outer edge.
@@ -85,6 +97,10 @@ final class PaneTreeView: NSView {
 
     func split(direction: SplitDirection) {
         guard case .leaf(let activeSession, _) = activeLeaf.kind else { return }
+        // tmux-backed tab: let the host issue a tmux `split-window`; tmux drives the native
+        // split back via `%layout-change`. (A local split would mint a non-tmux pane in a
+        // tmux tab — see docs §8: a tab is all-tmux or all-local.)
+        if let hook = onSplitRequest, hook(direction, activeSession) { return }
         // A split always inherits the current pane's working directory (shell-integration
         // OSC 7 report → falling back to the cwd at spawn time), since opening a pane
         // alongside within the same project is the common case.
@@ -135,7 +151,13 @@ final class PaneTreeView: NSView {
         return false
     }
 
-    func closeActive() { closeLeaf(activeLeaf) }
+    func closeActive() {
+        // tmux-backed tab: route Cmd+W to a tmux `kill-pane`; `%layout-change` then collapses
+        // the split (or `%window-close` closes the tab). Falls through to a local close if no
+        // hook is set (normal local tabs).
+        if case .leaf(let s, _) = activeLeaf.kind, let hook = onCloseRequest, hook(s) { return }
+        closeLeaf(activeLeaf)
+    }
 
     /// Closes the leaf holding a session when that session ends (shell exit). The exit
     /// callback may arrive on another thread, so ensure this is invoked on main.

@@ -131,9 +131,7 @@ final class TmuxIntegrationController {
         if let view = windowTrees[win] {
             view.setRoot(root, active: activeLeaf)
         } else {
-            let view = PaneTreeView(restoredRoot: root)
-            windowTrees[win] = view
-            window.adoptExternalTree(view, customTitle: windowTitles[win])
+            adoptTree(PaneTreeView(restoredRoot: root), for: win)
         }
 
         // 4) Drop panes that are no longer part of this window.
@@ -183,12 +181,35 @@ final class TmuxIntegrationController {
         windowActivePane[win] = pane
         guard let view = windowTrees[win] else {
             ensurePane(pane, window: win)
-            let view = PaneTreeView(restoredRoot: paneLeaves[pane]!)
-            windowTrees[win] = view
-            window.adoptExternalTree(view, customTitle: windowTitles[win])
+            adoptTree(PaneTreeView(restoredRoot: paneLeaves[pane]!), for: win)
             return
         }
         if let leaf = paneLeaves[pane] { view.setActive(leaf) }
+    }
+
+    /// Register a freshly-built tree as window `win`'s tab and wire the tmux-native input
+    /// hooks (so Cmd+D / Cmd+W drive tmux `split-window` / `kill-pane` rather than a local
+    /// split that would mix non-tmux panes into a tmux tab — docs §8).
+    private func adoptTree(_ view: PaneTreeView, for win: TmuxWindowID) {
+        view.onSplitRequest = { [weak self] direction, session in
+            guard let self, let pane = self.paneID(for: session) else { return false }
+            // tmux `-h` = left/right (Damson .horizontal); `-v` = top/bottom (.vertical).
+            let flag = direction == .horizontal ? "-h" : "-v"
+            self.client.sendCommand("split-window \(flag) -t \(pane.token)")
+            return true
+        }
+        view.onCloseRequest = { [weak self] session in
+            guard let self, let pane = self.paneID(for: session) else { return false }
+            self.client.killPane(pane)
+            return true
+        }
+        windowTrees[win] = view
+        window.adoptExternalTree(view, customTitle: windowTitles[win])
+    }
+
+    /// Reverse-map a session back to its tmux pane id (by identity).
+    private func paneID(for session: DamsonSession) -> TmuxPaneID? {
+        sessions.first { $0.value === session }?.key
     }
 
     /// A pane's display area resized. Only a *sole-pane* window maps 1:1 onto the
