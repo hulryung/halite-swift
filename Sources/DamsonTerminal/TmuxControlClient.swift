@@ -147,18 +147,54 @@ public final class TmuxControlClient {
 
     /// Split incoming bytes on `\n`, strip a trailing `\r`, and feed each complete line to
     /// the parser. Partial trailing data is held until the next chunk completes the line.
+    ///
+    /// Two hot-path properties matter under output floods (e.g. `yes` in a pane):
+    ///  - **Single-pass scan**: lines are sliced in place and the consumed prefix is removed
+    ///    ONCE per chunk. (The old per-line `removeSubrange` shifted the whole remaining
+    ///    buffer for every line — O(n²) per chunk — which saturated the main thread and froze
+    ///    the UI when a chunk carried thousands of `%output` lines.)
+    ///  - **Output coalescing**: consecutive `%output`/`%extended-output` events for the SAME
+    ///    pane are concatenated and delivered as one callback per run, so the session does one
+    ///    VTParser feed + one grid-changed per chunk-run instead of per line — the same
+    ///    batching a local PTY read gives for free. Event order with non-output events is
+    ///    preserved (a pending run is flushed before any other event is dispatched).
     private func ingest(_ data: Data) {
         lineBuffer.append(data)
-        while let nl = lineBuffer.firstIndex(of: 0x0A) {
-            var lineData = lineBuffer.subdata(in: lineBuffer.startIndex..<nl)
+        var start = lineBuffer.startIndex
+        var pendingOutput: (pane: TmuxPaneID, data: Data)?
+
+        func flushOutput() {
+            if let p = pendingOutput {
+                pendingOutput = nil
+                onPaneOutput?(p.pane, p.data)
+            }
+        }
+
+        while let nl = lineBuffer[start...].firstIndex(of: 0x0A) {
             // tmux uses CRLF line endings on control output; drop a trailing CR.
-            if lineData.last == 0x0D { lineData.removeLast() }
-            // Advance the buffer past the newline.
-            lineBuffer.removeSubrange(lineBuffer.startIndex...nl)
-            let line = String(decoding: lineData, as: UTF8.self)
-            if let event = parser.feed(line: line) {
+            var end = nl
+            if end > start, lineBuffer[lineBuffer.index(before: end)] == 0x0D {
+                end = lineBuffer.index(before: end)
+            }
+            let line = String(decoding: lineBuffer[start..<end], as: UTF8.self)
+            start = lineBuffer.index(after: nl)
+
+            guard let event = parser.feed(line: line) else { continue }
+            if case .output(let pane, let d) = event {
+                if pendingOutput?.pane == pane {
+                    pendingOutput?.data.append(d)
+                } else {
+                    flushOutput()
+                    pendingOutput = (pane, d)
+                }
+            } else {
+                flushOutput()
                 dispatch(event)
             }
+        }
+        flushOutput()
+        if start > lineBuffer.startIndex {
+            lineBuffer.removeSubrange(lineBuffer.startIndex..<start)
         }
     }
 
