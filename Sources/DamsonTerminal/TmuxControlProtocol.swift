@@ -97,6 +97,19 @@ public final class TmuxControlParser {
     /// Feed one complete line (newline already stripped). Returns the event it produced,
     /// or nil if the line was consumed as part of an in-progress command block.
     public func feed(line: String) -> TmuxControlEvent? {
+        // Defensive: strip a stray tmux `-CC` DCS control-mode wrapper if it leaks through.
+        // `tmux -CC` prefixes the very first control line with a DCS "enter control mode"
+        // sequence — ESC `P1000p` — glued directly to `%begin`, and terminates the stream
+        // with ST (ESC `\`). Damson spawns tmux with `-C` (no wrapper, see TmuxControlClient),
+        // so this normally never fires, but we strip it here so a stray `-CC` wrapper can't
+        // turn the first `%begin` (or the closing line) into an `.unhandled` line. See
+        // docs/TMUX-INTEGRATION.md "P1.1 fixes".
+        let stripped = Self.stripDCSWrapper(line)
+        // A line that was *only* the DCS/ST wrapper (e.g. the trailing `ESC \`) collapses to
+        // empty after stripping — drop it rather than surfacing a spurious `.unhandled("")`.
+        if stripped.isEmpty && !line.isEmpty && pending == nil { return nil }
+        let line = stripped
+
         // Inside a %begin block: every line up to %end/%error is reply body, EXCEPT the
         // closing %end/%error itself. (Notifications don't interleave inside a block.)
         if pending != nil {
@@ -253,6 +266,34 @@ public final class TmuxControlParser {
               let sid = Self.parseSessionToken(f[0]),
               let win = Self.parseWindowToken(f[1]) else { return nil }
         return .sessionWindowChanged(session: sid, window: win)
+    }
+
+    // MARK: - DCS wrapper stripping (tmux -CC defensive)
+
+    /// Remove a tmux `-CC` DCS control-mode wrapper from a line if present:
+    ///   - leading DCS "enter control mode": ESC `P` `1000p` (`\u{1B}P1000p`), which tmux
+    ///     glues directly onto the first `%begin`.
+    ///   - trailing ST "exit control mode": ESC `\` (`\u{1B}\`), which tmux appends after the
+    ///     final `%exit`.
+    /// A bare ESC (without the rest of the wrapper) is left untouched. Idempotent on lines
+    /// that carry no wrapper (the common `-C` case), so it's cheap to always call.
+    static func stripDCSWrapper(_ line: String) -> String {
+        var s = Substring(line)
+        // Leading DCS enter: ESC P <params> p. tmux emits exactly `1000p`, but accept any
+        // run of param/intermediate bytes up to the final `p` to be tolerant of versions.
+        if s.first == "\u{1B}", s.dropFirst().first == "P" {
+            // Find the `p` that closes the DCS introducer; everything up to and including it
+            // is the wrapper. (The DCS *payload* here is the `%begin…` we want to keep.)
+            let afterP = s.dropFirst(2)  // past ESC P
+            if let pIdx = afterP.firstIndex(of: "p") {
+                s = afterP[afterP.index(after: pIdx)...]
+            }
+        }
+        // Trailing ST: ESC \ . May be the whole line (its own bytes) or appended to content.
+        if s.hasSuffix("\u{1B}\\") {
+            s = s.dropLast(2)
+        }
+        return String(s)
     }
 
     // MARK: - Token helpers

@@ -48,16 +48,26 @@ public final class TmuxControlClient {
         backend.onExit = { [weak self] code in self?.handleProcessExit(code) }
     }
 
-    /// Spawn `tmux -CC` attached to `target` (a `-t` target session) or, when nil, a new
+    /// Spawn `tmux -C` attached to `target` (a `-t` target session) or, when nil, a new
     /// session. tmux is found on `PATH` via `/usr/bin/env`. Sizes the control client to
     /// `cols`×`rows`.
     ///
-    /// Note: tmux's own control-mode handshake is over stdin/stdout of the spawned process.
-    /// We run it on a PTY (forkpty) like a normal child; control mode does not require a TTY
-    /// for stdout but tmux is happy on one, and a PTY gives us the same teardown story as
-    /// local sessions.
+    /// We use single-`C` (`-C`), not `-CC`. `-CC` additionally wraps the stream in a DCS
+    /// "enter control mode" escape (`ESC P1000p … ESC \`) whose only purpose is to let a
+    /// *host terminal* (where a human typed `tmux -CC`) detect control mode in-band. Damson
+    /// spawns tmux as a dedicated control client, so it doesn't need — and shouldn't have to
+    /// parse around — that wrapper. `-C` yields byte-for-byte identical control-mode
+    /// notifications (verified against tmux 3.6b) without it. Claude Code's "am I inside
+    /// tmux?" detection keys off the `$TMUX` env var, not `-C` vs `-CC`, so it's unaffected.
+    /// (The parser still strips a stray DCS wrapper defensively — see TmuxControlParser.)
+    ///
+    /// Note: control mode is over stdin/stdout of the spawned process. We run it on a PTY
+    /// (forkpty) like a normal child; a PTY gives us the same teardown story as local
+    /// sessions. tmux does NOT take its control-client size from the PTY winsize — it must be
+    /// told explicitly via `refresh-client -C`, which we send right after spawn so the
+    /// window has a real size and tmux produces content (otherwise the pane can render blank).
     public func attach(target: String? = nil, cols: Int = 80, rows: Int = 24) throws {
-        var argv = ["/usr/bin/env", "tmux", "-CC"]
+        var argv = ["/usr/bin/env", "tmux", "-C"]
         if let target = target, !target.isEmpty {
             // Attach to an existing session by name/id.
             argv += ["attach-session", "-t", target]
@@ -65,10 +75,14 @@ public final class TmuxControlClient {
             // Start a brand-new session.
             argv += ["new-session"]
         }
-        lastSize = (cols, rows)
         var env = ProcessInfo.processInfo.environment
         env["TERM"] = "xterm-256color"
         try backend.spawn(argv: argv, env: env, cwd: nil, cols: cols, rows: rows)
+        // Send the initial client size explicitly. We deliberately do NOT pre-seed `lastSize`
+        // before this call, so the very first `refresh-client -C` is actually transmitted
+        // (otherwise the no-op coalesce in `setClientSize` would swallow it and tmux would
+        // size the window to 0/default → empty `capture-pane` → blank Damson pane).
+        setClientSize(cols: cols, rows: rows)
     }
 
     // MARK: - Writers to tmux (docs §4.8)
