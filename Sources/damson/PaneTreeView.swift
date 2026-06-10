@@ -588,7 +588,13 @@ final class PaneTreeView: NSView {
     private func updateBorderColors() {
         func walk(_ view: NSView) {
             if let wrapper = view as? PaneLeafWrapper {
-                wrapper.isActive = (wrapper.leaf === activeLeaf)
+                let active = (wrapper.leaf === activeLeaf)
+                wrapper.isActive = active
+                // The surface has its own isActive (cursor blink runs only in the
+                // active pane) — the wrapper flag only drives the dim/border overlay.
+                if case .leaf(_, let surface) = wrapper.leaf.kind {
+                    surface.isActive = active
+                }
             }
             for sub in view.subviews { walk(sub) }
         }
