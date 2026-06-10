@@ -103,9 +103,17 @@ public final class TmuxControlClient {
         setClientSize(cols: cols, rows: rows)
     }
 
-    /// Ask tmux to detach this control client cleanly (`%exit` follows). Used by the
-    /// takeover teardown path, where killing the backend would kill the user's shell.
+    /// True once a clean detach has been requested. From this point destructive pane
+    /// commands (`kill-pane`) are suppressed: detaching means "leave the session as it is",
+    /// and the UI teardown that follows a window close must not destroy server state.
+    public private(set) var isDetaching = false
+
+    /// Ask tmux to detach this control client cleanly (`%exit` follows), leaving the
+    /// session intact. Idempotent. Used when the host window closes (iTerm2 semantics:
+    /// closing the window detaches, never kills) and by the takeover teardown path.
     public func requestDetach() {
+        guard !isDetaching else { return }
+        isDetaching = true
         sendCommand("detach-client")
     }
 
@@ -148,8 +156,11 @@ public final class TmuxControlClient {
         }
     }
 
-    /// Kill a specific pane: `kill-pane -t %N`.
+    /// Kill a specific pane: `kill-pane -t %N`. Suppressed while detaching — the teardown
+    /// of a closing host window runs `terminate()` over every pane backend, and those must
+    /// not destroy the session we just chose to leave alive.
     public func killPane(_ pane: TmuxPaneID) {
+        guard !isDetaching else { return }
         sendCommand("kill-pane -t \(pane.token)")
     }
 

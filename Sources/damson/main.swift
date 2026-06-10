@@ -569,6 +569,28 @@ final class DamsonAppDelegate: NSObject, NSApplicationDelegate {
         controller.start(target: target.isEmpty ? nil : target)
     }
 
+    /// tmux ▸ Detach — cleanly detach the control client of the tmux host window that is
+    /// currently key. The session keeps running server-side; `%exit` closes the window.
+    @MainActor
+    @objc func detachTmux(_ sender: Any?) {
+        tmuxController(for: NSApp.keyWindow)?.detach()
+    }
+
+    /// Enable "Detach" only while the key window belongs to a tmux integration.
+    @MainActor
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(detachTmux(_:)) {
+            return tmuxController(for: NSApp.keyWindow) != nil
+        }
+        return true
+    }
+
+    @MainActor
+    private func tmuxController(for window: NSWindow?) -> TmuxIntegrationController? {
+        guard let window else { return nil }
+        return tmuxControllers.first { $0.hostWindow === window }
+    }
+
     /// A local pane's stream entered tmux `-CC` control mode (the user ran `tmux -CC` in
     /// it). Take the stream over into a native tmux integration — same UI as the menu
     /// attach, no manual step. Must run synchronously within the notification so the first
@@ -802,6 +824,14 @@ func installMainMenu() {
         keyEquivalent: ""
     )
     tmuxMenu.addItem(attachItem)
+    // Enabled (via validateMenuItem) only while the key window is a tmux host. Leaves the
+    // session running server-side; closing the window does the same (detach, never kill).
+    let detachItem = NSMenuItem(
+        title: "Detach",
+        action: #selector(DamsonAppDelegate.detachTmux(_:)),
+        keyEquivalent: ""
+    )
+    tmuxMenu.addItem(detachItem)
 
     NSApp.mainMenu = mainMenu
 }

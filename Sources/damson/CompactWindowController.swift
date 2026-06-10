@@ -975,7 +975,14 @@ final class CompactWindowController: NSWindowController, NSWindowDelegate, TabSw
 
     // MARK: - NSWindowDelegate
 
+    /// Invoked at the very start of `windowWillClose`, BEFORE the per-tab terminate sweep.
+    /// A tmux-backed host uses this to send `detach-client` first, so the kill-panes the
+    /// sweep would otherwise fire at live panes are suppressed (closing the window means
+    /// detach — leave the tmux session intact — never kill).
+    var onWindowWillClose: (() -> Void)?
+
     func windowWillClose(_ notification: Notification) {
+        onWindowWillClose?()
         for t in tabs { t.tree.root.terminateAll() }
     }
 

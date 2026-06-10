@@ -73,13 +73,16 @@ final class TmuxControlClientIntegrationTests: XCTestCase {
     }
 
     /// Run a tmux CLI command against the isolated test server (TMUX_TMPDIR is in env).
-    private func tmuxCLI(_ args: [String]) {
+    /// Returns the exit status (nonzero = failure, e.g. `has-session` on a missing session).
+    @discardableResult
+    private func tmuxCLI(_ args: [String]) -> Int32 {
         let task = Process()
         task.launchPath = "/usr/bin/env"
         task.arguments = ["tmux"] + args
         task.environment = ProcessInfo.processInfo.environment
         try? task.run()
         task.waitUntilExit()
+        return task.terminationStatus
     }
 
     // MARK: - Tests
@@ -396,5 +399,40 @@ final class TmuxControlClientIntegrationTests: XCTestCase {
         XCTAssertTrue(sawExit, "%exit did not arrive after kill-server")
         session.endTmuxControlMode()
         XCTAssertFalse(session.inTmuxControlMode)
+    }
+
+    /// Detach semantics (window close / tmux ▸ Detach): `requestDetach` must end the
+    /// control connection with `%exit` while LEAVING THE SESSION ALIVE server-side, and the
+    /// `kill-pane`s that the closing window's terminate sweep fires afterwards must be
+    /// suppressed — this is the regression test for "closing the tmux window destroyed the
+    /// session instead of detaching".
+    func testDetachLeavesSessionAlive() throws {
+        tmuxCLI(["new-session", "-d", "-s", "keep", "-x", "80", "-y", "24"])
+
+        let client = TmuxControlClient()
+        defer { client.terminate() }
+        var sawExit = false
+        var firstPane: TmuxPaneID?
+        client.onExit = { _ in sawExit = true }
+        client.onPaneOutput = { pane, _ in if firstPane == nil { firstPane = pane } }
+        try client.attach(target: "keep", cols: 80, rows: 24)
+
+        // Make sure the connection is fully up (a pane id has been seen).
+        client.sendKeys(to: TmuxPaneID(0), data: Data("echo hello\n".utf8))
+        pump(until: { firstPane != nil })
+
+        client.requestDetach()
+        // What windowWillClose's terminate sweep does right after the detach request:
+        let pane = try XCTUnwrap(firstPane)
+        client.killPane(pane)  // must be suppressed by isDetaching
+
+        pump(until: { sawExit })
+        XCTAssertTrue(sawExit, "%exit did not arrive after detach-client")
+
+        // The session — and its pane — must still exist on the server.
+        XCTAssertEqual(tmuxCLI(["has-session", "-t", "keep"]), 0,
+                       "detach must leave the session alive")
+        XCTAssertEqual(tmuxCLI(["list-panes", "-t", "keep"]), 0,
+                       "the pane must have survived the post-detach kill-pane attempt")
     }
 }

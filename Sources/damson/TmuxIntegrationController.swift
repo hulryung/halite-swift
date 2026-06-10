@@ -63,6 +63,7 @@ final class TmuxIntegrationController {
         self.window = CompactWindowController()
         self.onTeardown = onTeardown
         wireClient()
+        wireHostWindow()
     }
 
     /// DCS-takeover construction: the user ran `tmux -CC` in `session`'s pane and its byte
@@ -75,6 +76,23 @@ final class TmuxIntegrationController {
         self.takeoverSession = session
         self.onTeardown = onTeardown
         wireClient()
+        wireHostWindow()
+    }
+
+    /// Closing the tmux host window means DETACH (iTerm2 semantics) — request it before
+    /// the window's terminate sweep runs, so the per-pane `kill-pane`s that sweep triggers
+    /// are suppressed (`TmuxControlClient.isDetaching`) and the session survives on the
+    /// server for a later re-attach. `%exit` then drives the normal teardown.
+    private func wireHostWindow() {
+        window.onWindowWillClose = { [weak self] in
+            self?.client.requestDetach()
+        }
+    }
+
+    /// Menu-driven detach: leave the session running and close the integration. The reply
+    /// (`%exit`) tears everything down, including the host window.
+    func detach() {
+        client.requestDetach()
     }
 
     /// Begin the attach. `target` is a tmux `-t` target (session name/id); nil starts a new
