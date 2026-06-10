@@ -38,6 +38,9 @@ public enum ControlCommandKind: Equatable, Sendable {
     case closePane
     /// Structured per-pane info for the active tab.
     case listPanes
+    /// The active pane's visible grid as plain text (one line per row) — for remote
+    /// inspection of rendering state (debugging/driving the UI from scripts).
+    case dumpGrid
 }
 
 /// An incoming command. JSON: `{"cmd":"new-tab"}`, `{"cmd":"split","args":{"dir":"horizontal"}}`, etc.
@@ -90,6 +93,8 @@ public struct ControlCommand: Decodable, Equatable, Sendable {
             self.kind = .closePane
         case "list-panes":
             self.kind = .listPanes
+        case "dump-grid":
+            self.kind = .dumpGrid
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .cmd, in: c,
@@ -143,6 +148,7 @@ public func encodeCommand(_ kind: ControlCommandKind) -> String {
         return #"{"cmd":"focus-pane","args":{"dir":"\#(dir.rawValue)"}}"#
     case .closePane: return #"{"cmd":"close-pane"}"#
     case .listPanes: return #"{"cmd":"list-panes"}"#
+    case .dumpGrid: return #"{"cmd":"dump-grid"}"#
     }
 }
 
@@ -257,12 +263,16 @@ public struct ControlResponse: Codable, Equatable, Sendable {
     public let err: String?
     public let tabs: [TabInfo]?
     public let panes: [PaneInfo]?
+    /// dump-grid result: the visible grid as plain text, one line per row.
+    public let grid: String?
 
-    public init(ok: Bool, err: String? = nil, tabs: [TabInfo]? = nil, panes: [PaneInfo]? = nil) {
+    public init(ok: Bool, err: String? = nil, tabs: [TabInfo]? = nil, panes: [PaneInfo]? = nil,
+                grid: String? = nil) {
         self.ok = ok
         self.err = err
         self.tabs = tabs
         self.panes = panes
+        self.grid = grid
     }
 
     public static func ok() -> Self { .init(ok: true) }
@@ -273,8 +283,11 @@ public struct ControlResponse: Codable, Equatable, Sendable {
     public static func panes(_ list: [PaneInfo]) -> Self {
         .init(ok: true, panes: list)
     }
+    public static func grid(_ text: String) -> Self {
+        .init(ok: true, grid: text)
+    }
 
-    enum CodingKeys: String, CodingKey { case ok, err, tabs, panes }
+    enum CodingKeys: String, CodingKey { case ok, err, tabs, panes, grid }
 
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
@@ -282,5 +295,6 @@ public struct ControlResponse: Codable, Equatable, Sendable {
         if let err = err { try c.encode(err, forKey: .err) }
         if let tabs = tabs { try c.encode(tabs, forKey: .tabs) }
         if let panes = panes { try c.encode(panes, forKey: .panes) }
+        if let grid = grid { try c.encode(grid, forKey: .grid) }
     }
 }

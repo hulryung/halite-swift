@@ -175,7 +175,21 @@ public final class DamsonSession: ObservableObject {
         parser.endTmuxTakeover()
     }
 
+    /// DAMSON_DUMP_OUTPUT=<dir> — append every raw output byte this session receives to a
+    /// per-session file in <dir>. The captured stream can be replayed through VTParser+Grid
+    /// in a test to reproduce rendering bugs exactly (docs/TMUX-INTEGRATION.md §15.2).
+    private lazy var dumpHandle: FileHandle? = {
+        guard let dir = ProcessInfo.processInfo.environment["DAMSON_DUMP_OUTPUT"],
+              !dir.isEmpty else { return nil }
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let stamp = Int(Date().timeIntervalSince1970)
+        let path = "\(dir)/session-\(stamp)-\(UInt(bitPattern: ObjectIdentifier(self).hashValue) & 0xFFFF).bin"
+        FileManager.default.createFile(atPath: path, contents: nil)
+        return FileHandle(forWritingAtPath: path)
+    }()
+
     private func handlePTYData(_ data: Data) {
+        dumpHandle?.write(data)
         if inTmuxControlMode {
             onTmuxControlData?(data)
             return

@@ -51,6 +51,7 @@ Commands:
   focus-pane <left|right|up|down>   Move pane focus.
   close-pane              Close the active pane.
   list-panes              Print the active tab's panes as JSON.
+  dump-grid               Print the active pane's visible grid as plain text.
 
 Options:
   --pid PID               Target the instance with this PID (default: most recent).
@@ -192,6 +193,9 @@ case "close-pane":
 case "list-panes":
     guard rest.isEmpty else { die("list-panes takes no arguments") }
     cmdKind = .listPanes
+case "dump-grid":
+    guard rest.isEmpty else { die("dump-grid takes no arguments") }
+    cmdKind = .dumpGrid
 default:
     die("unknown command: \(sub)")
 }
@@ -228,6 +232,9 @@ case .success(let resp):
        let data = try? encoder.encode(panes),
        let s = String(data: data, encoding: .utf8) {
         print(s)
+    }
+    if let grid = resp.grid {
+        print(grid)
     }
     exit(0)
 case .failure(let e):

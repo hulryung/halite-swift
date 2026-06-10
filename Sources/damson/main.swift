@@ -413,7 +413,28 @@ final class DamsonAppDelegate: NSObject, NSApplicationDelegate {
                 return .panes(single.paneList())
             }
             return .err("no active window")
+
+        case .dumpGrid:
+            guard let session = activeControlSession() else { return .err("no active pane") }
+            return .grid(Self.gridText(of: session))
         }
+    }
+
+    /// Plain-text snapshot of the session grid's visible rows (continuation/wide-spacer
+    /// cells skipped), one line per row. For damson-cli dump-grid — remote rendering
+    /// inspection. (Takes the session, not the Grid, to dodge the SwiftUI.Grid name clash.)
+    private static func gridText(of session: DamsonSession) -> String {
+        let g = session.grid
+        var lines: [String] = []
+        lines.reserveCapacity(g.rows)
+        for r in 0..<g.rows {
+            var s = ""
+            for c in g.row(r) where !c.isContinuation && !c.isWideSpacer {
+                s.append(c.char)
+            }
+            lines.append(s)
+        }
+        return lines.joined(separator: "\n")
     }
 
     /// The active pane's session, resolving across compact and single-session controllers.

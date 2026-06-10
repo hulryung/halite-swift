@@ -125,6 +125,7 @@ final class WireTests: XCTestCase {
         roundTrip(.focusPane(dir: .right))
         roundTrip(.closePane)
         roundTrip(.listPanes)
+        roundTrip(.dumpGrid)
     }
 
     // MARK: - ControlCommand decoding (server side)
