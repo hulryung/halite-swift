@@ -472,9 +472,8 @@ final class DamsonAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func settingsChanged(_ note: Notification) {
-        // Push the new config to every active session. Style changes only hot-reload on
-        // single-session controllers — compact controllers have a different structure, so
-        // they only pick up the change from the next new window.
+        // Push the new config to every active session — every pane of every tab of
+        // every window. Miss one and that pane keeps the old font/theme/cursor.
         let newConfig = DamsonConfig.fromUserDefaults()
         let newTabStyle = TabBarStyle.current
         for c in controllers {
@@ -484,7 +483,9 @@ final class DamsonAppDelegate: NSObject, NSApplicationDelegate {
             if let w = c.window { WindowChrome.applyFromDefaults(to: w) }
         }
         for cc in compactControllers {
-            for s in cc.sessions { s.updateConfig(newConfig) }
+            // allPaneSessions, not sessions — the latter is only each tab's first leaf,
+            // so split panes would keep the old config until restart.
+            for s in cc.allPaneSessions { s.updateConfig(newConfig) }
             cc.refreshPaneIndicators()
             cc.applyTabBarBackground()   // reflect theme/transparency option changes
             if let w = cc.window { WindowChrome.applyFromDefaults(to: w) }
