@@ -106,7 +106,7 @@ rm -f "$ZIP"
 echo "==> ditto $APP -> $ZIP"
 ( cd "$REPO_ROOT/dist" && ditto -c -k --keepParent "Damson.app" "$ZIP" )
 
-echo "==> xcrun notarytool submit (this can take a few minutes)"
+echo "==> xcrun notarytool submit --timeout 30m (this can take a few minutes)"
 NOTARY_ARGS=()
 if [[ -n "${NOTARY_KEYCHAIN_PROFILE:-}" ]]; then
     NOTARY_ARGS=(--keychain-profile "$NOTARY_KEYCHAIN_PROFILE")

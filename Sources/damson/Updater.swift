@@ -25,6 +25,11 @@ final class DamsonUpdater: NSObject {
     private let userDriver: SilentErrorUserDriver
     private let updater: SPUUpdater
 
+    /// Dev builds never run the updater: a dev .app silently replacing itself
+    /// with the release feed's build would clobber the local dev install (and
+    /// dev builds are ad-hoc signed, so the install step would fail anyway).
+    private let updatesEnabled = !BuildInfo.isDevBuild
+
     private override init() {
         let host = Bundle.main
         self.userDriver = SilentErrorUserDriver(hostBundle: host, delegate: nil)
@@ -35,6 +40,10 @@ final class DamsonUpdater: NSObject {
             delegate: nil
         )
         super.init()
+        guard updatesEnabled else {
+            NSLog("Damson: dev build — Sparkle updater not started")
+            return
+        }
         do {
             try updater.start()
         } catch {
@@ -48,12 +57,14 @@ final class DamsonUpdater: NSObject {
 
     /// Entry point invoked by the menu action (checks immediately, regardless of the automatic setting).
     @objc func checkForUpdates(_ sender: Any?) {
+        guard updatesEnabled else { return }
         updater.checkForUpdates()
     }
 
-    /// Whether the "Check for Updates…" menu item is enabled (disabled while a check is in progress).
+    /// Whether the "Check for Updates…" menu item is enabled (disabled while a check is in progress
+    /// and always in dev builds, where the updater never starts).
     @objc func validateMenuItem(_ item: NSMenuItem) -> Bool {
-        updater.canCheckForUpdates
+        updatesEnabled && updater.canCheckForUpdates
     }
 
     /// Menu target — DamsonUpdater itself receives the `checkForUpdates:` action.
@@ -62,6 +73,7 @@ final class DamsonUpdater: NSObject {
     /// Applies UserDefaults("damson.autoUpdate", default false) to the Sparkle updater.
     /// Also called when Settings change.
     func applyAutomaticChecksSetting() {
+        guard updatesEnabled else { return }
         let enabled = UserDefaults.standard.object(forKey: "damson.autoUpdate") as? Bool ?? false
         updater.automaticallyChecksForUpdates = enabled
     }

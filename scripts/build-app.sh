@@ -86,7 +86,9 @@ if [[ ! -f "$TEMPLATE" ]]; then
 fi
 # Sparkle public key — receives the one-time-generated EdDSA public key via env.
 # If absent, the placeholder token is left as-is so auto-update does not work (fine for dev builds).
-SPARKLE_KEY="${SPARKLE_PUBLIC_KEY:-__SPARKLE_PUBLIC_KEY__}"
+# Default = the project's real EdDSA public key (safe to commit — it's public; the
+# matching private key lives in the maintainer keychain / CI secret). Overridable.
+SPARKLE_KEY="${SPARKLE_PUBLIC_KEY:-JzX65vKcwV6MQHIB4eB5mJ4qSxpeBq9uP9B6jRVXTWE=}"
 # git hash + build channel — dev builds show the hash in the window to distinguish from release.
 GIT_HASH="${GIT_HASH:-$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)}"
 BUILD_CHANNEL="${BUILD_CHANNEL:-release}"

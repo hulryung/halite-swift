@@ -26,5 +26,9 @@ if [[ ! -x "$GEN" ]]; then
     exit 1
 fi
 
-# -p: print public key. Prints the existing one if already generated, else creates a new one.
-"$GEN" -p
+# -p prints the existing public key; if none exists yet, run plain generate_keys
+# once (creates the pair: private → keychain, public printed) then print again.
+if ! "$GEN" -p 2>/dev/null; then
+    "$GEN" >&2
+    "$GEN" -p
+fi
