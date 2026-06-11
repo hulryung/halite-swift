@@ -480,44 +480,40 @@ public final class DamsonSurfaceView: NSView, NSTextInputClient {
         reportSizeIfChanged()
     }
 
-    private func reportSizeIfChanged() {
-        guard bounds.width > 0, bounds.height > 0 else { return }
-        // Fire SIGWINCH immediately on every layout — so the shell/TUI redraws in
-        // real time even during a drag, and the screen the user sees updates in real time too.
-        //
-        // (Tried debounce/throttle, but: debounce never fires once until the drag
-        //  ends because continuous dragging resets the timer. Prompt accumulation
-        //  in a normal shell is SIGWINCH's own standard behavior. In a TUI session
-        //  redraws are mostly in-place (net-zero scroll), so scrollback residue
-        //  barely accumulates even during a resize.)
-        // Metrics are derived from the backend's render font — so metrics and render never diverge.
+    /// Measure the current cell size from the backend's render font. Metrics are
+    /// derived from the render font so metrics and render never diverge.
+    private func measuredCellSize() -> (w: CGFloat, h: CGFloat) {
         let font = backend.renderFont
         let glyphSize = ("M" as NSString).size(withAttributes: [.font: font])
-        let cellW = max(glyphSize.width, 1)
         // NSLayoutManager().defaultLineHeight can differ slightly from the line
         // height NSTextView actually uses, causing rows to be over-reported. Measure from the actual layout result.
-        let cellH = max(measuredLineHeight(font: font), 1)
-        cellMetrics = CellMetrics(width: cellW, height: cellH)
+        return (max(glyphSize.width, 1), max(measuredLineHeight(font: font), 1))
+    }
+
+    /// The drawable terminal area in points (insets/scroller/tab-bar accounted) —
+    /// what cols/rows are derived from. Shared by reportSizeIfChanged and the
+    /// font-zoom window adjustment (which inverts this to keep cols/rows constant).
+    ///
+    /// height: we must distinguish two window modes. The discriminator is
+    /// tabbingMode — compact mode turns off native tabs (`.disallowed`) and uses a custom tab bar.
+    ///
+    ///   • compact (custom tab bar): the tab bar is an ordinary subview, so it
+    ///     has already shrunk our backing view by that much → backend.contentSize.height
+    ///     is exactly the height actually drawable. Use it as-is (symmetric
+    ///     with usableW). The old path that subtracted a magic constant
+    ///     from window.contentRect was off from the tab bar's actual height
+    ///     (38 vs 36), counting one extra row, which pushed the bottom line of
+    ///     a TUI like Claude Code off-screen so you had to scroll to see it.
+    ///
+    ///   • standard (native tab bar): bounds/contentRect fluctuates by ~36pt
+    ///     as it toggles between 2 tabs↔1 tab → each toggle redraws the prompt
+    ///     via SIGWINCH and accumulates. Pre-subtract that height even when the
+    ///     tab bar is hidden (1 tab) to keep rows constant.
+    private func usableSize() -> (w: CGFloat, h: CGFloat) {
         let inset = backend.contentInset
         // width: backend.contentSize.width instead of bounds.width — because the
         // vertical scroller takes ~15pt under the system setting where it's always visible.
         let usableW = max(backend.contentSize.width - inset.width * 2, 1)
-
-        // height: we must distinguish two window modes. The discriminator is
-        // tabbingMode — compact mode turns off native tabs (`.disallowed`) and uses a custom tab bar.
-        //
-        //   • compact (custom tab bar): the tab bar is an ordinary subview, so it
-        //     has already shrunk our backing view by that much → backend.contentSize.height
-        //     is exactly the height actually drawable. Use it as-is (symmetric
-        //     with usableW above). The old path that subtracted a magic constant
-        //     from window.contentRect was off from the tab bar's actual height
-        //     (38 vs 36), counting one extra row, which pushed the bottom line of
-        //     a TUI like Claude Code off-screen so you had to scroll to see it.
-        //
-        //   • standard (native tab bar): bounds/contentRect fluctuates by ~36pt
-        //     as it toggles between 2 tabs↔1 tab → each toggle redraws the prompt
-        //     via SIGWINCH and accumulates. Pre-subtract that height even when the
-        //     tab bar is hidden (1 tab) to keep rows constant.
         let usableH: CGFloat
         if window?.tabbingMode == .disallowed {
             usableH = max(backend.contentSize.height - inset.height * 2, 1)
@@ -532,6 +528,22 @@ public final class DamsonSurfaceView: NSView, NSTextInputClient {
             }
             usableH = max(stableContentHeight - inset.height * 2, 1)
         }
+        return (usableW, usableH)
+    }
+
+    private func reportSizeIfChanged() {
+        guard bounds.width > 0, bounds.height > 0 else { return }
+        // Fire SIGWINCH immediately on every layout — so the shell/TUI redraws in
+        // real time even during a drag, and the screen the user sees updates in real time too.
+        //
+        // (Tried debounce/throttle, but: debounce never fires once until the drag
+        //  ends because continuous dragging resets the timer. Prompt accumulation
+        //  in a normal shell is SIGWINCH's own standard behavior. In a TUI session
+        //  redraws are mostly in-place (net-zero scroll), so scrollback residue
+        //  barely accumulates even during a resize.)
+        let (cellW, cellH) = measuredCellSize()
+        cellMetrics = CellMetrics(width: cellW, height: cellH)
+        let (usableW, usableH) = usableSize()
         let cols = max(Int(floor(usableW / cellW)), 1)
         let rows = max(Int(floor(usableH / cellH)), 1)
 
@@ -539,10 +551,11 @@ public final class DamsonSurfaceView: NSView, NSTextInputClient {
         let ptyStale = (lastPtySize == nil || lastPtySize! != (cols, rows))
         if !gridStale && !ptyStale { return }   // genuine no-op layout
 
-        if inLiveResize {
+        if inLiveResize || inZoomBurst {
             // Visual reflow only; defer SIGWINCH so the shell doesn't redraw and
-            // accumulate its prompt on every drag frame. The final size is flushed
-            // (with SIGWINCH) at viewDidEndLiveResize.
+            // accumulate its prompt on every drag frame / zoom step. The final size
+            // is flushed (with SIGWINCH) at viewDidEndLiveResize / the zoom-burst
+            // settle timer.
             if gridStale { session.resizeGridOnly(cols: cols, rows: rows) }
         } else {
             session.resize(cols: cols, rows: rows)   // grid + PTY (SIGWINCH)
@@ -1408,18 +1421,87 @@ public final class DamsonSurfaceView: NSView, NSTextInputClient {
         let newSize = max(6, baseSize * fontSizeMultiplier)
         // Use a font with the cascade for zoom too — keep Nerd glyph fallback even on Menlo, etc.
         let font = fontWithNerdFallback(family: session.config.fontFamily, size: newSize)
+        let oldCols = session.grid.cols
+        let oldRows = session.grid.rows
         backend.setRenderFont(font)
-        // When the font size changes, recompute cols/rows for the new cell size
-        // and resize grid+PTY (SIGWINCH) so the shell/TUI reflows to the new
-        // width/height. Same path as a window resize — reportSizeIfChanged
-        // derives metrics from backend.renderFont, so just changing the font
-        // makes cols/rows recompute correctly.
         lastRenderedVersion = .max
+        // iTerm2-style zoom: keep cols×rows CONSTANT by resizing the WINDOW to the
+        // new cell size (sole-pane window, not fullscreen). Re-gridding on every
+        // zoom step fires a SIGWINCH storm; the shell's coalesced redraws then run
+        // against momentarily stale geometry and strand prompt copies / blank gaps
+        // in the history (§zoom gap — reproduced with starship + zoom mashing).
+        // A window-size zoom never touches the grid, so that whole class vanishes.
+        // Fallback (splits / fullscreen / screen-clamped): the old re-grid path.
+        if canZoomByWindowResize {
+            adjustWindowToKeepGrid(cols: oldCols, rows: oldRows)
+        }
+        // Zoom-burst debounce: when the grid DOES have to change (splits/fullscreen/
+        // screen-clamped), mashing zoom must not fire a SIGWINCH per step — the
+        // shell's coalesced redraws against momentarily stale geometry are what
+        // strand prompt copies. Treat the burst like a live window drag: reflow the
+        // grid visually per step (resizeGridOnly via the inZoomBurst branch in
+        // reportSizeIfChanged) and flush ONE real resize (SIGWINCH) 150ms after the
+        // last step, when geometry has settled.
+        inZoomBurst = true
+        zoomBurstTimer?.invalidate()
+        zoomBurstTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: false) {
+            [weak self] _ in
+            guard let self else { return }
+            self.inZoomBurst = false
+            self.reportSizeIfChanged()   // settled size → single SIGWINCH
+            self.renderNow()
+        }
+        // Confirms the kept grid (no-op) or reflows grid-only for the fallback
+        // and screen-clamped cases (PTY flush deferred to the burst timer).
         reportSizeIfChanged()
         // Redraw immediately with the new font even on a small zoom step where cols/rows don't change.
         renderNow()
         followingBottom = true
         scrollViewportToBottom()
+    }
+
+    /// Debounce state for zoom mashing — see setZoom. While true,
+    /// reportSizeIfChanged reflows the grid without notifying the PTY.
+    private var inZoomBurst = false
+    private var zoomBurstTimer: Timer?
+
+    /// Window-resize zoom is only safe when this surface is the window's SOLE
+    /// terminal pane (with splits, moving the window frame re-grids the siblings
+    /// instead) and the window can actually change size (not fullscreen).
+    private var canZoomByWindowResize: Bool {
+        guard let window, !window.styleMask.contains(.fullScreen) else { return false }
+        return Self.countSurfaces(in: window.contentView) == 1
+    }
+
+    private static func countSurfaces(in view: NSView?) -> Int {
+        guard let view else { return 0 }
+        if view is DamsonSurfaceView { return 1 }
+        return view.subviews.reduce(0) { $0 + countSurfaces(in: $1) }
+    }
+
+    /// Resize the window so the drawable area fits exactly `cols`×`rows` at the
+    /// CURRENT (just-changed) cell size, clamped to the screen. The top-left corner
+    /// stays put (terminal windows grow/shrink toward the bottom-right).
+    private func adjustWindowToKeepGrid(cols: Int, rows: Int) {
+        guard let window else { return }
+        let (cellW, cellH) = measuredCellSize()
+        let (usableW, usableH) = usableSize()
+        // +1pt slack so floor(usable/cell) can't dip below the target from float rounding.
+        let dW = (CGFloat(cols) * cellW + 1) - usableW
+        let dH = (CGFloat(rows) * cellH + 1) - usableH
+        guard abs(dW) > 0.5 || abs(dH) > 0.5 else { return }
+
+        var frame = window.frame
+        frame.size.width += dW
+        frame.size.height += dH
+        frame.origin.y -= dH   // frames are bottom-left anchored; keep the TOP edge fixed
+        if let vis = window.screen?.visibleFrame {
+            frame.size.width = min(frame.size.width, vis.width)
+            frame.size.height = min(frame.size.height, vis.height)
+            frame.origin.x = min(max(frame.origin.x, vis.minX), max(vis.minX, vis.maxX - frame.width))
+            frame.origin.y = min(max(frame.origin.y, vis.minY), max(vis.minY, vis.maxY - frame.height))
+        }
+        window.setFrame(frame, display: true)
     }
 
     /// The selector sent by Edit > Copy / Cmd+C. Pushes the selected text to the pasteboard.
