@@ -22,6 +22,8 @@ struct DamsonSettingsView: View {
     @AppStorage("damson.focusFollowsMouse") private var focusFollowsMouse: Bool = true
     @AppStorage("damson.newTabDirectory") private var newTabDirRaw: String = NewTabDirectory.home.rawValue
     @AppStorage("damson.backgroundOpacity") private var backgroundOpacity: Double = 1.0
+    @AppStorage("damson.paddingH") private var paddingH: Double = 4
+    @AppStorage("damson.paddingV") private var paddingV: Double = 4
     @AppStorage("damson.backgroundBlur") private var backgroundBlur: Bool = false
     @AppStorage("damson.screenEffect") private var screenEffectRaw: String = ScreenEffect.none.rawValue
     @AppStorage("damson.screenEffectIntensity") private var screenEffectIntensity: Double = 1.0
@@ -57,6 +59,8 @@ struct DamsonSettingsView: View {
         .onChange(of: showScrollbar) { _ in postChanged() }
         .onChange(of: activePaneRaw) { _ in postChanged() }
         .onChange(of: backgroundOpacity) { _ in postChanged() }
+        .onChange(of: paddingH) { _ in postChanged() }
+        .onChange(of: paddingV) { _ in postChanged() }
         .onChange(of: backgroundBlur) { _ in postChanged() }
         .onChange(of: tabBarTransparent) { _ in postChanged() }
         .onChange(of: screenEffectRaw) { _ in postChanged() }
@@ -160,6 +164,25 @@ struct DamsonSettingsView: View {
                     }
                 }
                 Text("Starting location for new tabs. Splits always inherit the current pane's directory. Shell integration (zsh OSC 7) is injected automatically.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            Section("Padding") {
+                HStack {
+                    Text("Horizontal")
+                    Slider(value: $paddingH, in: 0...32, step: 1)
+                    Text("\(Int(paddingH)) pt")
+                        .monospacedDigit()
+                        .frame(width: 44, alignment: .trailing)
+                }
+                HStack {
+                    Text("Vertical")
+                    Slider(value: $paddingV, in: 0...32, step: 1)
+                    Text("\(Int(paddingV)) pt")
+                        .monospacedDigit()
+                        .frame(width: 44, alignment: .trailing)
+                }
+                Text("Inner space between the window edges and the terminal content. Applies live; the grid size (cols×rows) adjusts to the remaining area.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -543,6 +566,12 @@ extension DamsonConfig {
         config.cursorBlink = d.bool(forKey: "damson.cursorBlink")
         config.ligatures = d.bool(forKey: "damson.ligatures")
         config.showScrollbar = d.bool(forKey: "damson.showScrollbar")
+        if let h = d.object(forKey: "damson.paddingH") as? Double {
+            config.padding.width = CGFloat(max(0, min(64, h)))
+        }
+        if let v = d.object(forKey: "damson.paddingV") as? Double {
+            config.padding.height = CGFloat(max(0, min(64, v)))
+        }
         if let o = d.object(forKey: "damson.backgroundOpacity") as? Double {
             config.backgroundOpacity = CGFloat(max(0.2, min(1.0, o)))
         }

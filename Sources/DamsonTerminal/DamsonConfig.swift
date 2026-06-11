@@ -45,6 +45,9 @@ public struct DamsonConfig {
     /// Whether to lay a frosted-glass blur (NSVisualEffectView) behind the translucent background. Default OFF.
     /// Not visible when backgroundOpacity is 1.0 (the background is opaque).
     public var backgroundBlur: Bool
+    /// Inner padding between the window edges and the terminal grid, in points
+    /// (width = left/right, height = top/bottom). Default 4×4 — the historical inset.
+    public var padding: NSSize
     /// Full-screen post-processing effect (CRT, etc.). Default none (= zero cost). [[ScreenEffect]].
     public var screenEffect: ScreenEffect
     /// Screen-effect intensity (0~1). 1 uses the effect's default values; lower softens it.
@@ -83,6 +86,7 @@ public struct DamsonConfig {
         showScrollbar: Bool = false,
         backgroundOpacity: CGFloat = 1.0,
         backgroundBlur: Bool = false,
+        padding: NSSize = NSSize(width: 4, height: 4),
         screenEffect: ScreenEffect = .none,
         screenEffectIntensity: CGFloat = 1.0,
         glyphAppear: GlyphAnimStyle = .none,
@@ -106,6 +110,7 @@ public struct DamsonConfig {
         self.showScrollbar = showScrollbar
         self.backgroundOpacity = backgroundOpacity
         self.backgroundBlur = backgroundBlur
+        self.padding = padding
         self.screenEffect = screenEffect
         self.screenEffectIntensity = screenEffectIntensity
         self.glyphAppear = glyphAppear

@@ -37,7 +37,8 @@ final class MetalTerminalBackend: TerminalRenderBackend {
     var onUserScroll: (() -> Void)?
 
     /// The content inset, matched to the legacy textView's so cols/rows agree.
-    private let inset = NSSize(width: 4, height: 4)
+    /// Inner padding (window edge ↔ grid). Follows config.padding via applyConfig.
+    private var inset = NSSize(width: 4, height: 4)
 
     /// Glyph atlas, rebuilt when font / cell size / backing scale changes.
     private var atlas: GlyphAtlas?
@@ -145,6 +146,7 @@ final class MetalTerminalBackend: TerminalRenderBackend {
         self.md = md
         self.config = config
         self.renderFont = fontWithNerdFallback(family: config.fontFamily, size: config.fontSize)
+        self.inset = config.padding
         metalView.onNeedsDisplay = { [weak self] in self?.redrawLast() }
     }
 
@@ -159,6 +161,7 @@ final class MetalTerminalBackend: TerminalRenderBackend {
     func applyConfig(_ config: DamsonConfig) {
         self.config = config
         renderFont = fontWithNerdFallback(family: config.fontFamily, size: config.fontSize)
+        inset = config.padding
         redrawLast()
     }
 
