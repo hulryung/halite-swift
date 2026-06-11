@@ -8,19 +8,31 @@ import simd
 public enum ScreenEffect: String, CaseIterable, Sendable {
     case none
     case crt
+    case apertureGrille
     case greenPhosphor
     case amberPhosphor
+    case vhs
     case grayscale
+    case sepia
+    case blueprint
     case bloom
+    case pixelate
+    case invert
 
     public var displayName: String {
         switch self {
         case .none: return "None"
         case .crt: return "CRT (scanlines + glow)"
+        case .apertureGrille: return "CRT Trinitron (RGB aperture grille)"
         case .greenPhosphor: return "Green Phosphor (green monochrome CRT)"
         case .amberPhosphor: return "Amber Phosphor (amber monochrome CRT)"
+        case .vhs: return "VHS (color fringe + grain)"
         case .grayscale: return "Grayscale (black & white)"
+        case .sepia: return "Sepia (vintage warm)"
+        case .blueprint: return "Blueprint (blue monochrome)"
         case .bloom: return "Bloom (soft glow)"
+        case .pixelate: return "Pixelate (chunky retro blocks)"
+        case .invert: return "Invert (negative)"
         }
     }
 
@@ -70,6 +82,53 @@ public enum ScreenEffect: String, CaseIterable, Sendable {
                 coeffs: SIMD4<Float>(0, 0.55 * k, 0, 2.5),
                 tint: SIMD4<Float>(1.0, 1.0, 1.0, 1.0),
                 coeffs2: SIMD4<Float>(0, 0, 0, 0))
+        case .apertureGrille:
+            // Sharper CRT: RGB triad stripes + scanlines + a touch of glow/curve.
+            return PostFXParams(
+                screenSize: screenSize,
+                coeffs: SIMD4<Float>(0.20 * k, 0.18 * k, 0.32 * k, 1.2),
+                tint: SIMD4<Float>(mix(1.0, 1.02, k), 1.0, mix(1.0, 0.97, k), 1.0),
+                coeffs2: SIMD4<Float>(0.10 * k, 0, 0, 0),
+                coeffs3: SIMD4<Float>(0, 0, 0.75 * k, 0))
+        case .vhs:
+            // Worn-tape look: chromatic aberration + film grain + soft glow,
+            // faint scanlines. Grain is position-keyed (static) — zero idle cost.
+            return PostFXParams(
+                screenSize: screenSize,
+                coeffs: SIMD4<Float>(0.08 * k, 0.30 * k, 0.22 * k, 2.0),
+                tint: SIMD4<Float>(1.0, 0.99, 0.96, 1.0),
+                coeffs2: SIMD4<Float>(0.05 * k, 0, 2.6 * k, 0.10 * k))
+        case .sepia:
+            // Vintage warm monochrome + gentle vignette.
+            return PostFXParams(
+                screenSize: screenSize,
+                coeffs: SIMD4<Float>(0, 0, 0.25 * k, 1.5),
+                tint: SIMD4<Float>(1.10, 0.92, 0.72, 1.0),
+                coeffs2: SIMD4<Float>(0, k, 0, 0.05 * k))
+        case .blueprint:
+            // Blue monochrome (cyanotype) + slight glow.
+            return PostFXParams(
+                screenSize: screenSize,
+                coeffs: SIMD4<Float>(0, 0.20 * k, 0.18 * k, 1.5),
+                tint: SIMD4<Float>(0.45, 0.72, 1.0, 1.0),
+                coeffs2: SIMD4<Float>(0, k, 0, 0))
+        case .pixelate:
+            // Chunky blocks: 3px at low intensity up to 9px at full.
+            return PostFXParams(
+                screenSize: screenSize,
+                coeffs: SIMD4<Float>(0, 0, 0, 1.5),
+                tint: SIMD4<Float>(1.0, 1.0, 1.0, 1.0),
+                coeffs2: SIMD4<Float>(0, 0, 0, 0),
+                coeffs3: SIMD4<Float>(0, (3 + 6 * k).rounded(), 0, 0))
+        case .invert:
+            // Full negative at any intensity ≥ threshold; partial inverts look
+            // muddy, so blend toward full quickly.
+            return PostFXParams(
+                screenSize: screenSize,
+                coeffs: SIMD4<Float>(0, 0, 0, 1.5),
+                tint: SIMD4<Float>(1.0, 1.0, 1.0, 1.0),
+                coeffs2: SIMD4<Float>(0, 0, 0, 0),
+                coeffs3: SIMD4<Float>(min(1, 0.5 + 0.5 * k), 0, 0, 0))
         }
     }
 }

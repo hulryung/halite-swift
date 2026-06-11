@@ -54,6 +54,11 @@ enum MetalShaders {
         float2 uv;
         float4 color;
         float4 fx;
+        // Glyph's atlas rect, for fx that displace the sample uv (glitch) — the
+        // displaced coordinate must clamp inside this glyph's atlas cell so slices
+        // never bleed pixels from a neighboring glyph. [[flat]]: no interpolation.
+        float2 uvOrigin [[flat]];
+        float2 uvSize [[flat]];
     };
 
     static inline float hash21(float2 p) {
@@ -76,21 +81,51 @@ enum MetalShaders {
         out.uv = inst.uvOrigin + corner * inst.uvSize;
         out.color = inst.color;
         out.fx = inst.fx;
+        out.uvOrigin = inst.uvOrigin;
+        out.uvSize = inst.uvSize;
         return out;
     }
 
+    // Glyph fx channels: fx.x = dissolve erosion, fx.y = glitch amount,
+    // fx.z = burn (ember rim on the erosion edge; pairs with fx.x), fx.w reserved.
     fragment float4 glyph_fragment(GlyphVOut in [[stage_in]],
                                    texture2d<float> atlas [[texture(0)]],
                                    sampler samp [[sampler(0)]]) {
-        float coverage = atlas.sample(samp, in.uv).r;
+        float2 uv = in.uv;
+        float glitch = in.fx.y;
+        if (glitch > 0.0) {
+            // Horizontal slice displacement: 3px bands shear sideways. Seeding the
+            // hash with the (animating) amount re-rolls the slices every frame, so
+            // the tear visibly crawls instead of freezing.
+            float band = floor(in.position.y / 3.0);
+            float n = hash21(float2(band, glitch * 41.0));
+            uv.x += (n - 0.5) * glitch * in.uvSize.x * 0.9;
+            uv = clamp(uv, in.uvOrigin, in.uvOrigin + in.uvSize);
+        }
+        float coverage = atlas.sample(samp, uv).r;
         float a = in.color.a * coverage;
+        float3 rgb = in.color.rgb;
         // Dissolve: per-pixel noise vanishes as the dissolve amount rises.
         float diss = in.fx.x;
         if (diss > 0.0) {
             float n = hash21(floor(in.position.xy));
             a *= smoothstep(diss, diss + 0.18, n);
+            // Burn: pixels just about to erode glow ember-orange, so the glyph
+            // appears to char away from its edges.
+            if (in.fx.z > 0.0) {
+                float rim = 1.0 - smoothstep(diss + 0.05, diss + 0.30, n);
+                rgb = mix(rgb, float3(1.0, 0.45, 0.08), rim * in.fx.z);
+            }
         }
-        return float4(in.color.rgb, a);
+        if (glitch > 0.0) {
+            // Per-slice dropout + RGB-split tint (some slices go magenta/cyan-ish).
+            float band = floor(in.position.y / 3.0);
+            float n2 = hash21(float2(band * 1.7, 13.0 + glitch * 23.0));
+            a *= mix(1.0, step(0.15, n2), glitch);
+            float3 split = (n2 < 0.5) ? float3(1.0, 0.6, 1.2) : float3(1.2, 1.0, 0.6);
+            rgb *= mix(float3(1.0), split, glitch);
+        }
+        return float4(rgb, a);
     }
 
     // Color emoji: sample the premultiplied BGRA color page as-is, ignoring fg.
@@ -109,7 +144,8 @@ enum MetalShaders {
         float2 screenSize;   // drawable size in pixels
         float4 coeffs;       // x=scanline, y=glow, z=vignette, w=glowRadiusPx
         float4 tint;         // rgb phosphor tint (a unused)
-        float4 coeffs2;      // x=curvature, y=monochrome amount, zw reserved
+        float4 coeffs2;      // x=curvature, y=monochrome amount, z=aberration px, w=grain
+        float4 coeffs3;      // x=invert, y=pixelate block px, z=aperture grille, w reserved
     };
     struct PostFXVOut {
         float4 position [[position]];
@@ -145,13 +181,36 @@ enum MetalShaders {
         float vig = p.coeffs.z;
         float glowR = p.coeffs.w;
         float curve = p.coeffs2.x;
+        float aber = p.coeffs2.z;
+        float grain = p.coeffs2.w;
+        float invertAmt = p.coeffs3.x;
+        float pixPx = p.coeffs3.y;
+        float grille = p.coeffs3.z;
 
         // Curve the sampling coordinate; everything below samples/measures in
         // bulge space so scanlines and vignette follow the magnified middle.
         float2 uv = (curve > 0.0) ? crt_curve(in.uv, curve) : in.uv;
 
-        float4 src = scene.sample(samp, uv);
-        float3 color = src.rgb;
+        // Pixelate: quantize the sample coordinate to square blocks (device px).
+        if (pixPx > 0.0) {
+            float2 block = float2(pixPx) / p.screenSize;
+            uv = (floor(uv / block) + 0.5) * block;
+        }
+
+        float4 src;
+        float3 color;
+        if (aber > 0.0) {
+            // Chromatic aberration: R and B sampled with opposite horizontal
+            // offsets (in device px) — the misconverged-gun / VHS color fringe.
+            float2 off = float2(aber / p.screenSize.x, 0.0);
+            src = scene.sample(samp, uv);
+            color = float3(scene.sample(samp, uv + off).r,
+                           src.g,
+                           scene.sample(samp, uv - off).b);
+        } else {
+            src = scene.sample(samp, uv);
+            color = src.rgb;
+        }
 
         // Phosphor glow: cheap 3x3 box blur, lighten-mixed back in.
         if (glowS > 0.0 && glowR > 0.0) {
@@ -171,6 +230,16 @@ enum MetalShaders {
             float dim = mix(1.0, 1.0 - scan, float(row & 1));
             color *= dim;
         }
+        // Aperture grille: vertical RGB triad stripes (each device-pixel column
+        // favors one channel), brightness-compensated so the mask doesn't darken.
+        if (grille > 0.0) {
+            int col = int(uv.x * p.screenSize.x);
+            int ch = col - (col / 3) * 3;
+            float3 mask = float3(ch == 0 ? 1.0 : 0.0,
+                                 ch == 1 ? 1.0 : 0.0,
+                                 ch == 2 ? 1.0 : 0.0);
+            color *= mix(float3(1.0), mask * 2.6, grille);
+        }
         // Color transform: monochrome (phosphor / grayscale) maps luminance onto
         // the tint color; otherwise the tint is a subtle multiply (CRT warmth).
         float mono = p.coeffs2.y;
@@ -180,12 +249,22 @@ enum MetalShaders {
         } else {
             color *= p.tint.rgb;
         }
+        // Invert (negative). Applied after tint/mono so phosphor inverts too.
+        if (invertAmt > 0.0) {
+            color = mix(color, 1.0 - color, invertAmt);
+        }
+        // Film grain: static per-pixel noise (position-keyed, NOT time-keyed —
+        // keeps the zero-idle-cost contract; it shimmers only as content redraws).
+        if (grain > 0.0) {
+            float n = hash21(floor(in.uv * p.screenSize)) - 0.5;
+            color += n * grain;
+        }
         // Vignette: darken toward the corners.
         if (vig > 0.0) {
             float d = distance(uv, float2(0.5));
             color *= 1.0 - smoothstep(0.35, 0.85, d) * vig;
         }
-        return float4(color, src.a);
+        return float4(max(color, float3(0.0)), src.a);
     }
     """
 }

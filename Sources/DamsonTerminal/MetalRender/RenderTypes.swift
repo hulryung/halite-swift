@@ -26,7 +26,8 @@ struct GlyphInstance {
     var uvSize: SIMD2<Float>
     var color: SIMD4<Float>
     /// Per-glyph effect. x = dissolve amount (0 = solid, 1 = fully dissolved),
-    /// yzw reserved. Default zero → no effect (the common case).
+    /// y = glitch amount, z = burn (ember rim with x), w reserved.
+    /// Default zero → no effect (the common case).
     var fx: SIMD4<Float> = .zero
 }
 
@@ -38,6 +39,8 @@ struct PostFXParams {
     var coeffs: SIMD4<Float>
     /// rgb phosphor tint (a unused)
     var tint: SIMD4<Float>
-    /// x=curvature (barrel), yzw reserved
+    /// x=curvature (barrel), y=monochrome, z=chromatic aberration px, w=film grain
     var coeffs2: SIMD4<Float>
+    /// x=invert, y=pixelate block px, z=aperture grille strength, w reserved
+    var coeffs3: SIMD4<Float> = .zero
 }
