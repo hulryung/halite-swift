@@ -1,16 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-    Sparkle appcast — damson 자동업데이트 채널.
-    릴리즈 시 scripts/sparkle-appcast.sh가 생성한 <item> 블록이 가장 최근 순으로
-    여기 추가됨. 첫 정식 릴리즈 전까지는 빈 상태로 둠.
--->
-<rss version="2.0"
-     xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"
-     xmlns:dc="http://purl.org/dc/elements/1.1/">
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
     <channel>
         <title>damson</title>
         <link>https://github.com/hulryung/damson</link>
         <description>damson release feed</description>
         <language>en</language>
+        <item>
+            <title>Damson 0.1.0</title>
+            <pubDate>Thu, 11 Jun 2026 10:41:29 +0000</pubDate>
+            <sparkle:version>194</sparkle:version>
+            <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/hulryung/damson/releases/download/v0.1.0/Damson-0.1.0.dmg" type="application/octet-stream" sparkle:edSignature="/9Ui9E7l9aFMH8blpIx3eLI0JTZDHa4avrpxkFAPJBxQhw5DRujybMVZRVwoWp8Ld2SLzuTHrBBcCONu4dqCAw==" length="1969636" />
+        </item>
     </channel>
 </rss>

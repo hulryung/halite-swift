@@ -57,9 +57,10 @@ if [[ -n "${SPARKLE_PRIVATE_KEY:-}" ]]; then
     SIGN_ARGS+=(-s "$SPARKLE_PRIVATE_KEY")
 fi
 SIG_LINE="$("$SIGN" "${SIGN_ARGS[@]}")"
-# Can be used as-is in attribute form (including the leading whitespace).
+# sign_update already emits BOTH attributes: sparkle:edSignature="..." length="NNN".
+# Use it verbatim and do NOT add our own length — a duplicate attribute is invalid XML
+# (Sparkle's own appcast tooling treats sign_update's length as authoritative anyway).
 
-SIZE="$(stat -f%z "$DMG")"
 PUBDATE="$(LC_ALL=C date -u "+%a, %d %b %Y %H:%M:%S +0000")"
 
 cat <<EOF
@@ -71,7 +72,6 @@ cat <<EOF
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <enclosure
                 url="$URL"
-                length="$SIZE"
                 type="application/octet-stream"
                $SIG_LINE />
         </item>
