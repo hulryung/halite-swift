@@ -118,6 +118,7 @@ public final class DamsonSession: ObservableObject {
     }
 
     public func resize(cols: Int, rows: Int) {
+        dumpEvent("resize", cols, rows)
         grid.resize(cols: cols, rows: rows)
         pty.resize(cols: cols, rows: rows)
         gridChanged.send()
@@ -128,6 +129,7 @@ public final class DamsonSession: ObservableObject {
     /// (and accumulate) its prompt on every drag frame; the host sends one real
     /// `resize` (SIGWINCH) when the drag ends.
     public func resizeGridOnly(cols: Int, rows: Int) {
+        dumpEvent("resize-grid-only", cols, rows)
         grid.resize(cols: cols, rows: rows)
         gridChanged.send()
     }
@@ -183,13 +185,26 @@ public final class DamsonSession: ObservableObject {
               !dir.isEmpty else { return nil }
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         let stamp = Int(Date().timeIntervalSince1970)
-        let path = "\(dir)/session-\(stamp)-\(UInt(bitPattern: ObjectIdentifier(self).hashValue) & 0xFFFF).bin"
-        FileManager.default.createFile(atPath: path, contents: nil)
-        return FileHandle(forWritingAtPath: path)
+        let base = "\(dir)/session-\(stamp)-\(UInt(bitPattern: ObjectIdentifier(self).hashValue) & 0xFFFF)"
+        FileManager.default.createFile(atPath: base + ".bin", contents: nil)
+        FileManager.default.createFile(atPath: base + ".events", contents: nil)
+        dumpEventsHandle = FileHandle(forWritingAtPath: base + ".events")
+        return FileHandle(forWritingAtPath: base + ".bin")
     }()
+    /// Side-channel for the dump: one line per resize, `<byte-offset> resize <cols> <rows>`,
+    /// where byte-offset is the position in the .bin stream BEFORE which the resize landed.
+    /// A replay harness interleaves them to reproduce resize races deterministically.
+    private var dumpEventsHandle: FileHandle?
+    private var dumpByteCount: UInt64 = 0
+
+    private func dumpEvent(_ kind: String, _ cols: Int, _ rows: Int) {
+        guard dumpHandle != nil, let h = dumpEventsHandle else { return }
+        h.write(Data("\(dumpByteCount) \(kind) \(cols) \(rows)\n".utf8))
+    }
 
     private func handlePTYData(_ data: Data) {
         dumpHandle?.write(data)
+        dumpByteCount += UInt64(data.count)
         if inTmuxControlMode {
             onTmuxControlData?(data)
             return

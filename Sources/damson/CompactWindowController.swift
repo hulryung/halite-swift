@@ -43,6 +43,12 @@ final class CompactWindowController: NSWindowController, NSWindowDelegate, TabSw
         tabs.flatMap { $0.tree.root.leaves().map { $0.session } }
     }
 
+    /// damson-cli `zoom` — the active tab's active pane surface.
+    var activeSurfaceView: DamsonSurfaceView? {
+        guard currentIndex < tabs.count else { return nil }
+        return tabs[currentIndex].tree.activeSurfaceView
+    }
+
     /// The active pane of the current active tab (the focused side when split).
     var activeSession: DamsonSession? {
         guard currentIndex < tabs.count else { return nil }

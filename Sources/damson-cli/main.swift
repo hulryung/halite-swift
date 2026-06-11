@@ -52,6 +52,7 @@ Commands:
   close-pane              Close the active pane.
   list-panes              Print the active tab's panes as JSON.
   dump-grid               Print the active pane's visible grid as plain text.
+  zoom <in|out|reset>     Font zoom on the active pane (same path as Cmd+=/-).
 
 Options:
   --pid PID               Target the instance with this PID (default: most recent).
@@ -196,6 +197,11 @@ case "list-panes":
 case "dump-grid":
     guard rest.isEmpty else { die("dump-grid takes no arguments") }
     cmdKind = .dumpGrid
+case "zoom":
+    guard rest.count == 1, ["in", "out", "reset"].contains(rest[0]) else {
+        die("zoom requires: in | out | reset")
+    }
+    cmdKind = .zoom(rest[0])
 default:
     die("unknown command: \(sub)")
 }

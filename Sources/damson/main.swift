@@ -138,6 +138,9 @@ final class DamsonWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
+    /// damson-cli `zoom` — the active pane's surface (zoomIn/zoomOut/resetZoom target).
+    var activeSurfaceView: DamsonSurfaceView? { tree.activeSurfaceView }
+
     /// damson-cli `resize-window` — size the window so the active terminal is `cols`×`rows`.
     @discardableResult
     func resizeWindowToGrid(cols: Int, rows: Int) -> Bool {
@@ -417,6 +420,19 @@ final class DamsonAppDelegate: NSObject, NSApplicationDelegate {
         case .dumpGrid:
             guard let session = activeControlSession() else { return .err("no active pane") }
             return .grid(Self.gridText(of: session))
+
+        case .zoom(let action):
+            guard let surface = activeCompact()?.activeSurfaceView
+                    ?? activeSingleController()?.activeSurfaceView else {
+                return .err("no active pane")
+            }
+            switch action {
+            case "in": surface.zoomIn(nil)
+            case "out": surface.zoomOut(nil)
+            case "reset": surface.resetZoom(nil)
+            default: return .err("zoom requires in|out|reset")
+            }
+            return .ok()
         }
     }
 

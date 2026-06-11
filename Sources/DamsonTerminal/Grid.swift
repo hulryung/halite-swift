@@ -835,8 +835,24 @@ public final class Grid {
 
         // 4. preserveStart 이전(완료된 출력 + scrollback)만 논리 줄로 재결합 후 newCols로
         //    재줄바꿈한다. 커서는 보존 구간에 있으므로 여기선 추적하지 않는다.
+        //
+        //    이때 프롬프트 블록 "바로 위"의 연속 빈 행 run은 1개로 줄인다(여러 개 → 1개).
+        //    줌/리사이즈 연타 중 zsh의 SIGWINCH 처리는 coalesce되므로, 셸이 stale한
+        //    COLUMNS로 출력한 partial-line 보호 패딩(PROMPT_SP: `%` + 줄폭만큼 공백)이
+        //    좁아진 그리드에서 wrap돼 프롬프트 위에 빈 논리 줄을 사이클마다 하나씩
+        //    흘린다. 그 빈 줄은 다음 reflow에서 "완료된 출력"으로 굳어 영영 안 사라지고,
+        //    출력과 프롬프트 사이 간격이 줌을 할수록 자라는 증상이 됐다(§field: zoom gap).
+        //    의도된 빈 줄(starship add_newline 등)은 1개를 남기므로 보존된다. 출력
+        //    말미의 다중 의도 빈 줄은 리사이즈 시 1개로 줄 수 있으나(iTerm2류 트리밍과
+        //    동급의 trade-off) 누적 결함보다 훨씬 낫다.
+        var rewrapEnd = preserveStart
+        var blanksAbove = 0
+        while rewrapEnd - blanksAbove - 1 >= 0, isBlankRow(kept[rewrapEnd - blanksAbove - 1]) {
+            blanksAbove += 1
+        }
+        if blanksAbove > 1 { rewrapEnd -= (blanksAbove - 1) }
         var newPhys: [Line] = []
-        appendRewrapped(Array(kept[0..<preserveStart]), to: newCols, into: &newPhys)
+        appendRewrapped(Array(kept[0..<rewrapEnd]), to: newCols, into: &newPhys)
 
         // 5. 프롬프트 블록(마크~커서, +커서 아래 라이브 콘텐츠)은 원본 물리 행을 폭만
         //    clip/pad 해 그대로 보존(행 수·wrap·프롬프트 마크 유지).

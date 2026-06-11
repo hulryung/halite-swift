@@ -151,6 +151,12 @@ final class PaneTreeView: NSView {
         return false
     }
 
+    /// The active pane's surface view (damson-cli `zoom` etc. target it directly).
+    var activeSurfaceView: DamsonSurfaceView? {
+        if case .leaf(_, let surface) = activeLeaf.kind { return surface }
+        return nil
+    }
+
     func closeActive() {
         // tmux-backed tab: route Cmd+W to a tmux `kill-pane`; `%layout-change` then collapses
         // the split (or `%window-close` closes the tab). Falls through to a local close if no
