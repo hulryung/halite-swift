@@ -10,9 +10,10 @@ import CoreText
 /// D2Coding family) — tried for ANY missing character, not just East-Asian, so
 /// symbols that Korean coding fonts carry (circled digits ①–⑳ etc.) render
 /// deterministically the same on every machine; (2) the system-recommended font
-/// for that character (`CTFontCreateForString` — Apple Symbols, Hiragino, …),
-/// scaled down to fit the cell when its ink overflows (ambiguous-width symbols
-/// like ④ drawn into a 1-cell box). Glyph lookup is a direct per-font cmap query
+/// for that character (`CTFontCreateForString` — Apple Symbols, Hiragino, …).
+/// Both fallback tiers scale the glyph down to fit the cell when its ink
+/// overflows (ambiguous-width symbols like ④ drawn into a 1-cell box, which the
+/// CJK face renders full-width). Glyph lookup is a direct per-font cmap query
 /// (`CTFontGetGlyphsForCharacters`), which does NOT honor `NSFont.cascadeList`;
 /// fallbacks are therefore resolved explicitly here. Only a character no installed
 /// font can draw stays blank.
@@ -82,9 +83,11 @@ final class GlyphRasterizer {
         if let bmp = draw(ch, in: bold ? boldFont : font, wide: wide) {
             return bmp
         }
-        // Pinned fallback face — deterministic across machines.
+        // Pinned fallback face — deterministic across machines. Its metrics don't
+        // match the base cell, so overflowing ink (full-width ① in a 1-cell
+        // ambiguous-width box) is shrink-to-fit instead of clipped.
         if let cjk = bold ? boldCJKFont : cjkFont,
-           let bmp = draw(ch, in: cjk, wide: wide) {
+           let bmp = draw(ch, in: cjk, wide: wide, fitOverflow: true) {
             return bmp
         }
         // System fallback: whatever CoreText recommends for this character.
@@ -115,8 +118,13 @@ final class GlyphRasterizer {
         let ph = Int(ceil(cellH * scale))
         guard pw > 0, ph > 0 else { return nil }
 
+        // CTLineDraw ignores the context fill color unless told otherwise — the
+        // default foreground is BLACK, invisible on the zeroed coverage bitmap.
         let line = CTLineCreateWithAttributedString(
-            NSAttributedString(string: String(ch), attributes: [.font: f]))
+            NSAttributedString(string: String(ch), attributes: [
+                .font: f,
+                kCTForegroundColorFromContextAttributeName as NSAttributedString.Key: true,
+            ]))
 
         var data = [UInt8](repeating: 0, count: pw * ph)
         let ok = data.withUnsafeMutableBytes { raw -> Bool in
@@ -128,12 +136,20 @@ final class GlyphRasterizer {
             ctx.setAllowsAntialiasing(true)
             ctx.setShouldSmoothFonts(false)
             ctx.scaleBy(x: scale, y: scale)
-            ctx.setFillColor(CGColor(gray: 1.0, alpha: 1.0))
+            ctx.setFillColor(CGColor(gray: 1.0, alpha: 1.0))   // white = full coverage
 
             let ib = CTLineGetImageBounds(line, ctx)
             guard ib.width > 0, ib.height > 0 else { return false }
-            // Shrink-to-fit only (cap 1): center the ink in the cell box.
-            let fit = min(1, min(glyphCellW / ib.width, cellH / ib.height))
+            // Shrink-to-fit only (cap 1): center the ink in the cell box. The fit
+            // box is inset two device pixels per side: one absorbs glyph-origin
+            // pixel snapping (CoreText can shift the rendered outline up to ~1px
+            // from the CTLineGetImageBounds prediction), one stays a real seam so
+            // a box-filling glyph (full-width ① squeezed into a 1-cell ambiguous-
+            // width slot) never abuts neighboring cells' ink flush.
+            let inset = 2 / scale
+            let boxW = glyphCellW - inset * 2, boxH = cellH - inset * 2
+            guard boxW > 0, boxH > 0 else { return false }
+            let fit = min(1, min(boxW / ib.width, boxH / ib.height))
             let drawnW = ib.width * fit, drawnH = ib.height * fit
             ctx.translateBy(x: (glyphCellW - drawnW) / 2 - fit * ib.minX,
                             y: (cellH - drawnH) / 2 - fit * ib.minY)
@@ -235,7 +251,15 @@ final class GlyphRasterizer {
 
     /// Rasterize `ch` with `f`, or nil if `f`'s own cmap lacks the glyph (a direct
     /// per-font query — `NSFont.cascadeList` is intentionally not consulted).
-    private func draw(_ ch: Character, in f: NSFont, wide: Bool) -> Bitmap? {
+    ///
+    /// `fitOverflow` (fallback faces only): when the natural pen layout's ink
+    /// would overflow the cell box horizontally — e.g. D2Coding draws East-Asian-
+    /// Ambiguous circled digits (①…⑳) full-width but the grid gives them 1 cell —
+    /// reroute through `drawFitted` so the glyph is shrunk and centered instead of
+    /// hard-clipped at the bitmap edge. The base font is monospace and lays out at
+    /// x=0 by design, so tier 2 keeps the cheap unfitted path.
+    private func draw(_ ch: Character, in f: NSFont, wide: Bool,
+                      fitOverflow: Bool = false) -> Bitmap? {
         let ctFont = f as CTFont
 
         // Normalize to precomposed (NFC). The terminal can receive decomposed
@@ -258,6 +282,34 @@ final class GlyphRasterizer {
         let ph = Int(ceil(cellH * scale))
         guard pw > 0, ph > 0 else { return nil }
 
+        // Position each glyph at the baseline (y-up: cellH − baseline from
+        // bottom), accumulating advances for multi-glyph clusters.
+        var advances = [CGSize](repeating: .zero, count: glyphs.count)
+        CTFontGetAdvancesForGlyphs(ctFont, .horizontal, glyphs, &advances, glyphs.count)
+        var positions = [CGPoint](repeating: .zero, count: glyphs.count)
+        var penX: CGFloat = 0
+        for i in glyphs.indices {
+            positions[i] = CGPoint(x: penX, y: cellH - baseline)
+            penX += advances[i].width
+        }
+
+        if fitOverflow {
+            // Ink bounds under the pen layout; anything outside [0, glyphCellW]
+            // would be silently clipped by the CGContext bitmap below.
+            var boxes = [CGRect](repeating: .zero, count: glyphs.count)
+            CTFontGetBoundingRectsForGlyphs(ctFont, .horizontal, glyphs, &boxes, glyphs.count)
+            var inkMinX = CGFloat.greatestFiniteMagnitude
+            var inkMaxX = -CGFloat.greatestFiniteMagnitude
+            for i in glyphs.indices where !boxes[i].isNull && boxes[i].width > 0 {
+                inkMinX = min(inkMinX, positions[i].x + boxes[i].minX)
+                inkMaxX = max(inkMaxX, positions[i].x + boxes[i].maxX)
+            }
+            // 0.5pt slack: antialiasing fringe / rounding, not real overflow.
+            if inkMaxX > inkMinX, inkMinX < -0.5 || inkMaxX > glyphCellW + 0.5 {
+                return drawFitted(ch, in: f, wide: wide)
+            }
+        }
+
         var data = [UInt8](repeating: 0, count: pw * ph)
         let ok = data.withUnsafeMutableBytes { raw -> Bool in
             guard let ctx = CGContext(
@@ -269,17 +321,6 @@ final class GlyphRasterizer {
             ctx.setShouldSmoothFonts(false)   // grayscale coverage, not subpixel
             ctx.scaleBy(x: scale, y: scale)   // work in points
             ctx.setFillColor(CGColor(gray: 1.0, alpha: 1.0))   // white = full coverage
-
-            // Position each glyph at the baseline (y-up: cellH − baseline from
-            // bottom), accumulating advances for multi-glyph clusters.
-            var advances = [CGSize](repeating: .zero, count: glyphs.count)
-            CTFontGetAdvancesForGlyphs(ctFont, .horizontal, glyphs, &advances, glyphs.count)
-            var positions = [CGPoint](repeating: .zero, count: glyphs.count)
-            var x: CGFloat = 0
-            for i in glyphs.indices {
-                positions[i] = CGPoint(x: x, y: cellH - baseline)
-                x += advances[i].width
-            }
             CTFontDrawGlyphs(ctFont, glyphs, positions, glyphs.count, ctx)
             return true
         }

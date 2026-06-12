@@ -2,9 +2,11 @@ import XCTest
 import AppKit
 @testable import DamsonTerminal
 
-/// Verifies the Metal glyph path's minimal-fallback policy: the base font draws
-/// what it can, and the *only* fallback is the CJK face for East-Asian glyphs the
-/// base lacks — rendered at full double-width (not squished to one cell).
+/// Verifies the Metal glyph path's fallback policy: the base font draws what it
+/// can; what it lacks falls through to the pinned CJK face, then to the
+/// system-recommended font for that character. Wide glyphs render at full
+/// double-width, and both fallback tiers shrink-to-fit when a glyph's ink
+/// overflows its cell box (see the doc comment atop GlyphRasterizer.swift).
 final class GlyphFallbackTests: XCTestCase {
 
     private func font(_ name: String, _ size: CGFloat) -> NSFont? { NSFont(name: name, size: size) }
@@ -209,6 +211,48 @@ extension GlyphFallbackTests {
             if centerInk { break }
         }
         XCTAssertTrue(centerInk, "④ ink must occupy the cell center, not just edges")
+    }
+
+    /// Regression: ①/②/④ used to render half-clipped. East-Asian-Ambiguous
+    /// circled digits get a 1-cell box (Cell.isWide=false), but the pinned CJK
+    /// face draws them with a full-width (~2-cell) advance — tier 3 went through
+    /// the unfitted draw() path, so ink overflowed the bitmap and was hard-clipped
+    /// at the right edge. A correctly shrink-to-fit-centered glyph has (a) a
+    /// margin on both sides (ink never flush with the bitmap edge) and (b) near-
+    /// symmetric left/right ink mass (circled digits are circle-dominated).
+    func testCircledDigitNotHorizontallyClipped() throws {
+        let size: CGFloat = 17
+        let base = NSFont(name: "Menlo", size: size) ?? NSFont.systemFont(ofSize: size)
+        let cellW = ("M" as NSString).size(withAttributes: [.font: base]).width
+        let r = GlyphRasterizer(font: base, cellW: cellW, cellH: cellW * 2, scale: 2)
+
+        for ch in ["①", "②", "④"] as [Character] {
+            let bmp = try XCTUnwrap(r.raster(ch, bold: false, wide: Cell.isWide(ch)),
+                                    "\(ch) must render")
+            var minX = bmp.width, maxX = -1
+            var leftMass = 0, rightMass = 0
+            for y in 0..<bmp.height {
+                let row = y * bmp.width
+                for x in 0..<bmp.width {
+                    let v = Int(bmp.bytes[row + x])
+                    guard v != 0 else { continue }
+                    if x < minX { minX = x }
+                    if x > maxX { maxX = x }
+                    if x < bmp.width / 2 { leftMass += v } else { rightMass += v }
+                }
+            }
+            // (a) Fitted+centered ink never touches the bitmap edge.
+            XCTAssertGreaterThan(minX, 0,
+                "\(ch) ink flush with the LEFT edge — glyph not centered (w=\(bmp.width))")
+            XCTAssertLessThan(maxX, bmp.width - 1,
+                "\(ch) ink flush with the RIGHT edge — glyph clipped (w=\(bmp.width))")
+            // (b) The circle dominates the ink: halves must be near-equal. A
+            // complete render measures ≤ ~1.3 (pixel snapping at tiny sizes adds
+            // some skew); the half-clipped bug measured 1.49 (①) to 1.82 (②).
+            let hi = max(leftMass, rightMass), lo = max(min(leftMass, rightMass), 1)
+            XCTAssertLessThan(Double(hi) / Double(lo), 1.4,
+                "\(ch) ink mass asymmetric (L=\(leftMass) R=\(rightMass)) — half the glyph is missing")
+        }
     }
 
     /// Bold variants of fallback symbols must render too (separate cache path).
