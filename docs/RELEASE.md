@@ -1,28 +1,28 @@
 # damson release pipeline
 
-`swift build -c release` → `.app` bundle → Developer ID 코드사인 →
-Apple notarization → `.dmg`. Sparkle 자동업데이트와 GitHub Actions 자동화는
-별도 단계로 남겨둠.
+`swift build -c release` → `.app` bundle → Developer ID codesigning →
+Apple notarization → `.dmg`. Sparkle auto-updates and GitHub Actions
+automation are left as separate steps.
 
-## 1회성 준비
+## One-time setup
 
-### Apple Developer 인증서
+### Apple Developer certificate
 
-Developer ID Application 인증서가 keychain에 있어야 함.
+A Developer ID Application certificate must be in the keychain.
 
 ```sh
 security find-identity -p codesigning -v
-# 출력 예:
+# Example output:
 #   1) 1234ABCD... "Developer ID Application: Your Name (TEAMID)"
 ```
 
-해당 식별자 전체 문자열을 `APPLE_SIGNING_IDENTITY`에 설정.
+Set the full identity string as `APPLE_SIGNING_IDENTITY`.
 
 ### Notarization credentials
 
-두 가지 방법 중 하나:
+Pick one of two methods:
 
-**방법 A — keychain profile (권장)**
+**Method A — keychain profile (recommended)**
 
 ```sh
 xcrun notarytool store-credentials damson-notary \
@@ -31,14 +31,14 @@ xcrun notarytool store-credentials damson-notary \
     --password "xxxx-xxxx-xxxx-xxxx"   # app-specific password
 ```
 
-이후 `NOTARY_KEYCHAIN_PROFILE=damson-notary`만 설정.
+Then just set `NOTARY_KEYCHAIN_PROFILE=damson-notary`.
 
-**방법 B — env로 매번 전달**
+**Method B — pass via env every time**
 
-`APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` (appleid.apple.com에서 발급),
-`APPLE_TEAM_ID`를 매 실행마다 export.
+Export `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` (issued at appleid.apple.com),
+and `APPLE_TEAM_ID` on every run.
 
-## 한 번에 릴리즈
+## Release in one shot
 
 ```sh
 export APPLE_SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)'
@@ -46,51 +46,51 @@ export NOTARY_KEYCHAIN_PROFILE=damson-notary
 MARKETING_VERSION=0.1.0 ./scripts/release.sh
 ```
 
-결과:
+Result:
 ```
 dist/
-├── Damson.app          # 서명 + 노타라이즈 + staple 완료
-└── Damson-0.1.0.dmg    # 서명 + 노타라이즈 + staple 완료
+├── Damson.app          # signed + notarized + stapled
+└── Damson-0.1.0.dmg    # signed + notarized + stapled
 ```
 
-## 단계별로
+## Step by step
 
-빠른 iteration:
+For fast iteration:
 
 ```sh
-# 1) 빌드만 — 서명 없이 dev 검증
+# 1) Build only — dev verification without signing
 SKIP_NOTARIZE=1 ./scripts/build-app.sh
 open dist/Damson.app
 
-# 2) 서명만 — 노타라이즈는 시간 걸리므로 분리
+# 2) Sign only — notarization takes time, so keep it separate
 SKIP_NOTARIZE=1 ./scripts/sign-and-notarize.sh
 
-# 3) 정식 (서명 + 노타라이즈)
+# 3) The real thing (sign + notarize)
 ./scripts/sign-and-notarize.sh
 
 # 4) dmg
 ./scripts/build-dmg.sh
 ```
 
-## 검증
+## Verification
 
-배포본이 실제로 Gatekeeper를 통과하는지:
+To confirm the distribution actually passes Gatekeeper:
 
 ```sh
 spctl --assess --type execute --verbose=4 dist/Damson.app
 # accepted, source=Notarized Developer ID
 ```
 
-`.dmg`도:
+The `.dmg` too:
 
 ```sh
 spctl --assess --type open --context context:primary-signature dist/Damson-0.1.0.dmg
 ```
 
-## damson-cli 설치
+## Installing damson-cli
 
-`.app` 번들 안에 `Contents/Resources/damson-cli`로 들어가 있음. 사용자가
-`/usr/local/bin`에 symlink 거는 게 일반적:
+It ships inside the `.app` bundle as `Contents/Resources/damson-cli`. Users
+typically symlink it into `/usr/local/bin`:
 
 ```sh
 sudo ln -sf /Applications/Damson.app/Contents/Resources/damson-cli \
@@ -98,34 +98,37 @@ sudo ln -sf /Applications/Damson.app/Contents/Resources/damson-cli \
 damson-cli --list-instances
 ```
 
-향후 Settings UI에서 "Install Command-Line Tool…" 버튼 추가 예정.
+An "Install Command-Line Tool…" button in the Settings UI is planned.
 
-## 버전 관리
+## Versioning
 
-`MARKETING_VERSION` env로 marketing version (CFBundleShortVersionString)
-지정. `BUILD_NUMBER` 미지정 시 epoch seconds로 자동 채움.
+Set the marketing version (CFBundleShortVersionString) via the
+`MARKETING_VERSION` env var. If `BUILD_NUMBER` is unset, it is auto-filled
+with epoch seconds.
 
 ```sh
 MARKETING_VERSION=0.2.0 BUILD_NUMBER=20260526 ./scripts/release.sh
 ```
 
-## Sparkle 자동업데이트
+## Sparkle auto-updates
 
-`.app`은 SPUStandardUpdaterController로 부팅 시 자동으로 업데이트 체크.
-사용자는 App 메뉴 → "Check for Updates…"로 즉시 체크 가능.
+The `.app` automatically checks for updates at launch via
+SPUStandardUpdaterController. Users can check immediately via the App menu →
+"Check for Updates…".
 
-### 1회성: EdDSA 키 발급
+### One-time: generate the EdDSA key
 
 ```sh
 ./scripts/sparkle-keygen.sh
-# 출력 예: rxFA7zVTQNxX1cd...= (base64 public key)
+# Example output: rxFA7zVTQNxX1cd...= (base64 public key)
 ```
 
-이 public key 문자열을 `SPARKLE_PUBLIC_KEY` env에 넣어두면 build-app.sh가
-Info.plist의 `SUPublicEDKey`로 자동 박는다. private key는 macOS keychain에
-저장된 상태로 유지 (`security find-generic-password -s "https://sparkle-project.org" -a ed25519`).
+Put this public key string in the `SPARKLE_PUBLIC_KEY` env var and
+build-app.sh automatically bakes it into Info.plist as `SUPublicEDKey`. The
+private key stays stored in the macOS keychain
+(`security find-generic-password -s "https://sparkle-project.org" -a ed25519`).
 
-### 릴리즈할 때
+### When releasing
 
 ```sh
 export SPARKLE_PUBLIC_KEY='rxFA7zVTQNxX1cd...='
@@ -143,49 +146,51 @@ git tag v0.1.0 && git push --tags
 gh release create v0.1.0 dist/Damson-0.1.0.dmg
 ```
 
-`SUFeedURL`이 `https://raw.githubusercontent.com/.../main/appcast.xml`로
-박혀 있어서, appcast.xml 커밋이 main에 push되면 다음 백그라운드 체크에서
-사용자에게 알림이 뜬다.
+`SUFeedURL` is baked in as `https://raw.githubusercontent.com/.../main/appcast.xml`,
+so once the appcast.xml commit is pushed to main, users get notified on the
+next background check.
 
-## GitHub Actions 자동 릴리즈
+## GitHub Actions automated release
 
-`.github/workflows/release.yml` — `v*` 태그 push 시 자동으로 모든 단계 실행
-(빌드 → 사인 → 노타라이즈 → .dmg → appcast 갱신 → GitHub Release 생성).
+`.github/workflows/release.yml` — pushing a `v*` tag runs every step
+automatically (build → sign → notarize → .dmg → appcast update → GitHub
+Release creation).
 
-### 필요한 secrets (Settings → Secrets and variables → Actions)
+### Required secrets (Settings → Secrets and variables → Actions)
 
-| 키 | 설명 |
+| Key | Description |
 |---|---|
-| `APPLE_CERTIFICATE_BASE64` | Developer ID Application `.p12`를 `base64 -i cert.p12` |
-| `APPLE_CERTIFICATE_PASSWORD` | `.p12` import 시 사용한 password |
+| `APPLE_CERTIFICATE_BASE64` | Developer ID Application `.p12` via `base64 -i cert.p12` |
+| `APPLE_CERTIFICATE_PASSWORD` | Password used when importing the `.p12` |
 | `APPLE_SIGNING_IDENTITY` | `"Developer ID Application: Your Name (TEAMID)"` |
-| `APPLE_ID` | Apple ID 이메일 |
-| `APPLE_APP_SPECIFIC_PASSWORD` | appleid.apple.com 발급 |
+| `APPLE_ID` | Apple ID email |
+| `APPLE_APP_SPECIFIC_PASSWORD` | Issued at appleid.apple.com |
 | `APPLE_TEAM_ID` | `ABCDE12345` |
-| `SPARKLE_PUBLIC_KEY` | base64 EdDSA public key (sparkle-keygen.sh 출력) |
+| `SPARKLE_PUBLIC_KEY` | base64 EdDSA public key (sparkle-keygen.sh output) |
 | `SPARKLE_PRIVATE_KEY` | base64 EdDSA private key (keychain export) |
 
-private key export 방법:
+How to export the private key:
 ```sh
 security find-generic-password -s "https://sparkle-project.org" -a ed25519 -w \
   | base64
-# 이 출력을 SPARKLE_PRIVATE_KEY secret에 붙여넣음.
+# Paste this output into the SPARKLE_PRIVATE_KEY secret.
 ```
 
-### 사용
+### Usage
 
 ```sh
 git tag v0.1.0
 git push --tags
-# Actions가 자동 실행됨. 진행 상황: gh run watch
+# Actions runs automatically. Watch progress: gh run watch
 ```
 
-수동 트리거도 가능: Actions 탭 → "release" workflow → "Run workflow" → version 입력.
+Manual trigger also works: Actions tab → "release" workflow → "Run workflow" → enter version.
 
-## 알려진 제한
+## Known limitations
 
-- **Universal binary 미지원** — 현재 빌드 머신 아키텍처(arm64 또는 x86_64)만.
-  CI도 arm64(macos-14)에서만 돌아감. Intel 사용자도 지원하려면
-  `swift build --arch arm64 --arch x86_64` + `lipo`로 합치는 단계 필요.
-- **App icon 미적용** — `Resources/Damson.icns` 추가하면 자동으로 번들에
-  포함되도록 build-app.sh가 미리 처리해 둠.
+- **No universal binary support** — only the build machine's architecture
+  (arm64 or x86_64). CI also runs only on arm64 (macos-14). Supporting Intel
+  users would require a `swift build --arch arm64 --arch x86_64` + `lipo`
+  merge step.
+- **App icon not applied** — build-app.sh is already set up to include
+  `Resources/Damson.icns` in the bundle automatically once it's added.

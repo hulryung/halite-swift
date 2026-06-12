@@ -1,124 +1,124 @@
-# tmux 통합 계획 (tmux `-CC` control mode)
+# tmux Integration Plan (tmux `-CC` control mode)
 
-Claude Code의 **agent teams** "split-pane" 모드를 Damson의 **네이티브 탭/패널**로 렌더링하기 위한 설계.
-Damson가 iTerm2의 "iTerm2 + tmux -CC" 위치를 맡는다 — Damson가 tmux control client가 되어,
-tmux window → Damson Tab, tmux pane → Damson split으로 매핑한다.
-
----
-
-## 1. 목표 / 사용 시나리오
-
-Claude Code의 **agent teams** (experimental, env `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`, v2.1.32+)는
-두 가지 디스플레이 모드를 가진다.
-
-- **in-process**: 하나의 터미널 안에서 팀원 세션을 순환(Shift+Down)한다. 어디서나 동작하지만 **동시에 볼 수 없다**.
-- **split-pane**: 팀원 하나당 패널 하나. **여러 agent 세션을 동시에** 한 화면에서 본다. 단 tmux 또는 iTerm2를 요구한다.
-
-split-pane 모드는 현재 **Ghostty, VS Code terminal, Windows Terminal에서 지원되지 않는다**.
-즉, 이걸 지원하면 Damson만의 분명한 차별점이 된다. (출처: https://code.claude.com/docs/en/agent-teams)
-
-**목표**: 사용자가 Damson에서 `tmux -CC`로 시작한 세션 안에서 Claude Code agent teams를 split-pane으로 켜면,
-각 팀원 패널이 Damson의 **네이티브 탭/split**으로 나타나도록 한다. Damson 자체 UI(탭바, 분할 리사이즈, 포커스)로
-여러 agent를 동시에 보고 조작한다.
-
-핵심: **Claude Code는 tmux를 평범한 명령(`split-window`, `send-keys`, pane id `%N`)으로 구동한다.**
-`-CC` control protocol은 **tmux ↔ 터미널 에뮬레이터** 사이에서만 쓰인다. 따라서 Damson는 Claude Code를
-전혀 알 필요가 없다 — Damson가 `tmux -CC` 세션을 네이티브로 렌더링하면 agent-team 패널은 **자동으로** 나타난다.
-공식 문서도 "tmux -CC in iTerm2"를 권장 진입점으로 든다.
+A design for rendering Claude Code's **agent teams** "split-pane" mode as Damson's **native tabs/panes**.
+Damson takes the place of iTerm2 in the "iTerm2 + tmux -CC" pairing — Damson becomes the tmux control client,
+mapping tmux window → Damson Tab and tmux pane → Damson split.
 
 ---
 
-## 2. 접근 결정
+## 1. Goal / Usage Scenario
 
-채택: **tmux `-CC` control mode (iTerm2 모델)**.
+Claude Code's **agent teams** (experimental, env `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`, v2.1.32+)
+have two display modes.
 
-기각한 대안:
+- **in-process**: cycle through teammate sessions (Shift+Down) inside a single terminal. Works anywhere, but you **cannot see them simultaneously**.
+- **split-pane**: one pane per teammate. View **multiple agent sessions at once** on a single screen. Requires tmux or iTerm2.
 
-| 대안 | 기각 사유 |
+split-pane mode is currently **unsupported in Ghostty, VS Code terminal, and Windows Terminal**.
+In other words, supporting it gives Damson a clear differentiator. (Source: https://code.claude.com/docs/en/agent-teams)
+
+**Goal**: when a user enables Claude Code agent teams in split-pane mode inside a session started with `tmux -CC` in Damson,
+each teammate pane appears as a Damson **native tab/split**. The user views and operates multiple agents
+simultaneously through Damson's own UI (tab bar, split resizing, focus).
+
+Key insight: **Claude Code drives tmux with ordinary commands (`split-window`, `send-keys`, pane id `%N`).**
+The `-CC` control protocol is used only **between tmux and the terminal emulator**. So Damson doesn't need to
+know anything about Claude Code — if Damson renders a `tmux -CC` session natively, the agent-team panes appear **automatically**.
+The official docs also recommend "tmux -CC in iTerm2" as the entry point.
+
+---
+
+## 2. Approach Decision
+
+Adopted: **tmux `-CC` control mode (the iTerm2 model)**.
+
+Rejected alternatives:
+
+| Alternative | Reason for rejection |
 |---|---|
-| Claude Code in-process 모드만 지원 | 한 터미널 안에서 순환할 뿐, **동시 표시가 불가능**. 사용자가 원한 그림(여러 패널 동시)을 못 준다. |
-| Damson 자체 persistence daemon (세션 영속화) | 프로세스 생존성은 줄 수 있어도 **tmux 호환을 주지 못한다**. Claude Code가 기대하는 tmux 명령(`split-window` 등)을 받을 주체가 없다. |
-| iTerm2 it2 / Python API 재구현 | Damson는 iTerm2가 아니다. agent teams는 iTerm2 API가 아니라 **tmux 명령**으로 구동되므로 잘못된 타깃. |
+| Support only Claude Code's in-process mode | Just cycles within one terminal; **simultaneous display is impossible**. Doesn't deliver the picture the user wants (multiple panes at once). |
+| Damson's own persistence daemon (session persistence) | Could provide process survivability but **gives no tmux compatibility**. There would be nothing to receive the tmux commands (`split-window` etc.) that Claude Code expects. |
+| Reimplement iTerm2's it2 / Python API | Damson is not iTerm2. agent teams are driven by **tmux commands**, not the iTerm2 API, so this is the wrong target. |
 
-tmux `-CC`를 고른 이유:
+Why tmux `-CC`:
 
-- agent teams가 **이미 tmux를 가정**하고, tmux는 `-CC`로 **구조화된 control protocol**(window/pane/layout/output 알림)을
-  내보낸다. Damson는 이 protocol만 말하면 된다.
-- Grid가 PTY로부터 **분리되어 있다**(아래 §5). 한 pane의 터미널 상태/렌더링은 bytes가 local forkpty에서 오는지
-  tmux `%output`에서 오는지 신경 쓰지 않는다 — 이미 검증된 분리.
-- iTerm2가 같은 모델로 수년간 검증했다. 우리는 그 제약(아래 §8)까지 그대로 물려받는다.
+- agent teams **already assume tmux**, and tmux exports a **structured control protocol** via `-CC`
+  (window/pane/layout/output notifications). Damson only needs to speak this protocol.
+- The Grid is **decoupled from the PTY** (§5 below). A pane's terminal state/rendering doesn't care whether
+  bytes come from a local forkpty or from tmux `%output` — a separation already proven.
+- iTerm2 has validated the same model for years. We inherit its constraints (§8 below) as well.
 
 ---
 
-## 3. 동작 그림
+## 3. How It Works
 
 ```
-사용자
-  │  (Damson에서 "tmux -CC attach" / "tmux -CC new")
+User
+  │  ("tmux -CC attach" / "tmux -CC new" in Damson)
   ▼
 Damson  ──spawn──▶  tmux -CC  (control client = Damson)
   │                    │
-  │  stdin: 평범한 tmux 명령        stdout: %begin/%end, %output, %layout-change ...
-  │  (refresh-client -C, send-keys) │
-  ▼                                 ▼
-  │   tmux 세션 안에서 사용자가:
+  │  stdin: plain tmux commands       stdout: %begin/%end, %output, %layout-change ...
+  │  (refresh-client -C, send-keys)   │
+  ▼                                   ▼
+  │   Inside the tmux session the user runs:
   │     $ claude   (agent teams, split-pane)
-  │        └─ claude가 tmux에 split-window / send-keys 명령 발행
-  │             └─ tmux가 pane %2,%3... 생성, 각 pane에서 agent 프로세스 실행
+  │        └─ claude issues split-window / send-keys commands to tmux
+  │             └─ tmux creates panes %2,%3..., running an agent process in each pane
   │
   │   tmux ──▶ Damson:  %window-add @1
   │                     %layout-change @1 <layout> ...
-  │                     %output %2 <agent2 출력>
-  │                     %output %3 <agent3 출력>
+  │                     %output %2 <agent2 output>
+  │                     %output %3 <agent3 output>
   ▼
-Damson가 위 알림을 해석:
-  %window-add  → 새 Tab
-  %layout-change → PaneTree 재조정(네이티브 split)
-  %output %N   → 해당 pane의 Grid에 bytes 주입
-  → 사용자는 Damson 네이티브 패널에서 여러 agent를 동시에 본다
-키 입력 → Damson가 send-keys -t %N 으로 tmux에 전달
-리사이즈 → Damson가 refresh-client -C <w>,<h> 로 tmux에 전달
+Damson interprets the notifications above:
+  %window-add  → new Tab
+  %layout-change → readjust PaneTree (native splits)
+  %output %N   → inject bytes into that pane's Grid
+  → the user sees multiple agents simultaneously in Damson's native panes
+Key input → Damson forwards to tmux via send-keys -t %N
+Resize → Damson forwards to tmux via refresh-client -C <w>,<h>
 ```
 
-Claude Code 자신은 `-CC` protocol을 전혀 모른다. 그저 tmux 명령을 쏠 뿐이고, control protocol은
-tmux와 Damson 사이의 일이다.
+Claude Code itself knows nothing about the `-CC` protocol. It just fires tmux commands; the control protocol
+is strictly between tmux and Damson.
 
 ---
 
-## 4. control mode 프로토콜 요약
+## 4. Control Mode Protocol Summary
 
-출처: https://github.com/tmux/tmux/wiki/Control-Mode
+Source: https://github.com/tmux/tmux/wiki/Control-Mode
 
-### 4.1 명령 프레이밍
+### 4.1 Command framing
 
-control client(Damson)가 stdin으로 보낸 모든 tmux 명령의 응답은 다음으로 감싸진다.
+The response to every tmux command the control client (Damson) sends on stdin is wrapped as follows.
 
 ```
 %begin <timestamp> <command-number> <flags>
-... 명령 출력 (성공 시) ...
+... command output (on success) ...
 %end   <timestamp> <command-number> <flags>
 ```
 
-실패 시 `%end` 대신 `%error <timestamp> <command-number> <flags>`. begin/end의 `timestamp`/`command-number`/`flags`는
-서로 매칭된다 → 어느 명령에 대한 응답인지 식별 가능.
+On failure, `%error <timestamp> <command-number> <flags>` instead of `%end`. The `timestamp`/`command-number`/`flags`
+of begin/end match each other → the response can be matched to the command it belongs to.
 
-### 4.2 출력 알림
+### 4.2 Output notifications
 
-- `%output %<paneid> <data>` — pane 출력.
-  **인코딩**: ASCII 32 미만 바이트와 `\`는 octal escape로 치환된다 (CR=`\015`, LF=`\012`, backslash=`\134`).
-  그 외 바이트는 verbatim (raw escape sequence를 포함할 수 있다). → Damson는 디코드 후 그대로 해당 pane의 VTParser/Grid에 먹인다.
-- `%extended-output %<pane> <ms> : <data>` — lag(지연) 정보가 붙은 출력. flow control(아래)과 함께 쓰인다.
+- `%output %<paneid> <data>` — pane output.
+  **Encoding**: bytes below ASCII 32 and `\` are replaced with octal escapes (CR=`\015`, LF=`\012`, backslash=`\134`).
+  All other bytes are verbatim (may include raw escape sequences). → Damson decodes and feeds them straight into that pane's VTParser/Grid.
+- `%extended-output %<pane> <ms> : <data>` — output annotated with lag information. Used together with flow control (below).
 
-### 4.3 layout / window 알림
+### 4.3 Layout / window notifications
 
 - `%window-add @<win>`
 - `%window-close @<win>`
 - `%window-renamed @<win> <name>`
 - `%unlinked-window-add/-close/-renamed @<win>`
-- `%window-pane-changed @<win> %<pane>` — window의 active pane 변경
-- `%layout-change @<win> <layout> <visible-layout> <flags>` — **핵심**. window의 pane 배치가 바뀜.
+- `%window-pane-changed @<win> %<pane>` — window's active pane changed
+- `%layout-change @<win> <layout> <visible-layout> <flags>` — **the key one**. The window's pane arrangement changed.
 
-### 4.4 session 알림
+### 4.4 Session notifications
 
 - `%session-changed $<sid> <name>`
 - `%session-renamed <name>`
@@ -126,81 +126,81 @@ control client(Damson)가 stdin으로 보낸 모든 tmux 명령의 응답은 다
 - `%session-window-changed $<sid> @<win>`
 - `%client-session-changed`
 
-### 4.5 기타
+### 4.5 Miscellaneous
 
-- `%pane-mode-changed %<pane>` — pane이 copy-mode 등으로 진입/이탈
+- `%pane-mode-changed %<pane>` — a pane entered/left copy-mode, etc.
 - `%subscription-changed`
-- `%exit` — control client가 `-CC`에서 빠져나감
+- `%exit` — the control client exits `-CC`
 
-### 4.6 flow control
+### 4.6 Flow control
 
 - tmux → client: `%pause %<pane>` / `%continue %<pane>`
 - client → tmux: `refresh-client -A '%<pane>:continue|pause|off'`
-- 활성화: `refresh-client -f pause-after=N` (N초 이상 lag면 pause)
-- 출력 억제: `refresh-client -f no-output`
+- Enable: `refresh-client -f pause-after=N` (pause if lag exceeds N seconds)
+- Suppress output: `refresh-client -f no-output`
 
-### 4.7 ID 규칙
+### 4.7 ID conventions
 
 - session `$N`, window `@N`, pane `%N`.
-- **항상 name/index가 아니라 ID를 쓴다** (name/index는 변할 수 있음).
+- **Always use IDs, never names/indexes** (names/indexes can change).
 
 ### 4.8 client → tmux
 
-- control client의 stdin에 **평범한 tmux 명령**을 한 줄씩 쓴다.
-- 클라이언트 크기 설정: `refresh-client -C <w>,<h>`.
-- 입력 전달: `send-keys -t %<pane>` (`-l` literal, `-H` hex).
+- Write **plain tmux commands**, one per line, to the control client's stdin.
+- Set client size: `refresh-client -C <w>,<h>`.
+- Forward input: `send-keys -t %<pane>` (`-l` literal, `-H` hex).
 
-### 4.9 layout string 포맷
+### 4.9 Layout string format
 
-`%layout-change`가 싣는 layout 문자열:
+The layout string carried by `%layout-change`:
 
-- 단일 pane: `<checksum>,<WxH>,<x>,<y>,<paneid>`
-- 좌우(horizontal) 분할: children을 `{...}`로 묶음
-- 상하(vertical) 분할: children을 `[...]`로 묶음
-- **N-ary 중첩**이다. 예: `e7b2,80x24,0,0{40x24,0,0,1,39x24,41,0,2}`
+- Single pane: `<checksum>,<WxH>,<x>,<y>,<paneid>`
+- Side-by-side (horizontal) split: children wrapped in `{...}`
+- Top-bottom (vertical) split: children wrapped in `[...]`
+- It is **N-ary and nested**. Example: `e7b2,80x24,0,0{40x24,0,0,1,39x24,41,0,2}`
 
-이 N-ary 구조를 Damson의 **BINARY** PaneTree로 매핑하는 게 §5의 핵심 난제.
+Mapping this N-ary structure onto Damson's **BINARY** PaneTree is the central challenge of §5.
 
 ---
 
-## 5. Damson 매핑
+## 5. Damson Mapping
 
-| tmux 개념 | Damson 개념 | 메커니즘 |
+| tmux concept | Damson concept | Mechanism |
 |---|---|---|
 | window `@N` | `Tab` (`CompactWindowController.Tab`) | `%window-add`→`addTab`, `%window-close`→`closeTab` |
-| pane `%N` | `PaneNode.leaf(session:surface:)` (`PaneTree.swift`) | leaf 하나당 pane id `%N` 바인딩 |
-| `%output %N <data>` | 해당 leaf의 `DamsonSession`에 bytes 주입 → `Grid` | octal 디코드 후 `session`의 backend가 `onData`를 통해 주입 (§6) |
-| `%layout-change @N` | 해당 Tab의 `PaneTreeView` 재조정 | layout string → BINARY tree로 reconcile |
-| 키 입력 | tmux `send-keys -t %N` | local PTY write 대신 control client stdin에 명령 |
-| 리사이즈 | tmux `refresh-client -C <w>,<h>` | local PTY `ioctl(TIOCSWINSZ)` 대신 |
+| pane `%N` | `PaneNode.leaf(session:surface:)` (`PaneTree.swift`) | each leaf is bound to a pane id `%N` |
+| `%output %N <data>` | inject bytes into that leaf's `DamsonSession` → `Grid` | after octal decode, the `session`'s backend injects via `onData` (§6) |
+| `%layout-change @N` | readjust that Tab's `PaneTreeView` | reconcile layout string → BINARY tree |
+| Key input | tmux `send-keys -t %N` | command on the control client stdin instead of a local PTY write |
+| Resize | tmux `refresh-client -C <w>,<h>` | instead of local PTY `ioctl(TIOCSWINSZ)` |
 
-### 5.1 BINARY vs N-ary layout 매핑 (핵심 난제)
+### 5.1 BINARY vs N-ary layout mapping (the central challenge)
 
-- tmux layout은 **N-ary**: 한 split group에 child가 2개 이상일 수 있다 (`{a,b,c}`).
-- Damson PaneTree는 **BINARY**: `case split(direction, first, second, ratio)` — 항상 자식 2개 (`PaneTree.swift` ~13-50).
+- tmux layouts are **N-ary**: a split group can have 2 or more children (`{a,b,c}`).
+- Damson's PaneTree is **BINARY**: `case split(direction, first, second, ratio)` — always two children (`PaneTree.swift` ~13-50).
 
-**제안 전략 (P2)**: N-ary group을 **right-leaning binary chain**으로 펼친다.
+**Proposed strategy (P2)**: unroll an N-ary group into a **right-leaning binary chain**.
 `{a,b,c}` (horizontal) → `split(.horizontal, a, split(.horizontal, b, c))`.
-ratio는 layout string의 `WxH`로부터 각 child의 폭/높이 비율을 계산해 채운다.
-reconcile 시:
+Ratios are filled in by computing each child's width/height proportion from the `WxH` in the layout string.
+During reconcile:
 
-1. tmux layout을 파싱해 "원하는 트리"를 만든다 (pane id가 leaf 식별자).
-2. 현재 Damson PaneTree와 **pane id 기준으로 diff**: 새 pane id → leaf 생성(빈 Grid), 사라진 id → `closeLeaf`,
-   구조 변경 → split 재배치.
-3. ratio만 바뀐 경우는 `rebuild(animation:)`로 비율만 갱신 (트리 구조 보존).
+1. Parse the tmux layout into a "desired tree" (pane ids are the leaf identifiers).
+2. **Diff against the current Damson PaneTree by pane id**: new pane id → create a leaf (empty Grid), vanished id → `closeLeaf`,
+   structural change → rearrange splits.
+3. If only ratios changed, update just the ratios via `rebuild(animation:)` (tree structure preserved).
 
-reconcile는 idempotent해야 한다 (같은 layout이 두 번 와도 안전). pane id가 stable identity이므로 가능.
+Reconcile must be idempotent (safe even if the same layout arrives twice). Possible because pane ids are stable identities.
 
-right-leaning chain은 사용자가 Damson에서 직접 리사이즈할 때 약간 부자연스러울 수 있다 →
-P2 이후 필요하면 PaneTree를 N-ary로 일반화하는 것도 고려 (별도 작업).
+A right-leaning chain can feel slightly unnatural when the user resizes directly in Damson →
+after P2, consider generalizing the PaneTree to N-ary if needed (separate work).
 
 ---
 
-## 6. 새 컴포넌트
+## 6. New Components
 
-### 6.1 `SessionIOBackend` protocol (P0 — 이 문서가 명세하는 seam)
+### 6.1 `SessionIOBackend` protocol (P0 — the seam this document specifies)
 
-`DamsonSession`이 의존하는 I/O 표면을 추상화한다. local forkpty와 tmux pane이 모두 이 protocol로 들어온다.
+Abstracts the I/O surface `DamsonSession` depends on. Both the local forkpty and a tmux pane plug into this protocol.
 
 ```swift
 /// A pluggable source/sink of terminal bytes for a DamsonSession.
@@ -220,16 +220,16 @@ public protocol SessionIOBackend: AnyObject {
 }
 ```
 
-`PTYHost`(또는 얇은 `LocalPTYBackend` 어댑터)가 이 protocol을 conform한다. P0 단계에서는 `PTYHost` 자체가
-이미 이 표면을 그대로 갖고 있으므로 **직접 conform**시킨다 (어댑터 불필요).
+`PTYHost` (or a thin `LocalPTYBackend` adapter) conforms to this protocol. At the P0 stage, `PTYHost` itself
+already exposes exactly this surface, so we make it **conform directly** (no adapter needed).
 
 ### 6.2 `TmuxControlClient` (P1+)
 
-`tmux -CC`를 spawn하고, stdout을 라인 파싱해 control 알림을 해석, stdin에 명령을 쓴다.
+Spawns `tmux -CC`, line-parses stdout to interpret control notifications, and writes commands to stdin.
 
 ```swift
 public final class TmuxControlClient {
-    // 한 control client = 한 PTYHost (tmux -CC를 forkpty로 띄움)
+    // one control client = one PTYHost (tmux -CC launched via forkpty)
     public var onWindowAdd: ((_ window: TmuxWindowID) -> Void)?
     public var onWindowClose: ((_ window: TmuxWindowID) -> Void)?
     public var onLayoutChange: ((_ window: TmuxWindowID, _ layout: TmuxLayout) -> Void)?
@@ -239,31 +239,31 @@ public final class TmuxControlClient {
     public func attach(target: String?) throws        // tmux -CC [attach|new]
     public func sendKeys(to pane: TmuxPaneID, data: Data)   // send-keys -t %N -H ...
     public func setClientSize(cols: Int, rows: Int)         // refresh-client -C w,h
-    public func sendCommand(_ line: String)                 // raw tmux 명령
+    public func sendCommand(_ line: String)                 // raw tmux command
 }
 ```
 
-`%output`의 octal escape 디코더, `%begin/%end/%error` 프레이밍 매칭, layout string 파서가 여기 포함된다.
+The octal escape decoder for `%output`, `%begin/%end/%error` framing matching, and the layout string parser live here.
 
 ### 6.3 `TmuxPaneBackend` (P1+)
 
-특정 pane id `%N`에 묶인 `SessionIOBackend` 구현. `spawn`은 no-op(이미 tmux가 띄움),
-`write`는 `client.sendKeys`, `resize`는 client 전체 리사이즈로 위임, `onData`는 `client.onPaneOutput`이 호출.
+A `SessionIOBackend` implementation bound to a specific pane id `%N`. `spawn` is a no-op (tmux already launched it),
+`write` goes through `client.sendKeys`, `resize` delegates to a full-client resize, and `onData` is invoked by `client.onPaneOutput`.
 
 ```swift
 final class TmuxPaneBackend: SessionIOBackend {
     init(client: TmuxControlClient, pane: TmuxPaneID) { ... }
     // write → client.sendKeys(to: pane, ...)
-    // onData ← client가 %output %pane 받을 때 호출
-    // terminate → kill-pane -t %pane (또는 무시)
+    // onData ← invoked when client receives %output %pane
+    // terminate → kill-pane -t %pane (or ignore)
 }
 ```
 
-### 6.4 layout reconciler (P2+)
+### 6.4 Layout reconciler (P2+)
 
 ```swift
 struct TmuxLayoutReconciler {
-    /// tmux layout string → 원하는 BINARY 트리로 변환 후 PaneTreeView에 적용.
+    /// Converts a tmux layout string into the desired BINARY tree, then applies it to the PaneTreeView.
     func reconcile(_ layout: TmuxLayout, into tab: PaneTreeView,
                    makeSession: (TmuxPaneID) -> DamsonSession)
 }
@@ -271,420 +271,424 @@ struct TmuxLayoutReconciler {
 
 ---
 
-## 7. 단계별 로드맵 (P0–P3)
+## 7. Phased Roadmap (P0–P3)
 
-### P0 — backend abstraction (이 PR)
+### P0 — backend abstraction (this PR)
 
-- `SessionIOBackend` protocol 도입. `PTYHost`가 conform. `DamsonSession`이 concrete `PTYHost` 대신 protocol 타입을 보유.
-- 기본 생성은 여전히 local PTY → **런타임 동작 byte-for-byte 동일**.
-- **exit 기준**: 동작 변화 0, `DamsonSession`/`DamsonTerminalView` public API 불변, `swift build` + `swift test` 통과.
+- Introduce the `SessionIOBackend` protocol. `PTYHost` conforms. `DamsonSession` holds the protocol type instead of the concrete `PTYHost`.
+- Default construction is still a local PTY → **runtime behavior byte-for-byte identical**.
+- **Exit criteria**: zero behavior change, `DamsonSession`/`DamsonTerminalView` public API unchanged, `swift build` + `swift test` pass.
 
 ### P1 — single `-CC` session attach
 
-- `TmuxControlClient` 구현: `tmux -CC` spawn, `%begin/%end/%error` 프레이밍, `%output` octal 디코드,
-  `%window-add`/`%window-close`/`%session-changed` 처리.
-- tmux window → Damson Tab 매핑. `%output`→ 해당 pane Grid 주입(`TmuxPaneBackend`).
-- 이 단계에서 **split은 tmux가 텍스트로 그려도 된다** (네이티브 split 아님). 즉 한 window = 한 Tab = 한 pane(또는 tmux가 ASCII로 그린 분할).
-- **exit 기준**: `tmux -CC`로 attach한 세션이 Damson 탭으로 뜨고, 입력/출력/타이틀/종료가 정상.
+- Implement `TmuxControlClient`: spawn `tmux -CC`, `%begin/%end/%error` framing, `%output` octal decoding,
+  handle `%window-add`/`%window-close`/`%session-changed`.
+- Map tmux window → Damson Tab. `%output` → inject into that pane's Grid (`TmuxPaneBackend`).
+- At this stage, **splits may still be drawn by tmux as text** (not native splits). That is, one window = one Tab = one pane (or tmux's ASCII-drawn splits).
+- **Exit criteria**: a session attached via `tmux -CC` shows up as a Damson tab, with input/output/title/exit working correctly.
 
-### P2 — `%layout-change` → 네이티브 split
+### P2 — `%layout-change` → native splits
 
-- layout string 파서 + `TmuxLayoutReconciler` (BINARY↔N-ary, §5.1).
-- `%layout-change`를 받아 PaneTree를 재조정 → **agent-team 패널이 네이티브 동시 패널로 보인다** (이 단계가 목표 달성 지점).
-- pane id 기준 diff, idempotent reconcile.
-- **exit 기준**: `tmux split-window`(또는 agent teams split-pane)가 Damson 네이티브 split으로 렌더, 리사이즈/포커스 동작.
+- Layout string parser + `TmuxLayoutReconciler` (BINARY↔N-ary, §5.1).
+- Receive `%layout-change` and readjust the PaneTree → **agent-team panes appear as native simultaneous panes** (this stage is where the goal is achieved).
+- Diff by pane id, idempotent reconcile.
+- **Exit criteria**: `tmux split-window` (or agent teams split-pane) renders as Damson native splits, with resize/focus working.
 
-### P3 — 협상 / 자동화 / 마감
+### P3 — negotiation / automation / polish
 
-- resize 협상: `refresh-client -C <w>,<h>`. Damson 셀 크기 ↔ tmux 셀 크기 정합.
-- flow control: `%pause`/`%continue`, `refresh-client -f pause-after=N`.
-- `tmux -CC` handshake **자동 감지** (iTerm2 스타일: DCS tmux escape 감지 시 자동으로 control mode 진입).
-- copy-mode / scrollback 접근.
-- **exit 기준**: 큰 출력에서 끊김 없음, 윈도우 리사이즈 자연스러움, 일반 명령으로 `tmux -CC` 띄우면 자동 통합.
-
----
-
-## 8. 리스크 / 제약
-
-- **control protocol long tail**: VTParser가 그랬듯, control mode도 코너 케이스(unlinked window, subscription, pane-mode)가
-  많다. P1은 핵심 알림만, 나머지는 점진적으로.
-- **BINARY ↔ N-ary layout**: §5.1. right-leaning chain은 임시 해법이며 사용자 리사이즈 UX가 어색할 수 있다.
-  최종적으로 PaneTree를 N-ary로 일반화할지 여부는 P2 결과를 보고 결정.
-- **iTerm2가 물려준 제약** (출처: https://iterm2.com/documentation-tmux-integration.html):
-  - tmux-backed 탭에 **non-tmux split pane을 섞을 수 없다**. 한 Tab은 전부 tmux이거나 전부 local.
-  - **셀 크기 불일치**로 pane에 빈 영역이 생길 수 있다 (Damson 셀 크기 ≠ tmux가 가정하는 크기).
-  - **scrollback이 네이티브만큼 빠르지 않다** — tmux copy-mode를 거쳐야 한다.
-- **Claude Code가 tmux를 띄우는 방식**: Claude Code는 **이미 tmux 세션 안**에 있어야 split-pane을 쓴다.
-  즉 사용자가 Damson에서 `tmux -CC`로 세션을 호스팅하고 그 안에서 `claude`를 실행해야 한다.
-  Damson가 tmux를 자동 spawn해 줄지(편의), 사용자가 수동으로 할지는 P3 자동 감지에서 다룬다.
-- **프로세스 모델 변화**: 현재 Damson는 단일 GUI 프로세스가 모든 PTY를 소유한다(daemon 없음).
-  tmux 통합 시 tmux server가 별도 프로세스로 생존하므로 — Damson가 죽어도 tmux 세션은 남는다(영속성 보너스).
-  단 `TmuxControlClient`의 생명주기와 Tab/PaneTree 생명주기 정합을 주의해야 한다.
+- Resize negotiation: `refresh-client -C <w>,<h>`. Reconcile Damson cell size ↔ tmux cell size.
+- Flow control: `%pause`/`%continue`, `refresh-client -f pause-after=N`.
+- **Auto-detection** of the `tmux -CC` handshake (iTerm2-style: enter control mode automatically when the DCS tmux escape is detected).
+- copy-mode / scrollback access.
+- **Exit criteria**: no stalls under heavy output, window resizing feels natural, launching `tmux -CC` as an ordinary command integrates automatically.
 
 ---
 
-## 9. P0 상세 설계 (Deliverable 2의 명세)
+## 8. Risks / Constraints
 
-목표: **동작 변화 0**으로 backend seam을 넣는다.
+- **Control protocol long tail**: as with the VTParser, control mode has many corner cases
+  (unlinked window, subscription, pane-mode). P1 covers only the core notifications; the rest incrementally.
+- **BINARY ↔ N-ary layout**: §5.1. The right-leaning chain is a stopgap and user resize UX may feel awkward.
+  Whether to ultimately generalize the PaneTree to N-ary will be decided after seeing P2 results.
+- **Constraints inherited from iTerm2** (source: https://iterm2.com/documentation-tmux-integration.html):
+  - **Non-tmux split panes cannot be mixed** into a tmux-backed tab. A Tab is either all tmux or all local.
+  - **Cell size mismatches** can leave blank regions in panes (Damson cell size ≠ the size tmux assumes).
+  - **Scrollback is not as fast as native** — you have to go through tmux copy-mode.
+- **How Claude Code launches tmux**: Claude Code must **already be inside a tmux session** to use split-pane.
+  That is, the user hosts a session via `tmux -CC` in Damson and runs `claude` inside it.
+  Whether Damson auto-spawns tmux (convenience) or the user does it manually is covered by P3 auto-detection.
+- **Process model change**: today Damson is a single GUI process that owns all PTYs (no daemon).
+  With tmux integration the tmux server survives as a separate process — tmux sessions outlive a Damson crash (a persistence bonus).
+  But the lifecycle of `TmuxControlClient` must be kept consistent with the Tab/PaneTree lifecycle.
 
-### 9.1 `PTYHost`가 외부에 노출하는 실사용 표면 (검증됨)
+---
 
-`grep`으로 확인한, `PTYHost` 외부(주로 `DamsonSession`)가 실제로 쓰는 멤버:
+## 9. P0 Detailed Design (the spec for Deliverable 2)
 
-- 콜백: `onData: ((Data) -> Void)?`, `onExit: ((Int32) -> Void)?`
-- 메서드: `spawn(argv:env:cwd:cols:rows:)`, `write(_:)`, `resize(cols:rows:)`, `terminate()`
-- 쿼리: `childWorkingDirectory: String?`, `isRunningForegroundJob: Bool`
+Goal: insert the backend seam with **zero behavior change**.
 
-`childPID`/`masterFD`는 **`PTYHost.swift` 내부에서만** 쓰인다 (`main.swift`의 언급은 주석뿐).
-→ protocol에 넣지 않는다.
+### 9.1 The actual surface of `PTYHost` used externally (verified)
 
-테스트(`Tests/DamsonTerminalTests/PTYResizeDiagTests.swift`)는 `PTYHost`를 **concrete 타입**으로 직접 쓴다 →
-`PTYHost`의 public API를 그대로 두면 영향 없음.
+Members actually used outside `PTYHost` (mostly by `DamsonSession`), confirmed via `grep`:
 
-### 9.2 protocol 정의 (`Sources/DamsonTerminal/SessionIOBackend.swift`, 신규)
+- Callbacks: `onData: ((Data) -> Void)?`, `onExit: ((Int32) -> Void)?`
+- Methods: `spawn(argv:env:cwd:cols:rows:)`, `write(_:)`, `resize(cols:rows:)`, `terminate()`
+- Queries: `childWorkingDirectory: String?`, `isRunningForegroundJob: Bool`
 
-§6.1의 `SessionIOBackend`. `spawn`의 `cols`/`rows`는 default arg를 protocol 요구사항에 둘 수 없으므로
-명시 파라미터로 두고, 호출부(`DamsonSession`)는 항상 값을 넘긴다.
+`childPID`/`masterFD` are used **only inside `PTYHost.swift`** (the mention in `main.swift` is just a comment).
+→ Not included in the protocol.
 
-### 9.3 `PTYHost` conform
+Tests (`Tests/DamsonTerminalTests/PTYResizeDiagTests.swift`) use `PTYHost` directly as a **concrete type** →
+leaving `PTYHost`'s public API untouched means no impact.
 
-`PTYHost`의 현재 시그니처가 protocol과 정확히 일치한다 (`spawn`만 default arg가 있는데, default가 있어도
-protocol 요구를 충족한다). → `extension PTYHost: SessionIOBackend {}` 한 줄, 또는 선언부에 `: SessionIOBackend` 추가.
-어댑터(`LocalPTYBackend`)는 불필요 — 가장 덜 침습적인 방법.
+### 9.2 Protocol definition (`Sources/DamsonTerminal/SessionIOBackend.swift`, new)
 
-### 9.4 `DamsonSession` 변경
+The `SessionIOBackend` from §6.1. Since `spawn`'s `cols`/`rows` cannot carry default args in a protocol requirement,
+they are explicit parameters, and the call site (`DamsonSession`) always passes values.
+
+### 9.3 `PTYHost` conformance
+
+`PTYHost`'s current signatures match the protocol exactly (`spawn` is the only one with default args, and
+defaults still satisfy the protocol requirement). → One line: `extension PTYHost: SessionIOBackend {}`, or add `: SessionIOBackend` to the declaration.
+No adapter (`LocalPTYBackend`) needed — the least invasive option.
+
+### 9.4 `DamsonSession` changes
 
 - `private let pty = PTYHost()` → `private let pty: SessionIOBackend`.
-- `init`에서 `self.pty = LocalPTYBackend()` 대신, 가장 단순하게 `self.pty = PTYHost()`로 기본 생성.
-  (protocol 타입 변수에 concrete 인스턴스를 대입 — 동작 동일.)
-- 나머지 `pty.onData`/`pty.onExit`/`pty.spawn`/`pty.write`/`pty.resize`/`pty.terminate`/
-  `pty.childWorkingDirectory`/`pty.isRunningForegroundJob` 호출은 **그대로** (모두 protocol에 포함).
-- public API(`write`, `resize`, `terminate`, `currentWorkingDirectory`, `hasRunningForegroundJob`, 등) **불변**.
-- `// TODO(tmux P1): TmuxPaneBackend will conform to SessionIOBackend` 주석을 backend 선언 옆에 남긴다.
+- In `init`, instead of `self.pty = LocalPTYBackend()`, simply default-construct with `self.pty = PTYHost()`.
+  (Assigning a concrete instance to a protocol-typed variable — identical behavior.)
+- All other calls — `pty.onData`/`pty.onExit`/`pty.spawn`/`pty.write`/`pty.resize`/`pty.terminate`/
+  `pty.childWorkingDirectory`/`pty.isRunningForegroundJob` — stay **as-is** (all included in the protocol).
+- Public API (`write`, `resize`, `terminate`, `currentWorkingDirectory`, `hasRunningForegroundJob`, etc.) **unchanged**.
+- Leave a `// TODO(tmux P1): TmuxPaneBackend will conform to SessionIOBackend` comment next to the backend declaration.
 
-### 9.5 비-변경 보장
+### 9.5 Non-change guarantees
 
-- 새 파일 1개(`SessionIOBackend.swift`) + `PTYHost.swift`에 conform 한 줄 + `DamsonSession.swift`의 타입 한 줄.
-- 그 외 파일 무수정. tmux backend 미구현. reversible.
-- 검증: `swift build` 성공, `swift test` 통과 (baseline green).
+- One new file (`SessionIOBackend.swift`) + one conformance line in `PTYHost.swift` + one type change line in `DamsonSession.swift`.
+- No other files modified. No tmux backend implemented. Reversible.
+- Verification: `swift build` succeeds, `swift test` passes (baseline green).
 
 ---
 
-## 10. P1 구현 노트 (실제 구현됨)
+## 10. P1 Implementation Notes (actually implemented)
 
-### 10.1 새 파일 / 타입
+### 10.1 New files / types
 
 - `Sources/DamsonTerminal/TmuxControlProtocol.swift`
-  - ID 타입 `TmuxSessionID`/`TmuxWindowID`/`TmuxPaneID` (`$N`/`@N`/`%N` 토큰).
-  - `TmuxLayout`(P1은 raw layout 문자열 보존), `TmuxCommandReply`, `TmuxControlEvent`.
-  - `TmuxControlParser` — **순수 로직, I/O 없음**. 한 줄씩 먹여 이벤트를 받는다. `%begin/%end/%error`
-    프레이밍(블록 안의 줄은 reply body로 모음), `%output` octal 디코드(`decodeOctalEscaped`),
-    각 알림 파서, 알 수 없는 `%`/비-`%` 줄은 `.unhandled`로 흘려 crash 없음.
+  - ID types `TmuxSessionID`/`TmuxWindowID`/`TmuxPaneID` (`$N`/`@N`/`%N` tokens).
+  - `TmuxLayout` (P1 preserves the raw layout string), `TmuxCommandReply`, `TmuxControlEvent`.
+  - `TmuxControlParser` — **pure logic, no I/O**. Feed it one line at a time and receive events. Handles `%begin/%end/%error`
+    framing (lines inside a block are collected as the reply body), `%output` octal decoding (`decodeOctalEscaped`),
+    each notification parser; unknown `%`/non-`%` lines flow through as `.unhandled` so nothing crashes.
 - `Sources/DamsonTerminal/TmuxControlClient.swift`
-  - `PTYHost`(기본 backend)로 `tmux -C` spawn(P1.1에서 `-CC`→`-C`, §10.4.1) → stdout을 `\n` 단위로 잘라(끝의 `\r` 제거) 파서에 먹이고,
-    이벤트를 public 콜백으로 팬아웃. writers: `sendKeys(to:data:)`(`send-keys -t %N -H <hex>`),
-    `setClientSize(cols:rows:)`(`refresh-client -C w,h`, 동일 크기 coalesce), `sendCommand`, `killPane`.
+  - Spawns `tmux -C` via `PTYHost` (the default backend) (`-CC`→`-C` in P1.1, §10.4.1) → splits stdout on `\n` (stripping trailing `\r`), feeds the parser,
+    and fans events out to public callbacks. Writers: `sendKeys(to:data:)` (`send-keys -t %N -H <hex>`),
+    `setClientSize(cols:rows:)` (`refresh-client -C w,h`, coalescing identical sizes), `sendCommand`, `killPane`.
 - `Sources/DamsonTerminal/TmuxPaneBackend.swift`
-  - `SessionIOBackend` 구현. `spawn`=no-op, `write`→`sendKeys`, `resize`→client 크기,
-    `deliver(_:)`로 `%output` 주입, `terminate`→`kill-pane`.
+  - `SessionIOBackend` implementation. `spawn`=no-op, `write`→`sendKeys`, `resize`→client size,
+    `deliver(_:)` injects `%output`, `terminate`→`kill-pane`.
 - `Sources/damson/TmuxIntegrationController.swift`
-  - `TmuxControlClient` + 전용 Compact 창 소유. window→tab, active pane→`TmuxPaneBackend`-backed
-    `DamsonSession` 매핑. `%window-pane-changed`/`%layout-change`/`%output` 중 먼저 오는 것으로 pane을
-    바인딩하고 탭을 lazily 생성. `firstPaneID(in:)`로 layout 문자열의 첫 leaf pane id 추출.
+  - Owns the `TmuxControlClient` + a dedicated Compact window. Maps window→tab, active pane→a `TmuxPaneBackend`-backed
+    `DamsonSession`. Binds the pane to whichever of `%window-pane-changed`/`%layout-change`/`%output` arrives first
+    and creates tabs lazily. `firstPaneID(in:)` extracts the first leaf pane id from the layout string.
 
-변경(추가만): `DamsonSession`에 backend 주입 init 추가(기본 경로 불변), `CompactWindowController`에
-`addExternalTab(session:)`/`closeTab(matching:)` 추가, `main.swift`에 tmux 메뉴 + `attachTmux(_:)` 추가.
+Changes (additive only): a backend-injecting init added to `DamsonSession` (default path unchanged),
+`addExternalTab(session:)`/`closeTab(matching:)` added to `CompactWindowController`, tmux menu + `attachTmux(_:)` added to `main.swift`.
 
-### 10.2 수동 테스트 절차 (tmux + 디스플레이 필요 — CI에서 불가)
+### 10.2 Manual test procedure (requires tmux + a display — not possible in CI)
 
-1. tmux 설치: `brew install tmux` (빌드 머신엔 미설치).
-2. 앱 실행: `DAMSON_NO_TRAMPOLINE=1 swift run damson` (또는 빌드된 .app).
-3. 메뉴 **tmux ▸ Attach tmux (-CC)…** 선택.
-   - 대상 세션 이름을 비워두면 **새 세션**(`tmux -C new-session`, P1.1부터 `-C`)을 띄운다.
-   - 기존 세션 이름을 넣으면 그 세션에 attach(`tmux -C attach-session -t <name>`).
-4. 기대 동작:
-   - tmux 세션의 각 window가 Damson **탭**으로 뜬다(P1: 한 window=한 tab=active pane 하나).
-   - 탭 안에서 입력 → 셸이 받음(input은 `send-keys`로 전달). 출력/타이틀이 정상 표시.
-   - tmux에서 `tmux new-window`(또는 `Ctrl-b c`) → 새 탭 추가, window 닫으면 탭 닫힘.
-   - 셸 종료(`exit`)/세션 detach(`%exit`) → 탭/통합 teardown.
-5. agent-team 시나리오: 위 tmux 세션 안에서 `claude`를 split-pane으로 실행하면, P1에서는 분할이
-   **tmux가 그린 텍스트 한 패널**로 보인다(네이티브 split은 P2).
+1. Install tmux: `brew install tmux` (not installed on the build machine).
+2. Run the app: `DAMSON_NO_TRAMPOLINE=1 swift run damson` (or the built .app).
+3. Select menu **tmux ▸ Attach tmux (-CC)…**.
+   - Leaving the target session name empty launches a **new session** (`tmux -C new-session`, `-C` as of P1.1).
+   - Entering an existing session name attaches to that session (`tmux -C attach-session -t <name>`).
+4. Expected behavior:
+   - Each window of the tmux session appears as a Damson **tab** (P1: one window = one tab = one active pane).
+   - Typing in the tab → the shell receives it (input is forwarded via `send-keys`). Output/title display correctly.
+   - `tmux new-window` (or `Ctrl-b c`) in tmux → a new tab is added; closing the window closes the tab.
+   - Shell exit (`exit`) / session detach (`%exit`) → tab/integration teardown.
+5. Agent-team scenario: running `claude` in split-pane mode inside that tmux session shows the splits
+   in P1 as **a single pane of tmux-drawn text** (native splits are P2).
 
-### 10.3 P1이 아직 커버하지 않는 것 (P2/P3로 연기)
+### 10.3 What P1 does not yet cover (deferred to P2/P3)
 
-- **네이티브 split reconcile**: `%layout-change`는 파싱해 콜백으로 노출만 하고, PaneTree 재조정은 안 한다.
-  한 window에 pane이 여럿이면 P1은 active pane 하나만 Damson pane으로 보여준다(나머지는 tmux가 텍스트로 그림).
-- **resize 협상**: `setClientSize`로 `refresh-client -C`는 보내지만 Damson 셀 크기 ↔ tmux 셀 크기 정합/
-  per-pane 사이징은 미구현.
-- **flow control**: `%pause`/`%continue`/`%extended-output`은 `.unhandled`로 흘린다.
-- **자동 감지**: DCS tmux escape 감지 후 control mode 자동 진입 없음(메뉴로 수동 트리거).
-- **command-reply 상관**: reply의 command number를 노출만 하고, 보낸 명령과 1:1 매칭/대기는 안 한다.
-- **pane cwd / foreground-job / copy-mode scrollback**: tmux backend는 `childWorkingDirectory=nil`,
+- **Native split reconcile**: `%layout-change` is parsed and exposed via callback only; the PaneTree is not readjusted.
+  If a window has multiple panes, P1 shows only the active pane as a Damson pane (tmux draws the rest as text).
+- **Resize negotiation**: `setClientSize` sends `refresh-client -C`, but Damson cell size ↔ tmux cell size reconciliation /
+  per-pane sizing is unimplemented.
+- **Flow control**: `%pause`/`%continue`/`%extended-output` flow through as `.unhandled`.
+- **Auto-detection**: no automatic entry into control mode after detecting the DCS tmux escape (manually triggered via the menu).
+- **Command-reply correlation**: the reply's command number is exposed only; no 1:1 matching/awaiting against sent commands.
+- **Pane cwd / foreground-job / copy-mode scrollback**: the tmux backend reports `childWorkingDirectory=nil`,
   `isRunningForegroundJob=false`.
 
-### 10.4.1 P1.1 수정 (실기(tmux 설치된 GUI) 테스트로 발견된 두 버그)
+### 10.4.1 P1.1 fixes (two bugs found in real-hardware testing — a GUI with tmux installed)
 
-P1을 실제 tmux로 돌려 보니 빌드 머신(tmux 미설치)에선 못 잡은 두 버그가 나왔다.
+Running P1 against real tmux surfaced two bugs the build machine (no tmux installed) couldn't catch.
 
-**BUG 1 — `-CC` DCS handshake가 첫 프레임을 깨뜨림.**
-`tmux -CC`는 첫 control 줄 앞에 DCS "enter control mode" 시퀀스(`ESC P1000p`)를 **`%begin`에 바로 붙여서**
-보내고, 스트림 끝에 ST(`ESC \`)를 붙인다. 파서가 이를 안 벗겨서 첫 줄이 `\033P1000p%begin …`로 들어와
-`.unhandled`가 되고, **첫 `%begin/%end` reply 블록 전체가 유실**됐다.
-- **선택한 수정 (b)**: `attach()`를 `tmux -CC` → **`tmux -C`(single-C)**로 바꿨다. `-CC`의 DCS wrapper는
-  *호스트 터미널*(사람이 `tmux -CC`를 친 iTerm2 등)이 control mode를 in-band로 감지하라고 붙는 것인데,
-  Damson는 **전용 control client**로 tmux를 spawn하므로 필요 없다. `-C`는 tmux 3.6b에서 검증한 결과
-  **byte-for-byte 동일한** control 알림(`%begin/%end`, `%window-add`, `%output`, `%exit` …)을 wrapper 없이 낸다.
-  Claude Code의 "내가 tmux 안인가?" 감지는 `-C`/`-CC`가 아니라 `$TMUX` env var를 보므로 영향 없다.
-- **방어**: 그래도 파서에 `stripDCSWrapper`를 넣어 stray DCS wrapper(선행 `ESC P…p`, 후행 `ESC \`)를
-  벗긴다 — 누가 `-CC`를 쓰거나 P3 자동 감지가 들어와도 framing이 안 깨지게.
+**BUG 1 — the `-CC` DCS handshake broke the first frame.**
+`tmux -CC` sends a DCS "enter control mode" sequence (`ESC P1000p`) before the first control line, **glued directly
+onto `%begin`**, and appends ST (`ESC \`) at the end of the stream. The parser didn't strip this, so the first line
+arrived as `\033P1000p%begin …`, became `.unhandled`, and **the entire first `%begin/%end` reply block was lost**.
+- **Chosen fix (b)**: changed `attach()` from `tmux -CC` to **`tmux -C` (single-C)**. The `-CC` DCS wrapper exists so
+  the *host terminal* (e.g. iTerm2, where a human typed `tmux -CC`) can detect control mode in-band — but Damson
+  spawns tmux as a **dedicated control client**, so it's unnecessary. Verified against tmux 3.6b: `-C` emits
+  **byte-for-byte identical** control notifications (`%begin/%end`, `%window-add`, `%output`, `%exit` …) without the wrapper.
+  Claude Code's "am I inside tmux?" detection looks at the `$TMUX` env var, not `-C`/`-CC`, so no impact.
+- **Defense**: added `stripDCSWrapper` to the parser anyway to strip a stray DCS wrapper (leading `ESC P…p`, trailing `ESC \`) —
+  so framing won't break even if someone uses `-CC` or P3 auto-detection lands.
 
-**BUG 2 — tmux pane이 Damson 탭에서 빈 화면(검정)으로 뜸.**
-근본 원인은 **client size가 tmux에 전송되지 않음**이었다. 이전 `attach()`는 `lastSize=(cols,rows)`만 기록하고
-`refresh-client -C`를 **보내지 않았다**. tmux는 PTY winsize가 아니라 `refresh-client -C`로만 control-client
-크기를 받으므로, 윈도우가 0/기본 크기로 잡혀 **컨텐츠를 안 그렸다**(실기에서 `capture-pane -p`도 비어 있었음).
-게다가 `setClientSize`의 no-op coalesce가 `lastSize`를 보고 같으면 스킵하므로, 나중에 같은 크기가 와도
-영영 전송되지 않았다.
-- **수정 1 (size)**: `attach()`가 spawn 직후 `setClientSize(cols,rows)`를 **실제로 호출**해 첫
-  `refresh-client -C`를 보낸다. 이때 `lastSize`를 미리 seed하지 **않아** 첫 전송이 coalesce에 먹히지 않게 했다.
-- **수정 2/3 (render path)**: 데이터 경로를 점검한 결과 `%output` → `TmuxControlClient.onPaneOutput`
-  → `TmuxIntegrationController.deliverOutput` → `ensureTab`(첫 output에 lazy 생성) → `TmuxPaneBackend.deliver`
-  → `DamsonSession`의 `onData` → `VTParser` → `Grid`로, **로컬 PTY와 동일한 경로**임을 확인했다(추가 수정 불필요).
-  `deliverOutput`이 `ensureTab`를 먼저 부르므로 첫 output도 유실되지 않는다. 이 경로를 헤드리스로 증명하는
-  통합 테스트(`testPaneOutputReachesDamsonSessionGrid`)를 추가했다 — 실제 tmux `%output`이 `DamsonSession.grid`
-  셀에 도달함을 검증.
-- **남은 검증**: 실제 **화면 렌더**(검정 화면 해소)는 디스플레이+accessibility가 필요해 헤드리스로 확인 불가.
-  데이터 경로는 테스트로 증명했고, on-screen 확인은 GUI 재테스트(부모가 계측 실행)로 남긴다.
+**BUG 2 — tmux panes showed up as a blank (black) screen in a Damson tab.**
+Root cause: **the client size was never sent to tmux**. The previous `attach()` only recorded `lastSize=(cols,rows)`
+and **never sent** `refresh-client -C`. tmux learns the control-client size only via `refresh-client -C`, not the PTY winsize,
+so the window was sized 0/default and **drew no content** (on the real machine, `capture-pane -p` was empty too).
+Worse, `setClientSize`'s no-op coalesce skips when `lastSize` matches, so even when the same size arrived later
+it was never sent.
+- **Fix 1 (size)**: `attach()` now **actually calls** `setClientSize(cols,rows)` right after spawn, sending the first
+  `refresh-client -C`. `lastSize` is deliberately **not** pre-seeded so the first send isn't eaten by the coalesce.
+- **Fix 2/3 (render path)**: auditing the data path confirmed `%output` → `TmuxControlClient.onPaneOutput`
+  → `TmuxIntegrationController.deliverOutput` → `ensureTab` (lazy creation on first output) → `TmuxPaneBackend.deliver`
+  → `DamsonSession`'s `onData` → `VTParser` → `Grid` — **the same path as a local PTY** (no further fixes needed).
+  `deliverOutput` calls `ensureTab` first, so even the first output isn't lost. Added an integration test that proves
+  this path headlessly (`testPaneOutputReachesDamsonSessionGrid`) — verifying that real tmux `%output` reaches
+  `DamsonSession.grid` cells.
+- **Remaining verification**: the actual **on-screen render** (resolving the black screen) needs a display + accessibility,
+  so it can't be confirmed headlessly. The data path is proven by test; on-screen confirmation is left to a GUI retest
+  (parent runs the instrumentation).
 
-### 10.4 설계상 임의 결정 (문서에 없던 것)
+### 10.4 Arbitrary design decisions (not in the original document)
 
-- **input 인코딩**: `send-keys -H <hex>` 선택(`-l` literal 대신). 제어 바이트/셸 메타문자 escape 함정이 없어
-  raw 바이트 전달에 안전.
-- **탭 lazy 생성**: `%window-add`만으로는 pane id를 모르므로, pane이 처음 보이는 시점
-  (`%window-pane-changed`/`%layout-change`/`%output` 중 먼저 오는 것)에 탭+세션을 만든다.
-- **호스트 창**: 기존 창에 섞지 않고 attach마다 전용 `CompactWindowController` 창을 새로 띄운다
-  (iTerm2 제약 §8: 한 탭은 전부 tmux이거나 전부 local).
-
----
-
-## 11. P2 구현 노트 (`%layout-change` → 네이티브 split, 실제 구현됨)
-
-목표 달성 지점: agent-team split-pane이 Damson **네이티브 동시 패널**로 보인다.
-
-### 11.1 실기로 확인한 control-mode 동작 (구현 근거)
-
-tmux 3.6b를 `tmux -C`로 직접 구동해 다음을 확인했고, 이게 P2 설계의 토대다.
-
-- **`refresh-client -C <w>,<h>`가 활성 window의 `%layout-change`를 유발한다.** spawn 직후
-  `attach()`가 보내는 client size 한 방으로, **분할 전 초기 단일 pane도** `%layout-change`로 도착한다
-  → reconcile 진입점을 `%layout-change` **하나로 통일**(P1처럼 `%output`로 탭을 만들 필요 없음).
-- **`split-window`** → `%window-pane-changed @W %N` **다음에** `%layout-change @W <layout>`.
-- **pane를 죽이면** tmux가 그 window의 `%layout-change`를 **다시** 보낸다(남은 pane들로). 즉
-  `%layout-change`가 **트리 구조의 단일 권위**다 — pane 생성·삭제·비율 변경 모두 여기로 수렴.
-- **기존 멀티-window 세션에 attach**하면 tmux는 각 window의 layout을 **자발적으로 보내지 않는다**
-  (`%session-changed`/`%window-renamed`만). 열거하려면 `list-windows -F '#{window_id} #{window_layout}'`를
-  **질의**해야 한다 → 이 enumeration은 P3로 연기(아래 §11.4).
-
-### 11.2 새 파일 / 타입
-
-- `Sources/DamsonTerminal/TmuxLayoutTree.swift` — layout 문자열 파서(**순수 로직**).
-  N-ary 트리(`.leaf(pane,W,H,x,y)` / `.split(orientation,…,children)`)로 파싱. 선행 checksum
-  스트립, `{…}`=horizontal(좌우)·`[…]`=vertical(상하), 중첩·3-children 지원, malformed→nil.
-  `paneIDs`(in-order), `geometry` 헬퍼 제공. 단위 테스트: `TmuxLayoutTreeTests`.
-- `Sources/damson/TmuxLayoutReconciler.swift` — N-ary→**BINARY** 변환(§5.1).
-  split group `{a,b,c}`를 right-leaning chain `split(a,split(b,c))`로 펼치고, 각 split ratio는
-  **분할 축(horizontal=width, vertical=height) 기준 첫 child / 나머지 합**으로 계산해 tmux 비율과 맞춘다.
-  leaf는 `leafFor(paneID)` 클로저로 받아 **기존 PaneNode를 재사용**(세션/surface/grid/scrollback 연속).
-
-### 11.3 변경된 컴포넌트
-
-- **`TmuxIntegrationController` (재작성)** — pane-keyed에서 **window-keyed**로 전환.
-  `windowTrees[@W]→PaneTreeView`(window 하나=탭 하나), `sessions`/`backends`/`paneLeaves`/`paneToWindow`로
-  pane 상태 유지. `applyLayout`→`reconcile(window:layout:)`:
-  ① desired pane마다 `ensurePane`(세션+leaf 재사용/신규, 버퍼된 출력 flush)
-  ② `TmuxLayoutReconciler.build`로 binary 트리 생성
-  ③ 탭 있으면 `PaneTreeView.setRoot(_:active:)`, 없으면 `PaneTreeView(restoredRoot:)`+`adoptExternalTree`
-  ④ 빠진 pane는 `dropPaneRefs`. **idempotent**(같은 layout 두 번 와도 안전).
-  포커스는 `%window-pane-changed`로 `windowActivePane`에 기록해 reconcile 시 복원.
-- **`PaneTreeView.setRoot(_:active:)`** — 전체 트리 교체. 재사용 leaf는 surface/grid를 유지한 채
-  뷰 계층만 새 split 구조로 rebuild. active는 새 트리에 살아있으면 유지, 아니면 첫 leaf.
-- **`CompactWindowController`** — `adoptExternalTree(_:customTitle:)`(이미 만든 멀티-pane 트리를 탭으로),
-  `setExternalTabTitle(matching:title:)`(`%window-renamed` 반영) 추가.
-- **`TmuxPaneBackend.resize`** — 더 이상 무조건 `setClientSize`를 부르지 않고 `onResize` 콜백으로 위임.
-  컨트롤러는 **단독 pane window일 때만** client size로 전달(멀티-pane per-pane 사이징은 P3) →
-  한 pane이 전체 client를 줄여버리는 버그 방지.
-
-### 11.4 P2가 아직 커버하지 않는 것
-
-- **per-pane resize 협상** — **P3-1에서 구현됨(§12).**
-- **기존 멀티-window 세션 attach 열거**: `list-windows` 질의 + command-reply 상관(§11.1) 미구현.
-  주 시나리오(Damson에서 `tmux -C` 새 세션 → 그 안에서 `claude` split)는 `%layout-change`로 완전 동작.
-- **사용자發 pane 닫기/분할(Cmd+W / Cmd+D)** — **P2 폴리시에서 구현됨**: tmux 탭에서 Cmd+D/Cmd+⇧D는
-  `split-window -h/-v`, Cmd+W는 `kill-pane`을 발행하고 tmux가 `%layout-change`로 되돌려 네이티브 split을
-  구동한다(control mode는 `send-keys`가 tmux 키 테이블을 우회하므로 `Ctrl-b` prefix 바인딩이 동작하지
-  않는다 — iTerm2와 동일. 네이티브 단축키가 그 자리를 대신한다).
-
-### 11.5 수동 테스트 절차 (GUI 필요)
-
-1. 앱 실행(빌드된 `/Applications/Damson.app` 또는 `DAMSON_NO_TRAMPOLINE=1 swift run damson`).
-2. 메뉴 **tmux ▸ Attach tmux (-CC)…** → 세션 이름 비우고 새 세션 시작.
-3. 탭 안 셸에서 `tmux split-window -h` (또는 `Ctrl-b %`) → **Damson 네이티브 좌우 split**으로 나뉘어야 함.
-   `Ctrl-b "`(상하)·중첩 분할도 각각 네이티브 split으로. 한 쪽 pane에서 `exit` → split 접힘.
-4. agent-teams: 그 세션 안에서 `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 claude`를 split-pane 모드로
-   → 각 팀원 패널이 Damson 네이티브 동시 패널로 나타나야 함(이 PR의 목표 달성 확인 지점).
-- **헤드리스 증명**: 실제 tmux `split-window`가 2-pane `%layout-change`를 내고 파서가
-  horizontal 2-leaf 트리로 파싱함을 `testSplitWindowYieldsTwoPaneLayout`로 검증.
-  **on-screen 렌더**(네이티브 split 시각 확인)는 디스플레이 필요 → GUI 재테스트로 남긴다.
+- **Input encoding**: chose `send-keys -H <hex>` (over `-l` literal). No control-byte/shell-metacharacter escaping traps,
+  so it's safe for raw byte transport.
+- **Lazy tab creation**: `%window-add` alone doesn't reveal the pane id, so the tab+session are created the first time
+  the pane becomes visible (whichever of `%window-pane-changed`/`%layout-change`/`%output` arrives first).
+- **Host window**: rather than mixing into an existing window, each attach opens a fresh dedicated `CompactWindowController` window
+  (iTerm2 constraint §8: a tab is either all tmux or all local).
 
 ---
 
-## 12. P3-1 구현 노트 (resize 협상, 실제 구현됨)
+## 11. P2 Implementation Notes (`%layout-change` → native splits, actually implemented)
 
-목표: Damson 창을 리사이즈하면 tmux가 pane들을 다시 배치해 창을 꽉 채운다 — **멀티-pane window도**.
+The point where the goal is achieved: agent-team split-pane appears as Damson **native simultaneous panes**.
 
-### 12.1 메커니즘
+### 11.1 Control-mode behavior confirmed on real hardware (basis for the implementation)
 
-1. 각 tmux pane surface가 레이아웃마다 자기 표시 영역의 셀 크기(cols×rows)를 계산해
-   `session.resize`→`TmuxPaneBackend.resize`→**`onResize(pane, cols, rows)`** 콜백으로 컨트롤러에 보고.
-2. 컨트롤러는 `paneSizes[pane]`를 갱신하고, 그 window의 **전체 client 셀 크기**를 재계산:
-   `TmuxLayoutTree.totalCellSize { paneSizes[$0] }` — leaf는 보고된 크기, split은 **분할 축으로 합산
-   + divider당 border cell 1개**(tmux의 pane border 회계와 동일), 반대 축은 max. layout의 모든 pane이
-   아직 크기를 보고하지 않았으면 nil → 반쯤 형성된 크기를 보내지 않는다(예: 방금 split된 pane이
-   레이아웃 전).
-3. `refresh-client -C <cols>,<rows>` 전송(동일 크기 coalesce). tmux가 pane들을 재배치 →
-   `%layout-change` → reconcile → 네이티브 split이 새 비율로 갱신. **fixed point로 수렴**(같은 비율 →
-   같은 픽셀 분할 → 같은 보고 크기).
+Drove tmux 3.6b directly via `tmux -C` and confirmed the following, which is the foundation of the P2 design.
 
-### 12.2 P2와의 차이
+- **`refresh-client -C <w>,<h>` triggers a `%layout-change` for the active window.** With the single client-size
+  command `attach()` sends right after spawn, **even the initial single pane before any split** arrives as a `%layout-change`
+  → the reconcile entry point is **unified into `%layout-change` alone** (no need to create tabs from `%output` as in P1).
+- **`split-window`** → `%window-pane-changed @W %N` **followed by** `%layout-change @W <layout>`.
+- **Killing a pane** makes tmux send that window's `%layout-change` **again** (with the remaining panes). In other words,
+  `%layout-change` is **the single authority on tree structure** — pane creation, deletion, and ratio changes all converge here.
+- **Attaching to an existing multi-window session**, tmux does **not voluntarily send** each window's layout
+  (only `%session-changed`/`%window-renamed`). To enumerate, you must **query** with
+  `list-windows -F '#{window_id} #{window_layout}'` → this enumeration is deferred to P3 (§11.4 below).
 
-- P2: 단독 pane window만 client 크기를 구동(한 pane이 전체 client를 줄이는 버그 방지로 멀티-pane은 무시).
-- P3-1: **layout 구조를 알기 때문에** per-pane 보고를 전체 크기로 올바르게 합성 → 멀티-pane window도
-  리사이즈가 tmux에 반영된다. border cell 회계로 Damson 네이티브 분할(1px divider)과 tmux 셀 경계가
-  ≤1 cell 오차로 맞아 letterbox가 사라진다.
+### 11.2 New files / types
 
-### 12.3 테스트
+- `Sources/DamsonTerminal/TmuxLayoutTree.swift` — layout string parser (**pure logic**).
+  Parses into an N-ary tree (`.leaf(pane,W,H,x,y)` / `.split(orientation,…,children)`). Strips the leading checksum,
+  `{…}`=horizontal (side-by-side) · `[…]`=vertical (top-bottom), supports nesting and 3+ children, malformed→nil.
+  Provides `paneIDs` (in-order) and `geometry` helpers. Unit tests: `TmuxLayoutTreeTests`.
+- `Sources/damson/TmuxLayoutReconciler.swift` — N-ary→**BINARY** conversion (§5.1).
+  Unrolls a split group `{a,b,c}` into a right-leaning chain `split(a,split(b,c))`; each split ratio is computed as
+  **first child / sum of the rest along the split axis (horizontal=width, vertical=height)** to match tmux's proportions.
+  Leaves are obtained via a `leafFor(paneID)` closure so **existing PaneNodes are reused** (session/surface/grid/scrollback continuity).
 
-- `totalCellSize` 산술(단일/horizontal+divider/vertical+divider/미보고 시 nil/중첩 3-way)을
-  `TmuxLayoutTreeTests`로 단위 검증.
-- 실제 창 리사이즈→tmux 재배치의 on-screen 확인은 디스플레이 필요 → GUI 재테스트로 남긴다.
+### 11.3 Changed components
 
----
+- **`TmuxIntegrationController` (rewritten)** — switched from pane-keyed to **window-keyed**.
+  `windowTrees[@W]→PaneTreeView` (one window = one tab); pane state kept in `sessions`/`backends`/`paneLeaves`/`paneToWindow`.
+  `applyLayout`→`reconcile(window:layout:)`:
+  ① for each desired pane, `ensurePane` (reuse/create session+leaf, flush buffered output)
+  ② build the binary tree via `TmuxLayoutReconciler.build`
+  ③ if the tab exists, `PaneTreeView.setRoot(_:active:)`; otherwise `PaneTreeView(restoredRoot:)`+`adoptExternalTree`
+  ④ missing panes get `dropPaneRefs`. **Idempotent** (safe if the same layout arrives twice).
+  Focus is recorded in `windowActivePane` via `%window-pane-changed` and restored during reconcile.
+- **`PaneTreeView.setRoot(_:active:)`** — full tree replacement. Reused leaves keep surface/grid while
+  only the view hierarchy is rebuilt into the new split structure. Active is preserved if it survives in the new tree, else the first leaf.
+- **`CompactWindowController`** — added `adoptExternalTree(_:customTitle:)` (turn an already-built multi-pane tree into a tab)
+  and `setExternalTabTitle(matching:title:)` (reflecting `%window-renamed`).
+- **`TmuxPaneBackend.resize`** — no longer calls `setClientSize` unconditionally; delegates via an `onResize` callback.
+  The controller forwards to client size **only for single-pane windows** (multi-pane per-pane sizing is P3) →
+  prevents the bug where one pane shrinks the entire client.
 
-## 13. P3-2 구현 노트 (flow control, 실제 구현됨)
+### 11.4 What P2 does not yet cover
 
-목표: 한 pane이 출력을 쏟아내도(예: `yes` 플러딩) tmux 서버가 무한정 버퍼링하지 않고, UI가 멈추지 않게 한다.
+- **Per-pane resize negotiation** — **implemented in P3-1 (§12).**
+- **Enumeration when attaching to an existing multi-window session**: the `list-windows` query + command-reply correlation (§11.1) unimplemented.
+  The primary scenario (new `tmux -C` session in Damson → `claude` split inside it) works fully via `%layout-change`.
+- **User-initiated pane close/split (Cmd+W / Cmd+D)** — **implemented in the P2 polish pass**: in a tmux tab, Cmd+D/Cmd+⇧D issue
+  `split-window -h/-v` and Cmd+W issues `kill-pane`; tmux echoes back via `%layout-change`, driving the native splits
+  (in control mode, `send-keys` bypasses the tmux key tables, so `Ctrl-b` prefix bindings don't work —
+  same as iTerm2. Native shortcuts take their place).
 
-### 13.1 실기 확인
+### 11.5 Manual test procedure (GUI required)
 
-- `refresh-client -f pause-after=<N>`을 보내면 **그 즉시** pane 출력이 `%output` → **`%extended-output`**으로
-  바뀐다. 형식: `%extended-output %<pane> <age-ms> : <data>` — pane id, lag(ms), ` : `, 그리고 `%output`과
-  **동일한 octal 인코딩** payload. (tmux 3.6b로 확인.)
-- client가 N초 이상 뒤처지면 tmux가 `%pause %<pane>`을 보내고 그 pane 출력을 멈춘다. client가
-  `refresh-client -A '%<pane>:continue'`로 재개를 요청하면 `%continue %<pane>` 후 출력이 재개된다.
-
-### 13.2 구현
-
-- **파서**: `%extended-output`을 **첫 `" : "`**(헤더=pane+age는 `" : "`를 포함하지 않으므로 첫 것이 진짜
-  구분자)로 갈라 payload를 `%output`과 같은 `.output` 이벤트로 매핑 → **렌더 경로 무변경**, pause/continue
-  핸드셰이크만 새로 추가. `%pause`→`.paused(pane)`, `%continue`→`.resumed(pane)`.
-- **클라이언트**: `enableFlowControl(pauseAfter:)`(`refresh-client -f pause-after=N`),
-  `resumePane(_:)`(`refresh-client -A '%N:continue'`), `onPause`/`onContinue` 콜백.
-- **컨트롤러**: attach 직후 `enableFlowControl(pauseAfter: 1)`. `%pause`를 받으면 **다음 runloop turn에
-  resume**(`DispatchQueue.main.async`) — 그 시점엔 in-flight 출력이 동기 처리로 모두 소진됐으므로,
-  tmux 서버 버퍼링을 ~한 배치로 제한하면서 pane이 영구히 멈추지 않게 한다. `pausedPanes`로 중복 resume 방지.
-
-### 13.3 정책 근거
-
-- Damson는 출력을 메인 큐에서 **동기 처리**한다(VTParser→Grid). 따라서 `%pause` 수신 = 이미 그 직전까지
-  처리 완료 → 다음 tick에 즉시 resume해도 안전(catch-up 보장). 지속 플러딩 시 pause/continue가 핑퐁하며
-  **버스트 사이에 UI가 갱신**된다(의도된 throttle). pause-after=1s는 터미널에서 이미 충분히 눈에 띄는 lag.
-
-### 13.4 테스트
-
-- 파서 단위: `%extended-output` 디코드(+payload 내 `" : "` 보존), `%pause`/`%continue`(`TmuxControlParserTests`).
-- 실기 통합: flow control 켠 상태에서 marker가 `%extended-output` 경로로 grid까지 도달
-  (`testFlowControlExtendedOutputStillDelivers`). 실제 `%pause` 트리거는 타이밍 의존이라 flaky → 생략.
-
----
-
-## 14. P3-3 / P3-4 구현 노트 (마감 항목, 실제 구현됨)
-
-### 14.1 P3-3 — command-reply 상관 + 기존 세션 attach 열거 + 백필
-
-- **reply 상관**: 실기 확인 — connect 시 tmux가 자발적으로 내는 guard 블록은 flags `0`,
-  stdin 명령에 대한 응답은 flags `1`. `sendCommand(_:onReply:)`가 핸들러를 FIFO 큐에 넣고,
-  flags≠0인 `commandReply`만 큐를 소비한다. 연결이 죽은 뒤의 send는 합성 error reply로 즉시 실패.
-- **프레이밍 강화**: `%begin` 블록 안에서 `%end`/`%error`로 시작하는 줄은 **command number가
-  열린 블록과 일치할 때만** 종결자다 — capture-pane 내용에 "%end …" 같은 줄이 있어도 body로 취급.
-- **attach 열거**: `%session-changed` 수신 시 `list-windows -F "#{window_id} #{window_layout}
-  #{window_name}"`를 질의해 기존 window들을 reconcile (신규 세션에도 무해 — idempotent).
-- **백필**: 열거 경로로 만들어진 pane은 `capture-pane -peqJ -t %N -S -2000`으로 기존
-  내용+히스토리(≤2000줄)를 가져와 grid에 먼저 주입, 그 동안 도착한 라이브 `%output`은
-  `awaitingBackfill` 동안 버퍼 → 백필 후 방출 (순서 보존). 후행 빈 줄은 trim.
-
-### 14.2 P3-4 — `tmux -CC` DCS 자동 감지 (takeover)
-
-사용자가 **일반 Damson pane 안에서 `tmux -CC`를 직접 치면** 그 pane의 바이트 스트림이
-control protocol로 바뀐다. 이제 이를 자동 감지해 메뉴 attach와 동일한 네이티브 통합을 연다.
-
-- **VTParser**: DCS 상태 추가 (`ESC P` → param 수집 → final byte). final `p` + params `[1000]`이면
-  `tmuxControlModeDetected`를 세우고 `.tmuxTakeover` 상태로 — 이후 모든 바이트는 해석 없이
-  `takeTakeoverRemainder()` 버퍼로. **그 외 DCS**(sixel, DECRQSS 등)는 ST까지 swallow
-  (이전엔 payload가 텍스트로 새던 것도 함께 수정). 근접 오인(`1000q`, `999p`, `1000;1p`) 거부.
-- **DamsonSession**: 감지 시 `tmuxControlModeDetectedNotification`을 **동기로 post한 뒤**
-  DCS 뒤에 붙어 온 나머지 바이트를 `onTmuxControlData`로 전달 — 옵저버(앱)가 notification 안에서
-  `TmuxTakeoverBackend`를 만들어 훅을 먼저 설치하므로 첫 control 바이트가 유실되지 않는다.
-  이후 `handlePTYData`는 파서를 건너뛰고 raw 전달. `endTmuxControlMode()`로 복원.
-- **TmuxTakeoverBackend**: 기존 세션의 PTY를 control 채널로 쓰는 `SessionIOBackend`.
-  `write`→`session.write`(tmux client stdin), `terminate`=no-op (**아래 셸을 죽이면 안 됨**).
-- **TmuxIntegrationController**: `init(takeoverFrom:)`+`startTakeover(cols:rows:)` 경로 추가.
-  teardown 시 `detach-client` 요청 후 `session.endTmuxControlMode()` — `%exit` 뒤 셸 프롬프트로 복귀.
-- **검증**: `testDCSTakeoverEndToEnd` — 실제 `tmux -CC`를 child로 둔 DamsonSession에서
-  감지→notification→remainder 포함 control 스트림 유입→`send-keys` 왕복→`kill-server` 후
-  `%exit`→복원까지 헤드리스로 증명.
-
-### 14.3 잔여 제약 (알려진 것, 의도된 범위)
-
-- takeover 후 원래 pane은 `tmux -CC` 입력 시점 화면으로 동결된다 (iTerm2도 유사한 placeholder).
-  detach(`%exit`) 후 Enter를 치면 프롬프트가 돌아온다.
-- scrollback: 백필(-S -2000) + attach 이후 라이브 출력은 Damson 자체 scrollback에 쌓인다.
-  그보다 오래된 히스토리는 tmux copy-mode를 통해서만 접근 가능 (§8 물려받은 제약).
+1. Run the app (built `/Applications/Damson.app` or `DAMSON_NO_TRAMPOLINE=1 swift run damson`).
+2. Menu **tmux ▸ Attach tmux (-CC)…** → leave the session name empty and start a new session.
+3. In the tab's shell, `tmux split-window -h` (or `Ctrl-b %`) → it must split into a **Damson native side-by-side split**.
+   `Ctrl-b "` (top-bottom) and nested splits should each become native splits too. `exit` in one pane → the split collapses.
+4. agent-teams: run `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 claude` in split-pane mode inside that session
+   → each teammate pane must appear as a Damson native simultaneous pane (the point that confirms this PR's goal).
+- **Headless proof**: verified via `testSplitWindowYieldsTwoPaneLayout` that a real tmux `split-window` emits a
+  2-pane `%layout-change` and the parser parses it into a horizontal 2-leaf tree.
+  **On-screen rendering** (visual confirmation of native splits) needs a display → left to a GUI retest.
 
 ---
 
-## 15. 미해결 이슈 (agent-teams 실전 테스트에서 발견, 2026-06-10)
+## 12. P3-1 Implementation Notes (resize negotiation, actually implemented)
 
-P0–P3 구현은 완료됐으나, 최종 수용 시나리오(Claude Code agent teams split-pane) 테스트 중
-두 건의 미해결 이슈가 발견됐다. 둘 다 tmux 통합 코어가 아닌 별개 영역이다.
+Goal: resizing the Damson window makes tmux rearrange the panes to fill it — **even for multi-pane windows**.
 
-### 15.1 agent teams가 teammate 대신 일반 subagent를 생성 (claude 설정/환경 문제)
+### 12.1 Mechanism
 
-- 증상: "Create an agent team with 3 teammates" 프롬프트에 Claude Code가 teammate가 아닌
-  일반 subagent(Explore/general-purpose `Agent(...)`)를 띄움 → `split-window` 자체가 발사되지 않음.
-- 확인된 원인 후보: ① `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` 미설정(→ `~/.claude/settings.json`
-  env에 추가 완료, 새 세션부터 적용), ② claude를 tmux 세션 **밖**(일반 로컬 탭)에서 실행
-  (split-pane은 `$TMUX` 필요).
-- 재시도 절차: tmux 호스트 창 pane 안에서 새 `claude` 세션 시작 → 팀 프롬프트.
-  Damson 쪽에서는 `split-window`→`%layout-change`→네이티브 split 경로가 이미 검증돼 있으므로
-  (testSplitWindowYieldsTwoPaneLayout), 팀이 정상 생성되면 동작할 것으로 예상.
+1. On every layout pass, each tmux pane surface computes the cell size (cols×rows) of its display area and reports it
+   to the controller via `session.resize`→`TmuxPaneBackend.resize`→the **`onResize(pane, cols, rows)`** callback.
+2. The controller updates `paneSizes[pane]` and recomputes the window's **total client cell size**:
+   `TmuxLayoutTree.totalCellSize { paneSizes[$0] }` — leaves use the reported size; splits **sum along the split axis
+   + one border cell per divider** (matching tmux's pane border accounting), max on the opposite axis. If not all panes
+   in the layout have reported sizes yet, nil → never send a half-formed size (e.g. a freshly split pane
+   before its layout pass).
+3. Send `refresh-client -C <cols>,<rows>` (coalescing identical sizes). tmux rearranges the panes →
+   `%layout-change` → reconcile → native splits update to the new proportions. **Converges to a fixed point** (same proportions →
+   same pixel splits → same reported sizes).
 
-### 15.2 Claude Code TUI 렌더링 깨짐 (Damson VT/렌더러 버그, tmux 무관 — 로컬 탭에서 발생)
+### 12.2 Differences from P2
 
-- 증상 1: 스피너 단어("Clauding…")의 앞 3글자 "Cla"가 후속 redraw 후에도 줄 앞에 잔존
-  (`ClaRead(...)`, `Cla(ctrl+b ...)` 형태). in-place 줄 갱신(EL/커서 이동) 처리의 off-by 의심.
-- 증상 2: 입력 echo의 em-dash(`—`, UTF-8 3바이트)가 `���`(replacement char 3개)로 표시.
-  바이트가 개별 디코드된 증상. `VTParser.flushText`는 partial-safe(후행 ≤3바이트 보유) 확인됨
-  → 단순 feed-경계 분할이 아닌 다른 경로(OSC/페이스트 echo/렌더러measure?) 의심.
-- 두 증상 모두 **로컬 탭**(tmux 아님)에서 관찰. 사용자 환경: `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1`
-  (main-screen 렌더러 = in-place redraw 多). 재현 채집: 해당 세션 출력 byte stream을 `script(1)` 또는
-  `session.onOutput` 덤프로 떠서 VTParser/Grid에 replay하는 회귀 테스트로 잡는 것이 정석.
+- P2: only single-pane windows drove the client size (multi-pane was ignored to prevent the bug where one pane shrinks the whole client).
+- P3-1: **because the layout structure is known**, per-pane reports are correctly composed into a total size → resizes of
+  multi-pane windows also reach tmux. With border-cell accounting, Damson's native dividers (1px) and tmux's cell boundaries
+  align within ≤1 cell of error, eliminating letterboxing.
 
-**후속 조사 (같은 날):** 재현 인프라 구축 — `damson-cli dump-grid`, `DAMSON_DUMP_OUTPUT=<dir>`
-바이트 캡처, `OutputDumpReplayTests`(캡처 replay + U+FFFD 스캔). damson-cli로 실제 claude TUI를
-원격 구동해 7개 시나리오(타이핑/bracketed 멀티라인 paste/tool-use/병렬 subagent/유휴·생성중
-리사이즈 6회/scrollback 10k 상한)를 돌렸으나 **전부 grid 레벨에서 깨끗** — 동일 프롬프트의 사용자
-재시도도 재현 실패(간헐 발생). 사용자 관찰 "escape 명령이 처리되지 않은 것처럼 보였다"와 정확히
-일치하는 메커니즘을 코드에서 발견: P3-4의 DCS swallowing이 **오인 시작**(stray ESC P)되면 다음
-ST까지 모든 출력(CSI 커서/erase 포함)을 삼켜 화면이 부분 갱신된다. **방어 수정 적용**: DCS
-param/payload 중 C0 제어문자(실제 sixel/DECRQSS payload엔 없음)나 `ESC [`(CSI 시작)를 만나면
-DCS를 중단하고 해당 바이트를 ground에서 재처리 — 오인 시작의 피해를 최대 한 줄로 제한. 확정
-재현은 dump 캡처 대기 중 (dev 빌드를 DAMSON_DUMP_OUTPUT으로 상시 구동).
+### 12.3 Tests
+
+- The `totalCellSize` arithmetic (single / horizontal+divider / vertical+divider / nil when unreported / nested 3-way)
+  is unit-tested in `TmuxLayoutTreeTests`.
+- On-screen confirmation of real window resize → tmux rearrangement needs a display → left to a GUI retest.
+
+---
+
+## 13. P3-2 Implementation Notes (flow control, actually implemented)
+
+Goal: even when one pane floods output (e.g. `yes`), the tmux server must not buffer indefinitely, and the UI must not freeze.
+
+### 13.1 Real-hardware findings
+
+- Sending `refresh-client -f pause-after=<N>` **immediately** switches pane output from `%output` to **`%extended-output`**.
+  Format: `%extended-output %<pane> <age-ms> : <data>` — pane id, lag (ms), ` : `, then a payload with **the same octal
+  encoding** as `%output`. (Confirmed with tmux 3.6b.)
+- If the client falls more than N seconds behind, tmux sends `%pause %<pane>` and stops that pane's output. When the client
+  requests resumption with `refresh-client -A '%<pane>:continue'`, output resumes after `%continue %<pane>`.
+
+### 13.2 Implementation
+
+- **Parser**: splits `%extended-output` on the **first `" : "`** (the header = pane+age contains no `" : "`, so the first one
+  is the real delimiter) and maps the payload to the same `.output` event as `%output` → **render path unchanged**;
+  only the pause/continue handshake is new. `%pause`→`.paused(pane)`, `%continue`→`.resumed(pane)`.
+- **Client**: `enableFlowControl(pauseAfter:)` (`refresh-client -f pause-after=N`),
+  `resumePane(_:)` (`refresh-client -A '%N:continue'`), `onPause`/`onContinue` callbacks.
+- **Controller**: `enableFlowControl(pauseAfter: 1)` right after attach. On `%pause`, **resume on the next runloop turn**
+  (`DispatchQueue.main.async`) — by then all in-flight output has been drained by synchronous processing, so
+  tmux server buffering is limited to roughly one batch while the pane never stalls permanently. `pausedPanes` prevents duplicate resumes.
+
+### 13.3 Policy rationale
+
+- Damson processes output **synchronously** on the main queue (VTParser→Grid). So receiving `%pause` = everything up to
+  that point is already processed → resuming immediately on the next tick is safe (catch-up guaranteed). Under sustained flooding,
+  pause/continue ping-pong and **the UI refreshes between bursts** (intentional throttle). pause-after=1s is already
+  a clearly noticeable lag in a terminal.
+
+### 13.4 Tests
+
+- Parser units: `%extended-output` decoding (+ preserving `" : "` within the payload), `%pause`/`%continue` (`TmuxControlParserTests`).
+- Real-hardware integration: with flow control enabled, a marker reaches the grid via the `%extended-output` path
+  (`testFlowControlExtendedOutputStillDelivers`). Actually triggering `%pause` is timing-dependent and flaky → omitted.
+
+---
+
+## 14. P3-3 / P3-4 Implementation Notes (polish items, actually implemented)
+
+### 14.1 P3-3 — command-reply correlation + existing-session attach enumeration + backfill
+
+- **Reply correlation**: confirmed on real hardware — the guard block tmux emits spontaneously on connect has flags `0`;
+  responses to stdin commands have flags `1`. `sendCommand(_:onReply:)` puts the handler into a FIFO queue, and only
+  `commandReply`s with flags≠0 consume the queue. Sends after the connection has died fail immediately with a synthetic error reply.
+- **Framing hardening**: inside a `%begin` block, a line starting with `%end`/`%error` is a terminator **only when its
+  command number matches the open block** — so a line like "%end …" inside capture-pane content is treated as body.
+- **Attach enumeration**: on `%session-changed`, query `list-windows -F "#{window_id} #{window_layout}
+  #{window_name}"` and reconcile the existing windows (harmless for new sessions too — idempotent).
+- **Backfill**: panes created via the enumeration path fetch existing content + history (≤2000 lines) with
+  `capture-pane -peqJ -t %N -S -2000` and inject it into the grid first; live `%output` arriving in the meantime is
+  buffered while `awaitingBackfill`, then emitted after the backfill (order preserved). Trailing blank lines are trimmed.
+
+### 14.2 P3-4 — `tmux -CC` DCS auto-detection (takeover)
+
+When a user **types `tmux -CC` directly inside an ordinary Damson pane**, that pane's byte stream switches to
+the control protocol. This is now auto-detected, opening the same native integration as the menu attach.
+
+- **VTParser**: added a DCS state (`ESC P` → collect params → final byte). On final `p` + params `[1000]`,
+  set `tmuxControlModeDetected` and move to the `.tmuxTakeover` state — from then on all bytes go uninterpreted
+  into the `takeTakeoverRemainder()` buffer. **All other DCS** (sixel, DECRQSS, etc.) is swallowed up to ST
+  (also fixing payloads that previously leaked as text). Near-misses (`1000q`, `999p`, `1000;1p`) are rejected.
+- **DamsonSession**: on detection, **synchronously posts** `tmuxControlModeDetectedNotification`, then forwards
+  the remaining bytes glued after the DCS via `onTmuxControlData` — the observer (the app) creates the
+  `TmuxTakeoverBackend` inside the notification and installs the hooks first, so the first control bytes aren't lost.
+  Afterwards `handlePTYData` skips the parser and forwards raw. `endTmuxControlMode()` restores.
+- **TmuxTakeoverBackend**: a `SessionIOBackend` that uses the existing session's PTY as the control channel.
+  `write`→`session.write` (tmux client stdin), `terminate`=no-op (**must not kill the shell underneath**).
+- **TmuxIntegrationController**: added the `init(takeoverFrom:)`+`startTakeover(cols:rows:)` path.
+  On teardown, request `detach-client` then `session.endTmuxControlMode()` — returning to the shell prompt after `%exit`.
+- **Verification**: `testDCSTakeoverEndToEnd` — with a DamsonSession whose child is a real `tmux -CC`, proves headlessly
+  detection → notification → control stream ingestion including the remainder → a `send-keys` round trip → `kill-server` then
+  `%exit` → restoration.
+
+### 14.3 Remaining constraints (known, intended scope)
+
+- After takeover, the original pane is frozen at the screen from the moment `tmux -CC` was typed (iTerm2 has a similar placeholder).
+  After detach (`%exit`), pressing Enter brings the prompt back.
+- Scrollback: the backfill (-S -2000) + live output after attach accumulate in Damson's own scrollback.
+  History older than that is accessible only through tmux copy-mode (constraint inherited per §8).
+
+---
+
+## 15. Open Issues (found during real-world agent-teams testing, 2026-06-10)
+
+The P0–P3 implementation is complete, but two unresolved issues were found while testing the final acceptance
+scenario (Claude Code agent teams split-pane). Both are separate areas, not the tmux integration core.
+
+### 15.1 agent teams spawn ordinary subagents instead of teammates (claude config/environment issue)
+
+- Symptom: given the prompt "Create an agent team with 3 teammates", Claude Code launches ordinary
+  subagents (Explore/general-purpose `Agent(...)`) instead of teammates → `split-window` never fires at all.
+- Confirmed cause candidates: ① `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` not set (→ added to the env in
+  `~/.claude/settings.json`, effective from new sessions), ② claude run **outside** a tmux session (an ordinary local tab)
+  (split-pane requires `$TMUX`).
+- Retry procedure: start a new `claude` session inside a pane of the tmux host window → team prompt.
+  On the Damson side, the `split-window`→`%layout-change`→native split path is already verified
+  (testSplitWindowYieldsTwoPaneLayout), so it's expected to work once a team is created properly.
+
+### 15.2 Claude Code TUI rendering corruption (Damson VT/renderer bug, unrelated to tmux — occurs in local tabs)
+
+- Symptom 1: the first 3 characters "Cla" of the spinner word ("Clauding…") persist at the start of the line
+  even after subsequent redraws (appearing as `ClaRead(...)`, `Cla(ctrl+b ...)`). Suspected off-by in
+  in-place line update handling (EL/cursor movement).
+- Symptom 2: an em-dash (`—`, 3 bytes in UTF-8) in input echo renders as `���` (3 replacement chars).
+  Symptomatic of bytes being decoded individually. `VTParser.flushText` is confirmed partial-safe (holds trailing ≤3 bytes)
+  → suspect a path other than a simple feed-boundary split (OSC/paste echo/renderer measure?).
+- Both symptoms observed in a **local tab** (not tmux). User environment: `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1`
+  (main-screen renderer = lots of in-place redraws). Repro capture: the right approach is to dump that session's
+  output byte stream via `script(1)` or a `session.onOutput` dump, then replay it into VTParser/Grid as a regression test.
+
+**Follow-up investigation (same day):** built repro infrastructure — `damson-cli dump-grid`, `DAMSON_DUMP_OUTPUT=<dir>`
+byte capture, `OutputDumpReplayTests` (capture replay + U+FFFD scan). Drove a real claude TUI remotely with damson-cli
+through 7 scenarios (typing / bracketed multi-line paste / tool-use / parallel subagents / 6 resizes while idle and
+generating / 10k scrollback cap), but **all came out clean at the grid level** — the user's retry of the same prompt
+also failed to reproduce (intermittent). Found a mechanism in the code that exactly matches the user's observation
+"it looked like escape commands weren't being processed": if P3-4's DCS swallowing **starts on a false positive**
+(stray ESC P), it swallows all output (including CSI cursor/erase) until the next ST, leaving the screen partially
+updated. **Defensive fix applied**: if a C0 control character (absent from real sixel/DECRQSS payloads) or `ESC [`
+(CSI start) is encountered in DCS params/payload, abort the DCS and reprocess those bytes from ground — limiting
+the damage of a false start to at most one line. Definitive repro awaits a dump capture (dev build running
+continuously with DAMSON_DUMP_OUTPUT).

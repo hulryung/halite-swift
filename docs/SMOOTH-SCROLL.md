@@ -1,42 +1,42 @@
-# 부드러운 스크롤 (Swift + Metal)
+# Smooth Scrolling (Swift + Metal)
 
-halite를 Rust+wgpu로 만든 가장 큰 동기 중 하나가 "부드러운 스크롤". 이 문서는 Swift+Metal에서 **동등 또는 더 나은** 부드러움을 보장하기 위한 구체 레시피.
+One of the biggest motivations for building halite in Rust+wgpu was "smooth scrolling". This document is a concrete recipe for guaranteeing **equal or better** smoothness in Swift+Metal.
 
-## 핵심 명제
+## Core thesis
 
-부드러움은 언어가 아니라 **렌더 아키텍처**의 결과다. Swift든 Rust든 다음 규칙을 지키지 않으면 둘 다 망하고, 지키면 둘 다 똑같이 매끄럽다.
+Smoothness is a product of **render architecture**, not language. Swift or Rust, break the rules below and both fail; follow them and both are equally smooth.
 
-macOS 단독 전제에서 Swift는 오히려 유리한 자리가 있다 — momentum phase, ProMotion vsync, NSEvent fidelity가 자동.
+Given a macOS-only premise, Swift actually has the advantage in places — momentum phase, ProMotion vsync, and NSEvent fidelity come for free.
 
-## 부드러움의 7가지 구성요소
+## The 7 ingredients of smoothness
 
-| 요소 | 구현 |
+| Ingredient | Implementation |
 |---|---|
-| 1. GPU-side scroll offset | grid는 안 움직임. vertex shader uniform `float yOffset`만 변경 |
-| 2. Sub-pixel precision | 픽셀 또는 0.5픽셀 단위 offset. 행 경계 스냅 금지 |
-| 3. Display-synced render | `CVDisplayLink`로 vsync 콜백 |
+| 1. GPU-side scroll offset | The grid doesn't move. Only the vertex shader uniform `float yOffset` changes |
+| 2. Sub-pixel precision | Offset in pixel or 0.5-pixel units. No snapping to row boundaries |
+| 3. Display-synced render | vsync callbacks via `CVDisplayLink` |
 | 4. Off-main PTY I/O | dedicated thread + lock-free ring buffer |
-| 5. Persistent glyph atlas | `MTLTexture` 한 번 생성, incremental 추가만 |
-| 6. Full-fidelity momentum | `NSEvent.scrollingDeltaY` + `momentumPhase` 직접 통합 |
-| 7. Rubber-band edges | 끝 도달 시 spring 시뮬레이션 (~50줄) |
+| 5. Persistent glyph atlas | Create the `MTLTexture` once, incremental additions only |
+| 6. Full-fidelity momentum | Integrate `NSEvent.scrollingDeltaY` + `momentumPhase` directly |
+| 7. Rubber-band edges | Spring simulation on hitting the edge (~50 lines) |
 
-## CAMetalLayer 설정
+## CAMetalLayer setup
 
 ```swift
 let layer = CAMetalLayer()
 layer.device = MTLCreateSystemDefaultDevice()
-layer.pixelFormat = .bgra8Unorm                    // 또는 .bgra8Unorm_srgb
+layer.pixelFormat = .bgra8Unorm                    // or .bgra8Unorm_srgb
 layer.framebufferOnly = true
 layer.maximumDrawableCount = 3                     // triple buffer
 layer.displaySyncEnabled = true                    // vsync on
-layer.presentsWithTransaction = false              // 비동기 present
+layer.presentsWithTransaction = false              // async present
 layer.contentsScale = window?.backingScaleFactor ?? 2.0
-layer.needsDisplayOnBoundsChange = false           // 우리가 직접 통제
+layer.needsDisplayOnBoundsChange = false           // we control this ourselves
 ```
 
-ProMotion 120Hz 화면이면 `CVDisplayLink`가 자동으로 120Hz로 콜백한다. `maximumDrawableCount = 3`은 GPU pipelining에 필수.
+On a ProMotion 120Hz display, `CVDisplayLink` automatically calls back at 120Hz. `maximumDrawableCount = 3` is essential for GPU pipelining.
 
-## CVDisplayLink 루프
+## CVDisplayLink loop
 
 ```swift
 private var displayLink: CVDisplayLink?
@@ -45,7 +45,7 @@ func startDisplayLink() {
     CVDisplayLinkCreateWithActiveCGDisplays(&displayLink)
     CVDisplayLinkSetOutputCallback(displayLink!, { _, _, _, _, _, context in
         let view = Unmanaged<DamsonSurfaceView>.fromOpaque(context!).takeUnretainedValue()
-        view.drawIfDirty()                          // dirty flag 검사 후만 그림
+        view.drawIfDirty()                          // draw only after checking the dirty flag
         return kCVReturnSuccess
     }, Unmanaged.passUnretained(self).toOpaque())
     CVDisplayLinkStart(displayLink!)
@@ -53,21 +53,21 @@ func startDisplayLink() {
 
 func drawIfDirty() {
     guard gridDirty || scrollAnimating else { return }
-    DispatchQueue.main.async { self.render() }      // 또는 dedicated render queue
+    DispatchQueue.main.async { self.render() }      // or a dedicated render queue
 }
 ```
 
-스크린이 바뀌면(외장↔내장) `CVDisplayLinkSetCurrentCGDisplay`로 재바인딩 필요.
+When the screen changes (external ↔ built-in), rebind with `CVDisplayLinkSetCurrentCGDisplay`.
 
-## Scroll offset 처리
+## Scroll offset handling
 
-핵심: **scroll 변경 시 grid를 재배치하지 않는다.** 셰이더 uniform 하나만 바꾼다.
+The key: **never re-lay-out the grid on scroll.** Change a single shader uniform.
 
 ```swift
 struct RenderUniforms {
     var viewportSize: SIMD2<Float>
     var cellSize: SIMD2<Float>
-    var scrollYPixels: Float           // ← 이게 한 픽셀씩 변하면 부드럽게 보임
+    var scrollYPixels: Float           // ← varying this one pixel at a time is what looks smooth
     var atlasSize: SIMD2<Float>
 }
 ```
@@ -88,11 +88,11 @@ vertex VertexOut cell_vertex(
 }
 ```
 
-`scrollYPixels`는 정수 픽셀일 필요 없음. `123.4` 같은 값도 자연스럽게 부드러움.
+`scrollYPixels` doesn't need to be an integer pixel value. A value like `123.4` is naturally smooth.
 
-## NSEvent.scrollWheel 처리
+## NSEvent.scrollWheel handling
 
-트랙패드는 sub-pixel delta + momentum phase를 준다. **둘 다 활용해야** halite의 Rust 부드러움과 동등해진다.
+Trackpads provide sub-pixel deltas + momentum phase. You **must use both** to match the smoothness of halite's Rust implementation.
 
 ```swift
 override func scrollWheel(with event: NSEvent) {
@@ -100,7 +100,7 @@ override func scrollWheel(with event: NSEvent) {
     if event.hasPreciseScrollingDeltas {
         dy = event.scrollingDeltaY              // sub-pixel
     } else {
-        dy = event.scrollingDeltaY * cellHeight // 일반 마우스 (line 단위)
+        dy = event.scrollingDeltaY * cellHeight // regular mouse (line units)
     }
 
     let isMomentum = event.momentumPhase != []
@@ -115,40 +115,40 @@ override func scrollWheel(with event: NSEvent) {
 }
 ```
 
-`ScrollController`는 다음을 관리:
+`ScrollController` manages:
 
 - `currentOffset: CGFloat` (sub-pixel)
-- `velocity: CGFloat` (사용자 phase 끝났을 때 추정)
+- `velocity: CGFloat` (estimated when the user phase ends)
 - `momentumIntegrating: Bool`
-- `rubberBand: SpringState?` (끝 닿았을 때만)
+- `rubberBand: SpringState?` (only when hitting an edge)
 
-사용자가 손을 뗀 후 macOS가 보내는 momentum 이벤트를 그대로 적분하면 시스템 네이티브 momentum 감(感)이 나온다. **자체 momentum 시뮬레이션을 짜면 안 된다** — 시스템과 어긋난다.
+After the user lifts their fingers, integrating the momentum events macOS sends — as-is — gives you the system-native momentum feel. **Do not write your own momentum simulation** — it will diverge from the system.
 
-## Momentum이 macOS Rust에서 안 좋았던 이유
+## Why momentum was poor in macOS Rust
 
-Rust 진영의 `winit` 같은 라이브러리는 `NSEvent`의 `momentumPhase`를 종종 평탄화하거나 손실한다. halite가 자체로 처리하려고 들였을 노력의 일부는 Swift로 가면 **자동으로** 풀린다. `NSEvent` 객체 자체를 그대로 받아 phase/delta를 직접 읽기 때문.
+Rust-side libraries like `winit` often flatten or lose `NSEvent`'s `momentumPhase`. Part of the effort halite would have spent handling this itself simply **goes away** in Swift: you receive the `NSEvent` object directly and read phase/delta straight off it.
 
-## 스크롤백 자료구조
+## Scrollback data structure
 
 ```swift
 final class Scrollback {
-    private let storage: UnsafeMutableBufferPointer<Cell>  // 고정 capacity
+    private let storage: UnsafeMutableBufferPointer<Cell>  // fixed capacity
     private var head: Int                                  // ring buffer head
     private var count: Int
 
     func rows(visibleRange: Range<Int>) -> UnsafeBufferPointer<Cell> {
-        // contiguous slice (wrap 시 두 번 그리기)
+        // contiguous slice (draw twice on wrap)
     }
 }
 ```
 
-규칙:
-- `Array<Cell>` 사용 **금지** (COW, ARC traffic, indirect)
-- `UnsafeMutableBufferPointer` + 명시적 capacity
-- 셀 한 개는 작은 struct (`UInt32 char + UInt32 attr` = 8B). 1만 줄 × 200 cols × 8B = 16MB — OK
-- 큰 스크롤백(1억 셀 = 800MB)이 필요하면 page 단위로 디스크 매핑하는 후속 milestone
+Rules:
+- `Array<Cell>` is **forbidden** (COW, ARC traffic, indirect)
+- `UnsafeMutableBufferPointer` + explicit capacity
+- A single cell is a small struct (`UInt32 char + UInt32 attr` = 8B). 10k lines × 200 cols × 8B = 16MB — OK
+- If a large scrollback is needed (100M cells = 800MB), disk-mapping by page is a follow-up milestone
 
-## Lock 디자인
+## Lock design
 
 ```
 [PTY thread]          parser thread          render thread (CVDisplayLink)
@@ -159,33 +159,33 @@ RawByteRing  ──read──►   VTParser  ──mutate──►   Grid (under
                                                 snapshot read (briefly hold lock)
 ```
 
-`gridLock`은 `os_unfair_lock` (Swift의 `OSAllocatedUnfairLock`). 30μs 미만으로만 잡음.
+`gridLock` is an `os_unfair_lock` (Swift's `OSAllocatedUnfairLock`). Held for under 30μs only.
 
-또는 더 공격적: **double-buffered grid** — parser는 back buffer에 쓰고, render는 front 읽고, 매 vsync 직전 swap. Lock-free.
+Or, more aggressively: a **double-buffered grid** — the parser writes to the back buffer, render reads the front, and they swap just before each vsync. Lock-free.
 
-## 자주 부드러움을 깨는 안티패턴
+## Anti-patterns that commonly break smoothness
 
-- ❌ `NSScrollView` 안에 `CAMetalLayer` 호스트 → AppKit이 자체 스크롤 레이턴시 추가
-- ❌ SwiftUI `ScrollView` 사용 → 같은 문제 + 더 심함
-- ❌ `view.needsDisplay = true` / `setNeedsDisplay()` 매 PTY chunk마다 호출
-- ❌ 매 프레임 `MTLBuffer` 재할당
-- ❌ 매 프레임 CoreText 셰이핑 (glyph atlas 캐시가 무의미해짐)
-- ❌ `NSAttributedString` 사용 (메모리 폭증, 셰이핑이 hot loop 진입)
-- ❌ Swift `Array.append` / `Dictionary` 를 parser hot loop에서 사용
-- ❌ PTY 데이터 도착마다 메인 큐로 hop
-- ❌ Logging / `print` 를 hot path에서 — `os_log`도 비쌈
+- ❌ Hosting a `CAMetalLayer` inside an `NSScrollView` → AppKit adds its own scroll latency
+- ❌ Using SwiftUI `ScrollView` → same problem, but worse
+- ❌ Calling `view.needsDisplay = true` / `setNeedsDisplay()` on every PTY chunk
+- ❌ Reallocating `MTLBuffer` every frame
+- ❌ CoreText shaping every frame (makes the glyph atlas cache pointless)
+- ❌ Using `NSAttributedString` (memory blow-up, shaping enters the hot loop)
+- ❌ Using Swift `Array.append` / `Dictionary` in the parser hot loop
+- ❌ Hopping to the main queue on every PTY data arrival
+- ❌ Logging / `print` in the hot path — `os_log` is expensive too
 
-## 검증 방법
+## How to verify
 
-1. **Instruments Time Profiler** — render queue + parser queue 가 vsync 안에 끝나는지
+1. **Instruments Time Profiler** — do the render queue + parser queue finish within vsync
 2. **Instruments Metal System Trace** — drawable acquisition latency, encoder cost
-3. **Pixel-perfect smoothness** — 화면 캡처 비디오를 240fps 카메라로 (or Quartz Debug)
-4. **Synthetic burst test** — `yes` 또는 100MB log를 `cat`하면서 scroll. typing latency 측정
-5. **ghostty와 동시 측정** — 같은 머신 같은 작업으로 cmux의 ghostty 대비 비교
+3. **Pixel-perfect smoothness** — screen-capture video with a 240fps camera (or Quartz Debug)
+4. **Synthetic burst test** — scroll while running `yes` or `cat`-ing a 100MB log; measure typing latency
+5. **Side-by-side with ghostty** — compare against cmux's ghostty, same machine, same workload
 
-## 목표 수치
+## Target numbers
 
-- Idle: 0% GPU, 메인 스레드 wakeup 거의 없음
-- Active scroll: 60Hz 화면에서 16.6ms 안, 120Hz에서 8.3ms 안 (median, p99 < 1 frame budget)
-- Typing latency (keystroke → glyph on screen): cmux의 현재 ghostty와 동등 또는 ±1 frame 내
-- Memory: 1만 줄 스크롤백 기준 < 64MB (atlas + grid + Metal buffers)
+- Idle: 0% GPU, almost no main-thread wakeups
+- Active scroll: within 16.6ms on a 60Hz display, 8.3ms on 120Hz (median, p99 < 1 frame budget)
+- Typing latency (keystroke → glyph on screen): equal to cmux's current ghostty or within ±1 frame
+- Memory: < 64MB for a 10k-line scrollback (atlas + grid + Metal buffers)

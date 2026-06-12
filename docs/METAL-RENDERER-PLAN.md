@@ -59,7 +59,7 @@ This is my final deliverable.
 
 ## What this is
 
-Replace the temporary M3 render placeholder — `NSScrollView` + child `NSTextView` + full `NSAttributedString` rebuild every frame (`DamsonTerminalView.swift:41-45`, explicitly flagged "M4 이후 CAMetalLayer + 자체 렌더러로 교체") — with a `CAMetalLayer` instanced renderer, **behind a runtime toggle**, reaching exact visual parity, then retiring the legacy path.
+Replace the temporary M3 render placeholder — `NSScrollView` + child `NSTextView` + full `NSAttributedString` rebuild every frame (`DamsonTerminalView.swift:41-45`, explicitly flagged "replace with CAMetalLayer + a custom renderer after M4") — with a `CAMetalLayer` instanced renderer, **behind a runtime toggle**, reaching exact visual parity, then retiring the legacy path.
 
 **Strategy:** extract a `TerminalRenderBackend` protocol, make the *existing* NSTextView path conform first (zero visible change), then build the Metal backend as a second conformer selectable live. The toggle doubles as an A/B pixel-diff oracle on a running terminal. Every phase ends in a buildable, dogfoodable `swift run damson`.
 
@@ -310,7 +310,7 @@ Sources/DamsonTerminal/
     Shaders.metal                 (NEW)  4 vertex + 4 fragment (bg, glyph-mask, glyph-color, overlay)
 ```
 
-`Package.swift` (anticipated by the in-file comment `// 추후 Shaders.metal 추가 시 resources에 .process()로 선언`):
+`Package.swift` (anticipated by the in-file comment `// declare Shaders.metal in resources via .process() when it is added later`):
 
 ```swift
 .target(
