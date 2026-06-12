@@ -80,7 +80,12 @@ final class GlyphRasterizer {
         if Cell.isEmojiPresentation(ch), let bmp = drawColor(ch, wide: wide) {
             return bmp
         }
-        if let bmp = draw(ch, in: bold ? boldFont : font, wide: wide) {
+        // Private-use icons (Nerd Font symbols) get the overflow check even on
+        // the base font: non-Mono variants ("Nerd Font" / "… Propo") give them
+        // wider-than-cell advances while the grid assigns 1 cell — without the
+        // check the icon's right half is clipped at the bitmap edge.
+        if let bmp = draw(ch, in: bold ? boldFont : font, wide: wide,
+                          fitOverflow: Self.isPrivateUse(ch)) {
             return bmp
         }
         // Pinned fallback face — deterministic across machines. Its metrics don't
@@ -92,6 +97,25 @@ final class GlyphRasterizer {
         }
         // System fallback: whatever CoreText recommends for this character.
         return drawSystemFallback(ch, bold: bold, wide: wide)
+    }
+
+    /// Private Use Area codepoints — Nerd Font / powerline icon space. The grid
+    /// always treats these as 1 cell, but only Mono font variants constrain
+    /// their ink to one cell.
+    private static func isPrivateUse(_ ch: Character) -> Bool {
+        guard ch.unicodeScalars.count == 1, let u = ch.unicodeScalars.first else { return false }
+        switch u.value {
+        case 0xE000...0xF8FF, 0xF0000...0xFFFFD, 0x100000...0x10FFFD: return true
+        default: return false
+        }
+    }
+
+    /// Powerline separators/shapes (U+E0B0–U+E0D7): designed to butt flush
+    /// against neighboring cells — when fitted, they must FILL the cell box
+    /// edge-to-edge or segmented prompt bars show seams.
+    private static func isPowerline(_ ch: Character) -> Bool {
+        guard ch.unicodeScalars.count == 1, let u = ch.unicodeScalars.first else { return false }
+        return (0xE0B0...0xE0D7).contains(u.value)
     }
 
     /// Tier-4 fallback: ask CoreText which installed font covers `ch`
@@ -112,7 +136,12 @@ final class GlyphRasterizer {
 
     /// Rasterize via CTLine with shrink-to-fit (never upscaled): used for system-
     /// fallback glyphs whose metrics don\'t match the monospace cell.
-    private func drawFitted(_ ch: Character, in f: NSFont, wide: Bool) -> Bitmap? {
+    /// `fillCell` (powerline shapes): stretch the ink to exactly the cell box —
+    /// non-uniformly and upscaling if needed — because these glyphs are abstract
+    /// geometry meant to butt flush against the neighboring cell's fill; the
+    /// usual centered inset would leave a visible seam in segmented prompt bars.
+    private func drawFitted(_ ch: Character, in f: NSFont, wide: Bool,
+                            fillCell: Bool = false) -> Bitmap? {
         let glyphCellW = wide ? cellW * 2 : cellW
         let pw = Int(ceil(glyphCellW * scale))
         let ph = Int(ceil(cellH * scale))
@@ -140,6 +169,14 @@ final class GlyphRasterizer {
 
             let ib = CTLineGetImageBounds(line, ctx)
             guard ib.width > 0, ib.height > 0 else { return false }
+            if fillCell {
+                let sx = glyphCellW / ib.width, sy = cellH / ib.height
+                ctx.translateBy(x: -sx * ib.minX, y: -sy * ib.minY)
+                ctx.scaleBy(x: sx, y: sy)
+                ctx.textPosition = .zero
+                CTLineDraw(line, ctx)
+                return true
+            }
             // Shrink-to-fit only (cap 1): center the ink in the cell box. The fit
             // box is inset two device pixels per side: one absorbs glyph-origin
             // pixel snapping (CoreText can shift the rendered outline up to ~1px
@@ -300,13 +337,23 @@ final class GlyphRasterizer {
             CTFontGetBoundingRectsForGlyphs(ctFont, .horizontal, glyphs, &boxes, glyphs.count)
             var inkMinX = CGFloat.greatestFiniteMagnitude
             var inkMaxX = -CGFloat.greatestFiniteMagnitude
+            var inkMinY = CGFloat.greatestFiniteMagnitude
+            var inkMaxY = -CGFloat.greatestFiniteMagnitude
             for i in glyphs.indices where !boxes[i].isNull && boxes[i].width > 0 {
                 inkMinX = min(inkMinX, positions[i].x + boxes[i].minX)
                 inkMaxX = max(inkMaxX, positions[i].x + boxes[i].maxX)
+                inkMinY = min(inkMinY, positions[i].y + boxes[i].minY)
+                inkMaxY = max(inkMaxY, positions[i].y + boxes[i].maxY)
             }
             // 0.5pt slack: antialiasing fringe / rounding, not real overflow.
-            if inkMaxX > inkMinX, inkMinX < -0.5 || inkMaxX > glyphCellW + 0.5 {
-                return drawFitted(ch, in: f, wide: wide)
+            // Vertical overflow only matters for PUA icons (oversized in non-Mono
+            // Nerd variants); CJK fallback faces legitimately ride the cell's
+            // vertical metrics and must not be rerouted by a tall ascender.
+            let overflowsX = inkMinX < -0.5 || inkMaxX > glyphCellW + 0.5
+            let overflowsY = Self.isPrivateUse(ch)
+                && (inkMinY < -0.5 || inkMaxY > cellH + 0.5)
+            if inkMaxX > inkMinX, overflowsX || overflowsY {
+                return drawFitted(ch, in: f, wide: wide, fillCell: Self.isPowerline(ch))
             }
         }
 

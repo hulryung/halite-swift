@@ -220,6 +220,70 @@ extension GlyphFallbackTests {
     /// at the right edge. A correctly shrink-to-fit-centered glyph has (a) a
     /// margin on both sides (ink never flush with the bitmap edge) and (b) near-
     /// symmetric left/right ink mass (circled digits are circle-dominated).
+    /// Non-Mono Nerd Font variants ("Nerd Font" / "Nerd Font Propo") give icons
+    /// a wider-than-cell advance while the grid assigns them 1 cell — without
+    /// overflow fitting the right half is hard-clipped at the bitmap edge.
+    /// Field report: powerline prompts rendered half-hidden in Propo variants.
+    func testWideNerdIconFitsCellInNonMonoVariant() throws {
+        let size: CGFloat = 17
+        guard let base = font("Terminess Nerd Font Propo", size) else {
+            throw XCTSkip("Terminess Nerd Font Propo not installed")
+        }
+        let cellW = ("M" as NSString).size(withAttributes: [.font: base]).width
+        let r = GlyphRasterizer(font: base, cellW: cellW, cellH: cellW * 2, scale: 2)
+        // Gear / database / git branch — common prompt icons, all 1-cell in the grid.
+        for ch in ["\u{F013}", "\u{F1C0}", "\u{E725}"] as [Character] {
+            let bmp = try XCTUnwrap(r.raster(ch, bold: false, wide: Cell.isWide(ch)),
+                                    "\(ch) must render")
+            var minX = bmp.width, maxX = -1
+            for y in 0..<bmp.height {
+                let row = y * bmp.width
+                for x in 0..<bmp.width where bmp.bytes[row + x] != 0 {
+                    if x < minX { minX = x }
+                    if x > maxX { maxX = x }
+                }
+            }
+            // Clipping pins the inked bbox to the right edge; the fitted path
+            // keeps a margin and centers the bbox. (Mass symmetry is NOT
+            // asserted — icons like the git branch are naturally lopsided.)
+            XCTAssertLessThan(maxX, bmp.width - 1,
+                "\(ch) ink flush with the RIGHT edge — icon clipped (w=\(bmp.width))")
+            let center = Double(minX + maxX) / 2
+            XCTAssertLessThan(abs(center - Double(bmp.width - 1) / 2), Double(bmp.width) * 0.2,
+                "\(ch) inked bbox off-center (\(minX)…\(maxX) in w=\(bmp.width)) — likely clipped")
+        }
+    }
+
+    /// Powerline separators (U+E0B0…) butt flush against neighboring cells; the
+    /// fitted path must FILL the cell edge-to-edge (no inset seam) or segmented
+    /// prompt bars show gaps.
+    func testPowerlineFillsCellInNonMonoVariant() throws {
+        let size: CGFloat = 17
+        guard let base = font("Terminess Nerd Font Propo", size) else {
+            throw XCTSkip("Terminess Nerd Font Propo not installed")
+        }
+        let cellW = ("M" as NSString).size(withAttributes: [.font: base]).width
+        let r = GlyphRasterizer(font: base, cellW: cellW, cellH: cellW * 2, scale: 2)
+        let arrow: Character = "\u{E0B0}"   // solid right-pointing separator
+        let bmp = try XCTUnwrap(r.raster(arrow, bold: false, wide: Cell.isWide(arrow)))
+        var minX = bmp.width, maxX = -1, minY = bmp.height, maxY = -1
+        for y in 0..<bmp.height {
+            let row = y * bmp.width
+            for x in 0..<bmp.width where bmp.bytes[row + x] != 0 {
+                if x < minX { minX = x }
+                if x > maxX { maxX = x }
+                if y < minY { minY = y }
+                if y > maxY { maxY = y }
+            }
+        }
+        XCTAssertLessThanOrEqual(minX, 1, "powerline arrow must reach the left cell edge")
+        XCTAssertGreaterThanOrEqual(maxX, bmp.width - 2,
+            "powerline arrow must reach the right cell edge (no clipped apex / inset seam)")
+        XCTAssertLessThanOrEqual(minY, 2, "powerline arrow must span the full cell height")
+        XCTAssertGreaterThanOrEqual(maxY, bmp.height - 3,
+            "powerline arrow must span the full cell height")
+    }
+
     func testCircledDigitNotHorizontallyClipped() throws {
         let size: CGFloat = 17
         let base = NSFont(name: "Menlo", size: size) ?? NSFont.systemFont(ofSize: size)
