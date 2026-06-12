@@ -175,50 +175,115 @@ enum MetalShaders {
     // shapes stay round regardless of window proportions. Each helper is a pure
     // function of (auv, time) — no state, the motion lives in the math.
 
-    // One layer of raindrops sliding down a grid of tall cells. Each occupied
-    // cell runs its own drop on its own clock: the drop accelerates down the
-    // cell, swaying slightly, leaving a thin wet streak above it. Returns
-    // float4(refraction offset in auv units, wet mask, specular highlight).
-    static inline float4 rain_layer(float2 auv, float t, float2 cells, float seed) {
-        float2 st = auv * cells + float2(seed * 13.7, seed * 7.31);
+    // ---- Rain on glass (windshield) -----------------------------------------
+    // Modeled on how drops behave on a real car window, not on "falling":
+    //  • Sliding drops live on a grid that DRIFTS down while each drop climbs
+    //    its cell at the same rate — on screen the drop sits parked, quivering,
+    //    then snaps down the cell in a quick slide. That stick/slip rhythm is
+    //    what reads as "real rain" (the technique popularized by Martijn
+    //    Steinrucken's rain-shader breakdowns).
+    //  • A slide deposits a trail: a clear wiped band plus beads of water that
+    //    stay put on the glass (screen space) and shrink as they dry.
+    //  • A separate fine layer of static condensation beads covers the whole
+    //    pane, each on a slow condense→sit→evaporate cycle.
+    //  • Everything wet refracts (drops are little inverting lenses) and wipes
+    //    the condensation fog; dry glass stays blurred like a view past focus.
+
+    // Tent ramp: rises 0→1 over [0,b], falls back over [b,1]. With the ramp
+    // speed matched to the grid drift below, rise = parked, fall = slide.
+    static inline float rain_saw(float b, float t) {
+        return smoothstep(0.0, b, t) * smoothstep(1.0, b, t);
+    }
+
+    // One sliding-drop layer. Returns float4(refraction offset (auv units),
+    // wet mask, specular). `cells` sets density (x: columns, y: rows ~ tall).
+    static inline float4 rain_drop_layer(float2 auv, float t, float2 cells, float seed) {
+        const float kDrift = 0.45;     // cells/s the whole pattern slides down
+        const float kCycle = 0.55;     // drop cycles/s; 0.7 cells climbed over
+                                       // 85% of a cycle ≈ kDrift → parked
+        float2 st = auv * cells + float2(seed * 13.7, 0.0);
+        st.y -= t * kDrift;
+        // De-grid: each column runs on its own vertical phase.
+        st.y += hash22(float2(floor(st.x) + seed, 91.7)).x;
         float2 id = floor(st);
         float2 f = fract(st);
-        float2 rnd = hash22(id);
-        float n = rnd.x;
-        if (n < 0.14) { return float4(0.0); }   // some cells stay dry
-        // Per-cell clock: phase and speed both random, so drops never sync up.
-        float ti = fract(t * (0.08 + 0.22 * rnd.y) + n * 7.0);
-        // Accelerating fall (gravity-ish), with a fade at both ends of the loop
-        // so drops condense in and slide out instead of popping.
-        float fy = mix(0.08, 0.92, ti * ti);
-        float fx = 0.5 + (n - 0.5) * 0.55 + sin(ti * 21.0 + n * 43.0) * 0.04;
-        float fade = smoothstep(0.0, 0.10, ti) * (1.0 - smoothstep(0.85, 1.0, ti));
-        // Distance from the drop center in auv units (cells are non-square).
+        float2 h = hash22(id + seed);
+        float3 n = float3(h, fract(h.x * 17.13));
+        if (n.x < 0.12) { return float4(0.0); }   // dry cells
+        // Park position: off-center; the path wobbles as the drop slides (the
+        // wiggle is keyed to SCREEN y, so it bends the trail, not the clock).
+        float wig = auv.y * 14.0;
+        float fx = 0.5 + (n.x - 0.5) * 0.6
+                 + sin(wig + sin(wig * 0.55)) * 0.05 * (n.z - 0.5);
+        // Stick/slip: climb the cell against the drift (parked), snap down.
+        float ti = fract(t * kCycle + n.y);
+        float fy = 0.85 - 0.70 * rain_saw(0.85, ti);
         float2 toC = (f - float2(fx, fy)) / cells;
-        float r = (0.009 + 0.010 * fract(n * 9.7));
+        toC.y *= 0.84;                            // slight teardrop elongation
+        float r = 0.008 + 0.011 * fract(n.z * 9.7);
         float d = length(toC);
-        float drop = (1.0 - smoothstep(r * 0.7, r, d)) * fade;
-        // Wet streak: a thin clear band above the drop, strongest right behind
-        // it and fading toward where the drop started.
-        float sx = abs(toC.x);
-        float streakW = r * (0.55 + 0.35 * rnd.y);
-        float streak = (1.0 - smoothstep(streakW * 0.35, streakW, sx))
-                     * step(f.y, fy)
-                     * clamp(1.0 - (fy - f.y) / max(fy - 0.05, 0.001), 0.0, 1.0)
-                     * fade * 0.85;
-        // Refraction: the drop is a tiny lens — sample across its center,
-        // magnified, so the world appears inverted inside it. The streak only
-        // smears horizontally, and much less.
-        float2 off = -toC * drop * 3.0;
-        off.x += -toC.x * streak * 0.6;
-        // Specular: a small bright dot up-left of center, plus a faint rim ring
-        // at the drop boundary — on a dark terminal the rim is what makes the
-        // bead read as glass at all.
-        float hi = (1.0 - smoothstep(r * 0.12, r * 0.35,
-                                     length(toC - float2(-r * 0.30, -r * 0.35)))) * drop;
-        float rim = (smoothstep(r * 0.50, r * 0.80, d)
-                   - smoothstep(r * 0.80, r * 1.04, d)) * fade;
-        return float4(off, max(drop, streak), hi + rim * 0.26);
+        float drop = 1.0 - smoothstep(r * 0.72, r, d);
+        // Wiped band above the drop (screen-space above = smaller f.y): clears
+        // fog along the slide path, narrowing toward where the slide started.
+        float climb = clamp((fy - f.y) / max(fy, 0.001), 0.0, 1.0);  // 0 at drop → 1 at cell top
+        float bandW = r * (0.9 - 0.55 * climb);
+        float band = (1.0 - smoothstep(bandW * 0.5, bandW, abs(toC.x)))
+                   * step(f.y, fy) * (1.0 - climb * climb);
+        // Trail beads: water left ON the glass — bead rows live in SCREEN
+        // space so they stay put as the pattern drifts past, shrinking as
+        // they climb (older = drier). Random rows are skipped.
+        float beadRows = cells.y * 7.0;
+        float beadKeep = step(0.35, hash22(float2(id.x + seed, floor(auv.y * beadRows))).x);
+        float2 toB = float2(toC.x, (fract(auv.y * beadRows) - 0.5) / beadRows);
+        float br = r * (0.62 - 0.34 * climb);
+        float bead = (1.0 - smoothstep(br * 0.6, br, length(toB)))
+                   * band * beadKeep;
+        float wet = max(drop, max(bead, band * 0.5));
+        // Refraction: lens inversion inside drops/beads, mild smear in the band.
+        float2 off = -toC * drop * 4.5 + -toB * bead * 2.0;
+        off.x += -toC.x * band * 0.4;
+        // Lighting: a specular dot up-left + a soft rim — what makes beads
+        // read as glass over a dark terminal.
+        float hi = (1.0 - smoothstep(r * 0.10, r * 0.32,
+                                     length(toC - float2(-r * 0.30, -r * 0.38)))) * drop;
+        float rim = (smoothstep(r * 0.52, r * 0.82, d)
+                   - smoothstep(r * 0.82, r * 1.06, d));
+        return float4(off, wet, hi + rim * 0.22 * drop + rim * 0.10);
+    }
+
+    // Fine static condensation: small beads dotted over the whole pane, each
+    // on a slow condense → sit → evaporate cycle. They refract gently and are
+    // damp rather than wiped-clear (they sit on the fog, not through it).
+    static inline float4 rain_static_layer(float2 auv, float t, float grid, float seed) {
+        float2 st = auv * grid;
+        float2 id = floor(st);
+        float2 f = fract(st);
+        float2 h = hash22(id + seed);
+        if (h.x < 0.55) { return float4(0.0); }
+        float2 c = 0.25 + 0.5 * hash22(id + seed + 5.1);
+        float r = 0.10 + 0.16 * fract(h.y * 7.7);          // cell units
+        float life = fract(t * 0.045 + h.y);               // ~22s lifecycle
+        float presence = smoothstep(0.0, 0.18, life) * (1.0 - smoothstep(0.62, 1.0, life));
+        float d = length(f - c);
+        float m = (1.0 - smoothstep(r * 0.65, r, d)) * presence;
+        float2 off = -((f - c) / grid) * m * 1.6;
+        float hi = (1.0 - smoothstep(r * 0.10, r * 0.30,
+                                     length(f - c - float2(-r * 0.35, -r * 0.35)))) * m;
+        float rim = (smoothstep(r * 0.50, r * 0.78, d)
+                   - smoothstep(r * 0.78, r * 1.02, d)) * presence;
+        return float4(off, m * 0.55, hi * 0.5 + rim * 0.07);
+    }
+
+    // Composite rain field: two sliding layers (large + small drops) over the
+    // static condensation beads. Returns (offset, wet, spec).
+    static inline float4 rain_field(float2 auv, float t) {
+        float4 a = rain_drop_layer(auv, t, float2(11.0, 1.7), 0.0);
+        float4 b = rain_drop_layer(auv, t * 0.93 + 7.0, float2(19.0, 3.1), 3.7);
+        float4 s = rain_static_layer(auv, t, 34.0, 9.1);
+        float2 off = a.xy + b.xy + s.xy;
+        float wet = max(a.z, max(b.z, s.z));
+        float spec = a.w + b.w * 0.8 + s.w;
+        return float4(off, wet, spec);
     }
 
     // Drifting snow: three parallax layers of flakes, each layer a grid of
@@ -330,18 +395,15 @@ enum MetalShaders {
         float aspect = p.screenSize.x / p.screenSize.y;
         float rainWet = 0.0, rainSpec = 0.0, fogMix = 0.0;
         if (animMode > 0.5 && animMode < 1.5) {
-            // Rain on glass: two drop layers at different scales/clocks so the
-            // pattern never reads as a grid.
+            // Rain on glass (see rain_field above for the windshield model).
             float2 auv = float2(uv.x * aspect, uv.y);
-            float4 d1 = rain_layer(auv, animT, float2(20.0, 3.0), 0.0);
-            float4 d2 = rain_layer(auv, animT * 0.85 + 11.0, float2(13.0, 2.0), 3.7);
-            float2 off = d1.xy + d2.xy;
-            rainWet = max(d1.z, d2.z);
-            rainSpec = max(d1.w, d2.w);
-            uv += float2(off.x / aspect, off.y) * animK;
-            // Condensation: everything fogs except where water has wiped the
-            // glass clear (drops and their streaks stay sharp).
-            fogMix = animK * 0.65 * (1.0 - rainWet);
+            float4 rain = rain_field(auv, animT);
+            rainWet = rain.z;
+            rainSpec = rain.w;
+            uv += float2(rain.x / aspect, rain.y) * animK;
+            // Condensation: the dry glass is misted over and out of focus;
+            // water wipes it clear (drops fully, damp areas partially).
+            fogMix = animK * 0.75 * (1.0 - rainWet);
         } else if (animMode > 2.5) {
             // Underwater: layered sine wobble — slow large swell + faster ripple.
             uv.x += (sin(uv.y * 21.0 + animT * 1.6) * 0.0035
@@ -364,16 +426,22 @@ enum MetalShaders {
             color = src.rgb;
         }
 
-        // Rain condensation: a soft 5-tap blur plus a faint lift, mixed in
-        // everywhere the glass hasn't been wiped clear by a drop.
+        // Rain condensation: the world outside the glass is out of focus — a
+        // two-ring 9-tap blur plus a faint mist lift, mixed in everywhere the
+        // water hasn't wiped the pane clear.
         if (fogMix > 0.0) {
-            float2 texel = 4.0 / p.screenSize;
-            float3 blur = color * 0.2;
-            blur += scene.sample(samp, uv + float2( texel.x,  texel.y)).rgb * 0.2;
-            blur += scene.sample(samp, uv + float2(-texel.x,  texel.y)).rgb * 0.2;
-            blur += scene.sample(samp, uv + float2( texel.x, -texel.y)).rgb * 0.2;
-            blur += scene.sample(samp, uv + float2(-texel.x, -texel.y)).rgb * 0.2;
-            color = mix(color, blur + 0.022, fogMix);
+            float3 blur = color * 0.20;
+            float2 t1 = 3.0 / p.screenSize;
+            float2 t2 = 6.5 / p.screenSize;
+            blur += scene.sample(samp, uv + float2( t1.x,  t1.y)).rgb * 0.13;
+            blur += scene.sample(samp, uv + float2(-t1.x,  t1.y)).rgb * 0.13;
+            blur += scene.sample(samp, uv + float2( t1.x, -t1.y)).rgb * 0.13;
+            blur += scene.sample(samp, uv + float2(-t1.x, -t1.y)).rgb * 0.13;
+            blur += scene.sample(samp, uv + float2( t2.x,  0.0 )).rgb * 0.07;
+            blur += scene.sample(samp, uv + float2(-t2.x,  0.0 )).rgb * 0.07;
+            blur += scene.sample(samp, uv + float2( 0.0,   t2.y)).rgb * 0.07;
+            blur += scene.sample(samp, uv + float2( 0.0,  -t2.y)).rgb * 0.07;
+            color = mix(color, blur + 0.018, fogMix);
         }
 
         // Phosphor glow: cheap 3x3 box blur, lighten-mixed back in.
