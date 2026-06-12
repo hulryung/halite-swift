@@ -10,27 +10,27 @@ private let _wcwidthLocale: Int = {
     return 0
 }()
 
-/// 셀의 의미론적 색. NSColor를 직접 저장하지 않고 "무슨 색인지"만 보관한 뒤
-/// 렌더 시점에 현재 테마로 resolve한다 → 테마를 바꾸면 이미 그려진 ANSI 색까지
-/// 즉시 recolor됨 (Terminal.app/iTerm2 동작). truecolor(.rgb)는 절대값이라
-/// 테마와 무관 (Starship 무지개 프롬프트 등은 테마 바꿔도 그대로 — 정상).
+/// A cell's semantic color. Stores only "which color it is" rather than an NSColor,
+/// resolved against the current theme at render time → switching themes instantly
+/// recolors already-drawn ANSI colors (Terminal.app/iTerm2 behavior). truecolor(.rgb)
+/// is absolute, so theme-independent (Starship rainbow prompts etc. stay put — correct).
 public enum TermColor: Equatable, Codable {
-    /// 기본 전경색 (테마의 foreground). bg에는 사용하지 않음 — bg의 "기본"은 nil(투명).
+    /// Default foreground (the theme's foreground). Not used for bg — the bg "default" is nil (transparent).
     case `default`
-    /// ANSI 팔레트 인덱스 0-255. 0-15는 테마의 16색, 16-255는 표준 xterm cube/grayscale.
+    /// ANSI palette index 0-255. 0-15 are the theme's 16 colors, 16-255 the standard xterm cube/grayscale.
     case palette(Int)
     /// truecolor.
     case rgb(UInt8, UInt8, UInt8)
 }
 
-/// 한 셀의 시각 속성. SGR로 바뀌는 "현재 펜(pen)"이 이 값을 만들고,
-/// 새 글자가 grid에 쓰일 때 그 글자에 attach 된다.
+/// Visual attributes of one cell. The "current pen" mutated by SGR produces this
+/// value, and it's attached to each new character as it's written into the grid.
 public struct CellAttrs: Equatable, Codable {
     public var fg: TermColor
     public var bg: TermColor?
     public var bold: Bool
-    /// SGR 2 (faint/dim). fg를 배경 쪽으로 절반 정도 흐리게 그린다 — 셸 autosuggestion,
-    /// Claude Code의 회색 제안 텍스트 등이 이걸 쓴다.
+    /// SGR 2 (faint/dim). Draws fg blended about halfway toward the background —
+    /// shell autosuggestions, Claude Code's gray suggestion text, etc. use this.
     public var faint: Bool
     public var italic: Bool
     public var underline: Bool
@@ -57,13 +57,13 @@ public struct CellAttrs: Equatable, Codable {
         self.inverse = inverse
     }
 
-    /// 현재 테마로 fg/bg를 실제 NSColor로 resolve (inverse + faint 반영).
-    /// bg가 nil이면 투명(window background 비침).
+    /// Resolve fg/bg to actual NSColors with the current theme (applying inverse + faint).
+    /// nil bg means transparent (window background shows through).
     public func resolvedColors(theme: DamsonTheme) -> (fg: NSColor, bg: NSColor?) {
         var f = theme.nsColor(fg)
         let b: NSColor? = bg.map { theme.nsColor($0) }
-        // faint(SGR 2): fg를 배경 쪽으로 흐리게. inverse면 보이는 글자색이 swap 전
-        // f이므로 swap 전에 적용한다.
+        // faint (SGR 2): dim fg toward the background. With inverse, the visible
+        // glyph color is the pre-swap f, so apply before swapping.
         if faint {
             f = Self.dim(f, toward: b ?? theme.background, fraction: 0.5)
         }
@@ -73,7 +73,7 @@ public struct CellAttrs: Equatable, Codable {
         return (f, b)
     }
 
-    /// sRGB 공간에서 `c`를 `toward`로 `fraction`만큼 보간(0=원색, 1=완전히 toward).
+    /// Interpolate `c` toward `toward` by `fraction` in sRGB (0 = original, 1 = fully toward).
     private static func dim(_ c: NSColor, toward: NSColor, fraction t: CGFloat) -> NSColor {
         let a = c.usingColorSpace(.sRGB) ?? c
         let d = toward.usingColorSpace(.sRGB) ?? toward
@@ -123,21 +123,22 @@ public struct Line: Equatable {
     }
 }
 
-/// Grid의 한 셀. 글자 하나 + 속성 + (옵션) hyperlink.
+/// One cell of the Grid. A single character + attributes + (optional) hyperlink.
 public struct Cell: Equatable {
     public var char: Character
     public var attrs: CellAttrs
-    /// East Asian Wide 문자의 *후행(trailing) 셀* 표시.
-    /// true면 렌더러가 이 셀을 NSAttributedString에 추가하지 않음 (선행 셀의
-    /// wide glyph가 자연스럽게 두 칸을 점유함). 셸이 보내는 wide-aware backspace
-    /// (`\b\b  \b\b`)가 두 cell을 함께 비울 때 정상 동작에 필요.
+    /// Marks the *trailing cell* of an East Asian Wide character.
+    /// When true the renderer doesn't add this cell to the NSAttributedString (the
+    /// leading cell's wide glyph naturally occupies both columns). Needed so the
+    /// shell's wide-aware backspace (`\b\b  \b\b`) correctly clears both cells.
     public var isContinuation: Bool
-    /// wide 문자가 행 마지막 칸에 안 들어가 다음 행으로 넘어갈 때 남는 *레이아웃 빈칸*.
-    /// 콘텐츠 공백이 아니라 순전히 폭 맞춤용이라, reflow가 물리 행을 논리 줄로 되모을 때
-    /// 이 칸은 건너뛴다(콘텐츠 공백과 구분돼야 좁혔다 넓혔을 때 정렬이 안 어긋난다).
+    /// The *layout filler* left behind when a wide char doesn't fit the row's last
+    /// column and wraps to the next row. It's pure width padding, not content, so
+    /// reflow skips it when rejoining physical rows into logical lines (must be
+    /// distinguishable from a content space or narrow→wide resizes misalign).
     public var isWideSpacer: Bool
-    /// OSC 8 hyperlink URI. 셀이 hyperlink의 일부면 set.
-    /// run-length 그룹핑 시 hyperlink 경계에서 split됨.
+    /// OSC 8 hyperlink URI. Set when the cell is part of a hyperlink.
+    /// Run-length grouping splits at hyperlink boundaries.
     public var hyperlink: String?
 
     public init(
@@ -154,26 +155,28 @@ public struct Cell: Equatable {
         self.hyperlink = hyperlink
     }
 
-    /// 빈 셀 (공백 + 펜 속성).
+    /// A blank cell (space + pen attributes).
     public static func empty(attrs: CellAttrs) -> Cell {
         Cell(char: " ", attrs: attrs)
     }
 
-    /// wide 문자가 마지막 열에 안 들어가 다음 행으로 밀릴 때 그 자리에 남는 빈 칸.
-    /// 보이기엔 공백이지만 reflow 복원 시 콘텐츠가 아니므로 제외된다.
+    /// The filler cell left where a wide char didn't fit the last column and was
+    /// pushed to the next row. Looks like a space but is excluded as non-content on reflow.
     public static func wideSpacer(attrs: CellAttrs) -> Cell {
         Cell(char: " ", attrs: attrs, isWideSpacer: true)
     }
 
-    /// wide char의 후행 cell. 선행 cell 다음 칸에 배치. 선행 cell의 hyperlink를
-    /// 이어받아야 hyperlink 범위 판정(hover/클릭)이 wide 글자에서 끊기지 않는다.
+    /// The trailing cell of a wide char, placed right after the leading cell. It must
+    /// inherit the leading cell's hyperlink so hyperlink range hit-testing (hover/click)
+    /// doesn't break in the middle of a wide character.
     public static func continuation(attrs: CellAttrs, hyperlink: String? = nil) -> Cell {
         Cell(char: " ", attrs: attrs, isContinuation: true, hyperlink: hyperlink)
     }
 
-    /// 이 grapheme이 컬러 이모지(emoji presentation)로 그려져야 하는지.
-    /// 기본 emoji-presentation 문자(😀 등) + VS16(U+FE0F)로 강제된 시퀀스(ℹ️ 등)를
-    /// 포함. ZWJ/스킨톤/플래그 시퀀스는 첫 스칼라의 속성으로 잡힌다.
+    /// Whether this grapheme should be drawn as color emoji (emoji presentation).
+    /// Covers default emoji-presentation characters (😀 etc.) plus sequences forced
+    /// by VS16 (U+FE0F, e.g. ℹ️). ZWJ/skin-tone/flag sequences are caught via the
+    /// first scalar's properties.
     public static func isEmojiPresentation(_ ch: Character) -> Bool {
         for s in ch.unicodeScalars {
             if s.value == 0xFE0F { return true }                       // emoji variation selector

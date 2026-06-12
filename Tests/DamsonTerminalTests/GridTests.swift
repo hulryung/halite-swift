@@ -141,7 +141,7 @@ final class GridTests: XCTestCase {
     /// Regression: a narrowing reflow must not split a wide (CJK/Hangul) char from
     /// its continuation cell at a row boundary. If it did, the lead would sit in the
     /// last column with no continuation behind it and the renderer would squash the
-    /// glyph into one cell (the "한글 마지막 글자 잘림" bug). The whole wide char must
+    /// glyph into one cell (the "last Hangul character clipped" bug). The whole wide char must
     /// move onto the next physical row, exactly like putChar's last-column wide-wrap.
     func testReflowKeepsWideCharWholeAtRowBoundary() {
         let g = makeGrid(cols: 10, rows: 4)
@@ -646,17 +646,17 @@ final class GridTests: XCTestCase {
         XCTAssertEqual(g.cell(row: 0, col: 0).attrs.fg, .palette(1))
     }
 
-    // 테마 resolve — 같은 grid를 다른 테마로 그리면 indexed 색은 달라지고
-    // truecolor는 동일.
+    // Theme resolve — rendering the same grid with different themes changes
+    // indexed colors but leaves truecolor identical.
     func testThemeResolvesIndexedDifferentlyButRGBSame() {
         let indexed = CellAttrs(fg: .palette(1))
         let truecolor = CellAttrs(fg: .rgb(10, 20, 30))
         let dark = DamsonTheme.defaultDark
         let dracula = DamsonTheme.dracula
-        // indexed: 테마마다 ANSI red가 다름.
+        // indexed: ANSI red differs per theme.
         XCTAssertNotEqual(indexed.resolvedColors(theme: dark).fg,
                           indexed.resolvedColors(theme: dracula).fg)
-        // truecolor: 절대값이라 테마 무관.
+        // truecolor: absolute values, theme-independent.
         XCTAssertEqual(truecolor.resolvedColors(theme: dark).fg,
                        truecolor.resolvedColors(theme: dracula).fg)
     }
@@ -722,28 +722,31 @@ final class GridTests: XCTestCase {
     }
 
     func testSyncOutputModeDoesNotSuppressScrollbackPush() {
-        // DEC 2026 sync는 presentation hint일 뿐 scrollback과 무관. sync 중에도
-        // 화면 최상단(scrollTop==0)에서 위로 빠지는 줄은 정상적으로 scrollback에
-        // 누적되어야 한다 — 안 그러면 Claude Code 같은 primary-screen TUI의 history가
-        // 통째로 사라져 위로 스크롤이 안 됨.
+        // DEC 2026 sync is only a presentation hint and has nothing to do with
+        // scrollback. Even during sync, lines scrolled off the top of the screen
+        // (scrollTop==0) must still accumulate in scrollback — otherwise the
+        // history of primary-screen TUIs like Claude Code vanishes wholesale and
+        // scrolling up shows nothing.
         let g = makeGrid(cols: 4, rows: 2)
         write(g, "AAAA"); g.lineFeed(); g.carriageReturn()
         write(g, "BBBB")
         g.inSyncOutputMode = true
-        g.lineFeed() // sync 중 scrollUp — 그래도 push 되어야 함.
+        g.lineFeed() // scrollUp during sync — must still push.
         XCTAssertEqual(g.scrollback.count, 1)
         XCTAssertEqual(String(g.scrollback[0].cells.map { $0.char }), "AAAA")
     }
 
     func testAltScreenSuppressesScrollbackPush() {
-        // alt-screen(vim/htop)에선 위로 빠지는 줄을 scrollback에 누적하지 않는다.
+        // On the alt screen (vim/htop), lines scrolled off the top are not
+        // accumulated in scrollback.
         let g = makeGrid(cols: 4, rows: 2)
         write(g, "AAAA"); g.lineFeed(); g.carriageReturn()
         write(g, "BBBB")
         g.enterAltScreen()
-        // alt buffer는 cursor가 0행으로 리셋되므로 바닥까지 내려가 scrollUp을 유발.
+        // The alt buffer resets the cursor to row 0, so write down to the bottom
+        // to trigger a scrollUp.
         write(g, "XXXX"); g.lineFeed(); g.carriageReturn()
-        write(g, "YYYY"); g.lineFeed() // 바닥 행에서 scrollUp — alt라 suppress.
+        write(g, "YYYY"); g.lineFeed() // scrollUp at the bottom row — suppressed on alt.
         XCTAssertEqual(g.scrollback.count, 0)
     }
 
@@ -821,7 +824,7 @@ final class GridTests: XCTestCase {
         let savedRow = g.cursorRow
         let savedCol = g.cursorCol
         g.enterAltScreen()
-        write(g, "XYZW") // alt 내용
+        write(g, "XYZW") // alt content
         g.leaveAltScreen()
         XCTAssertFalse(g.isAltScreenActive)
         XCTAssertEqual(g.cursorRow, savedRow)
@@ -839,16 +842,16 @@ final class GridTests: XCTestCase {
         XCTAssertGreaterThan(scrollbackBeforeAlt, 0)
 
         g.enterAltScreen()
-        // Alt 스크롤백은 0이어야 함
+        // Alt scrollback must be 0
         XCTAssertEqual(g.scrollback.count, 0)
-        // alt 내에서 한참 흘려도 scrollback 안 생김
+        // Scrolling plenty inside alt still produces no scrollback
         for _ in 0..<5 {
             write(g, "XX"); g.lineFeed(); g.carriageReturn()
         }
         XCTAssertEqual(g.scrollback.count, 0)
 
         g.leaveAltScreen()
-        // 복귀 후 primary scrollback 복원
+        // After returning, the primary scrollback is restored
         XCTAssertEqual(g.scrollback.count, scrollbackBeforeAlt)
     }
 
@@ -876,10 +879,10 @@ final class GridTests: XCTestCase {
         write(g, "alt!")
         g.resize(cols: 6, rows: 4)
         g.leaveAltScreen()
-        // 복귀 후 grid는 새 크기지만 primary 내용은 잘 살아있어야 함
+        // After returning, the grid has the new size but the primary content must survive
         XCTAssertEqual(g.cols, 6)
         XCTAssertEqual(g.rows, 4)
-        // "AAA"가 첫줄에 있어야 (grow 시 위쪽 정렬 유지)
+        // "AAA" must be on the first line (top alignment kept when growing)
         XCTAssertEqual(g.cell(row: 0, col: 0).char, "A")
         XCTAssertEqual(g.cell(row: 1, col: 0).char, "B")
     }
@@ -899,14 +902,14 @@ final class GridTests: XCTestCase {
 
     func testSetScrollRegionRejectsInvalidRange() {
         let g = makeGrid(cols: 4, rows: 4)
-        g.setScrollRegion(top: 2, bottom: 1) // bottom < top → 무시
+        g.setScrollRegion(top: 2, bottom: 1) // bottom < top → ignored
         XCTAssertEqual(g.scrollTop, 0)
         XCTAssertEqual(g.scrollBottom, 3)
     }
 
     func testScrollUpOnlyAffectsRegion() {
         let g = makeGrid(cols: 2, rows: 5)
-        // 0: AA, 1: BB, 2: CC, 3: DD, 4: EE — write 5줄, 마지막 LF은 생략 (안 그러면 scrollUp)
+        // 0: AA, 1: BB, 2: CC, 3: DD, 4: EE — write 5 lines, omitting the final LF (it would scrollUp)
         let labels = ["A", "B", "C", "D", "E"]
         for (i, label) in labels.enumerated() {
             write(g, label + label)
@@ -945,16 +948,16 @@ final class GridTests: XCTestCase {
     func testLineFeedAtScrollBottomScrollsRegion() {
         let g = makeGrid(cols: 2, rows: 5)
         g.setScrollRegion(top: 1, bottom: 3) // region rows 1..3
-        // row 1, 2, 3 각각에 표식 작성
+        // Write a marker on each of rows 1, 2, 3
         g.setCursor(row: 2, col: 1); write(g, "XX") // row 1
         g.setCursor(row: 3, col: 1); write(g, "YY") // row 2
         g.setCursor(row: 4, col: 1); write(g, "ZZ") // row 3 (scrollBottom)
-        // cursor가 scrollBottom (3, 1)에 있고 pendingWrap. setCursor로 정리.
+        // Cursor is at scrollBottom (3, 1) with pendingWrap. Clean up via setCursor.
         g.setCursor(row: 4, col: 2)
         g.lineFeed()
-        // 커서는 scrollBottom 그대로 유지
+        // The cursor stays put at scrollBottom
         XCTAssertEqual(g.cursorRow, 3)
-        // region 안에서 1줄 shift up: row 1 = (was row 2) = "YY", row 2 = "ZZ", row 3 = blank
+        // 1-line shift up within the region: row 1 = (was row 2) = "YY", row 2 = "ZZ", row 3 = blank
         XCTAssertEqual(g.cell(row: 1, col: 0).char, "Y")
         XCTAssertEqual(g.cell(row: 2, col: 0).char, "Z")
         XCTAssertEqual(g.cell(row: 3, col: 0).char, " ")
@@ -968,9 +971,9 @@ final class GridTests: XCTestCase {
         write(g, "XX")
         // cursor now at (3, 2) but pendingWrap. Force position.
         g.setCursor(row: 4, col: 1) // (3, 0)
-        g.lineFeed() // 그냥 row 4로 이동, scrollUp 안 일어남
+        g.lineFeed() // just moves to row 4, no scrollUp happens
         XCTAssertEqual(g.cursorRow, 4)
-        // row 3 contents 그대로
+        // row 3 contents unchanged
         XCTAssertEqual(g.cell(row: 3, col: 0).char, "X")
     }
 
@@ -987,10 +990,10 @@ final class GridTests: XCTestCase {
         g.setScrollRegion(top: 1, bottom: 4)
         g.enterAltScreen()
         XCTAssertEqual(g.scrollTop, 0)
-        XCTAssertEqual(g.scrollBottom, 5) // alt는 전체 화면 region으로 시작
+        XCTAssertEqual(g.scrollBottom, 5) // alt starts with a full-screen region
         g.setScrollRegion(top: 2, bottom: 3)
         g.leaveAltScreen()
-        // primary 복귀 시 원래 region이 복원되어야 함
+        // Returning to primary must restore the original region
         XCTAssertEqual(g.scrollTop, 1)
         XCTAssertEqual(g.scrollBottom, 4)
     }
@@ -999,7 +1002,7 @@ final class GridTests: XCTestCase {
         let g = makeGrid(cols: 2, rows: 4)
         g.setScrollRegion(top: 1, bottom: 3)
         g.scrollUp(count: 1)
-        XCTAssertEqual(g.scrollback.count, 0) // top != 0 이면 push 안 함
+        XCTAssertEqual(g.scrollback.count, 0) // no push when top != 0
     }
 
     // MARK: M3.9 — CHA / VPA / ECH / SC / RC
@@ -1008,7 +1011,7 @@ final class GridTests: XCTestCase {
         let g = makeGrid(cols: 8, rows: 4)
         g.setCursor(row: 3, col: 1) // (2, 0)
         g.setCursorColumn(5) // 1-based → col 4
-        XCTAssertEqual(g.cursorRow, 2) // row 유지
+        XCTAssertEqual(g.cursorRow, 2) // row preserved
         XCTAssertEqual(g.cursorCol, 4)
     }
 
@@ -1017,7 +1020,7 @@ final class GridTests: XCTestCase {
         g.setCursor(row: 2, col: 3) // (1, 2)
         g.setCursorRow(6) // 1-based → row 5
         XCTAssertEqual(g.cursorRow, 5)
-        XCTAssertEqual(g.cursorCol, 2) // col 유지
+        XCTAssertEqual(g.cursorCol, 2) // col preserved
     }
 
     func testEraseChars() {
@@ -1029,7 +1032,7 @@ final class GridTests: XCTestCase {
         XCTAssertEqual(g.cell(row: 0, col: 2).char, " ")
         XCTAssertEqual(g.cell(row: 0, col: 4).char, " ")
         XCTAssertEqual(g.cell(row: 0, col: 5).char, "F")
-        // cursor 위치 그대로
+        // cursor position unchanged
         XCTAssertEqual(g.cursorRow, 0)
         XCTAssertEqual(g.cursorCol, 2)
     }
@@ -1038,7 +1041,7 @@ final class GridTests: XCTestCase {
         let g = makeGrid(cols: 4, rows: 2)
         write(g, "ABCD")
         g.setCursor(row: 1, col: 3) // (0, 2)
-        g.eraseChars(10) // 끝까지만
+        g.eraseChars(10) // clips at the row end
         XCTAssertEqual(g.cell(row: 0, col: 2).char, " ")
         XCTAssertEqual(g.cell(row: 0, col: 3).char, " ")
     }
@@ -1053,7 +1056,7 @@ final class GridTests: XCTestCase {
         g.restoreCursor()
         XCTAssertEqual(g.cursorRow, 2)
         XCTAssertEqual(g.cursorCol, 4)
-        // pen도 복원
+        // pen restored too
         XCTAssertEqual(g.pen.fg, .palette(1)) // red
     }
 
@@ -1089,17 +1092,17 @@ final class GridTests: XCTestCase {
     }
 
     func testWideCharBackspaceSequenceClearsBoth() {
-        // 셸이 wide char 삭제용으로 보내는 \b\b  \b\b 시퀀스를 시뮬레이션.
+        // Simulate the \b\b  \b\b sequence shells send to delete a wide char.
         let g = makeGrid(cols: 6, rows: 2)
         g.putChar("한")
         g.putChar("국")
         XCTAssertEqual(g.cursorCol, 4)
-        // 셸 시퀀스: \b\b  \b\b
+        // Shell sequence: \b\b  \b\b
         g.backspace(); g.backspace()                  // cursor: 4 → 3 → 2
         XCTAssertEqual(g.cursorCol, 2)
         g.putChar(" "); g.putChar(" ")                // cell[2]=' ', cell[3]=' '
         g.backspace(); g.backspace()                  // cursor: 4 → 3 → 2
-        // "국"이 차지했던 cell 2, 3 둘 다 비워졌고, "한"은 그대로 cell 0, 1.
+        // Cells 2, 3 that "국" occupied are both cleared; "한" stays in cells 0, 1.
         XCTAssertEqual(g.cell(row: 0, col: 0).char, "한")
         XCTAssertTrue(g.cell(row: 0, col: 1).isContinuation)
         XCTAssertEqual(g.cell(row: 0, col: 2).char, " ")
@@ -1108,11 +1111,11 @@ final class GridTests: XCTestCase {
     }
 
     func testWideCharWrapsAtLastColumn() {
-        // 마지막 열에 wide char 들어오면, 그 열은 비우고 다음 줄로 wrap.
+        // When a wide char arrives at the last column, leave that column blank and wrap to the next line.
         let g = makeGrid(cols: 3, rows: 2)
         g.putChar("a")  // col 0
         g.putChar("b")  // col 1
-        // col 2 (마지막)에 wide char "한"이 들어오려 하면 → wrap
+        // Wide char "한" trying to land at col 2 (the last) → wrap
         g.putChar("한")
         XCTAssertEqual(g.cell(row: 1, col: 0).char, "한")
         XCTAssertTrue(g.cell(row: 1, col: 1).isContinuation)
@@ -1125,13 +1128,13 @@ final class GridTests: XCTestCase {
         g.setCursor(row: 4, col: 4) // (3, 3)
         g.saveCursor()
         g.enterAltScreen()
-        // alt에선 saved 비어있음
+        // On alt, saved cursor is empty
         let altCheckpoint = g.cursorRow
         XCTAssertEqual(altCheckpoint, 0)
         g.restoreCursor() // no-op
         XCTAssertEqual(g.cursorRow, 0)
         g.leaveAltScreen()
-        // primary 복귀 후 saved 살아있어야 함
+        // After returning to primary, saved cursor must survive
         g.setCursor(row: 1, col: 1) // (0, 0)
         g.restoreCursor()
         XCTAssertEqual(g.cursorRow, 3)

@@ -1,8 +1,8 @@
 #!/usr/bin/env swift
-// gen-og.swift — assets/og.png (1200×630, Open Graph 이미지) 생성.
+// gen-og.swift — generates assets/og.png (1200×630, Open Graph image).
 //
-// Resources/Damson-1024.png(앱 아이콘)를 좌측에 배치하고 우측에 제품명/태그라인을
-// AppKit으로 합성한다. 외부 의존성 없음.
+// Places Resources/Damson-1024.png (the app icon) on the left and composites
+// the product name/tagline on the right via AppKit. No external dependencies.
 //
 // build: swift scripts/gen-og.swift
 
@@ -31,7 +31,7 @@ NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
 bg.setFill()
 NSRect(x: 0, y: 0, width: W, height: H).fill()
 
-// 아이콘 PNG의 모서리(라운드 사각형 바깥)가 흰색이라 라운드 패스로 클리핑.
+// The icon PNG's corners (outside the rounded rect) are white, so clip with a rounded path.
 let iconRect = NSRect(x: 48, y: 43, width: 544, height: 544)
 let cornerRadius = 180.0 / 1024.0 * iconRect.width
 NSGraphicsContext.current?.saveGraphicsState()

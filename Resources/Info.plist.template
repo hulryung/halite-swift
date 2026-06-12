@@ -43,12 +43,12 @@
 	<key>NSHumanReadableCopyright</key>
 	<string>damson contributors. MIT licensed.</string>
 
-	<!-- Sparkle 자동업데이트 -->
+	<!-- Sparkle auto-update -->
 	<key>SUFeedURL</key>
 	<string>https://raw.githubusercontent.com/hulryung/damson/main/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>__SPARKLE_PUBLIC_KEY__</string>
-	<!-- 자동 체크 디폴트 비활성 — Settings 토글로 켬 (damson.autoUpdate). -->
+	<!-- Automatic checks disabled by default — enabled via the Settings toggle (damson.autoUpdate). -->
 	<key>SUEnableAutomaticChecks</key>
 	<false/>
 	<key>SUEnableInstallerLauncherService</key>

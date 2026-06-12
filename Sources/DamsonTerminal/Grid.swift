@@ -1,28 +1,28 @@
 import AppKit
 import Foundation
 
-/// 2D 셀 grid + 커서. VT/ANSI 의미에 따라 mutate.
-/// M3는 viewport(=현재 화면)만 책임지고 scrollback은 M3.5에서 추가.
+/// 2D cell grid + cursor. Mutated per VT/ANSI semantics.
+/// M3 covers only the viewport (= current screen); scrollback arrives in M3.5.
 ///
-/// 모든 메서드는 호출자가 main thread에서 직렬화한다고 가정 (DamsonSession이 보장).
+/// All methods assume the caller serializes on the main thread (DamsonSession guarantees it).
 public final class Grid {
     public private(set) var cols: Int
     public private(set) var rows: Int
 
-    /// 셀 저장: `cells[row][col]`. 항상 `rows × cols`로 유지.
-    /// 각 행은 `Line`(셀 배열 + soft-wrap 비트)이다. wrap 비트는 reflow에서 사용.
+    /// Cell storage: `cells[row][col]`. Always kept at `rows × cols`.
+    /// Each row is a `Line` (cell array + soft-wrap bit). The wrap bit is used by reflow.
     private var cells: [Line]
 
-    /// 커서 (0-based).
+    /// Cursor (0-based).
     public private(set) var cursorRow: Int = 0
     public private(set) var cursorCol: Int = 0
 
-    /// 다음 putChar가 wrap을 일으켜야 함을 표시. xterm-style "deferred wrap".
-    /// 셀이 마지막 열에 들어간 직후 set, 다음 평문이 들어오면 cursor를 다음 줄로.
+    /// Marks that the next putChar must wrap. xterm-style "deferred wrap":
+    /// set right after a cell lands in the last column; the next printable moves the cursor down.
     private var pendingWrap: Bool = false
 
-    /// DECTCEM (`\e[?25h` / `\e[?25l`)로 토글되는 커서 가시성.
-    /// 셸이 prompt 그릴 동안 잠깐 숨기는 패턴에 사용.
+    /// Cursor visibility, toggled by DECTCEM (`\e[?25h` / `\e[?25l`).
+    /// Used by shells that briefly hide the cursor while drawing the prompt.
     public private(set) var cursorVisible: Bool = true
 
     /// Cursor shape, set by DECSCUSR (`CSI Ps SP q`) or the user's default config.
@@ -31,55 +31,55 @@ public final class Grid {
     }
     public private(set) var cursorShape: CursorShape = .block
 
-    /// OSC 8 hyperlink — 현재 활성 URI. nil이면 비활성.
-    /// 다음 `putChar`에 의해 새로 쓰여지는 cell들에 attach됨.
+    /// OSC 8 hyperlink — the currently active URI. nil means inactive.
+    /// Attached to cells newly written by subsequent `putChar`s.
     public private(set) var currentHyperlink: String? = nil
 
-    /// DECSTBM scroll region 상단 (0-based, inclusive). 기본값 0.
+    /// DECSTBM scroll region top (0-based, inclusive). Defaults to 0.
     public private(set) var scrollTop: Int = 0
-    /// DECSTBM scroll region 하단 (0-based, inclusive). 기본값 rows - 1.
+    /// DECSTBM scroll region bottom (0-based, inclusive). Defaults to rows - 1.
     public private(set) var scrollBottom: Int = 0
 
-    /// DECSC/DECRC (또는 CSI s/u)로 저장되는 cursor + pen 스냅샷.
-    /// 각 buffer(primary/alt)가 자기 saved state를 가져야 함 — alt screen snapshot에 포함.
+    /// Cursor + pen snapshot saved by DECSC/DECRC (or CSI s/u).
+    /// Each buffer (primary/alt) needs its own saved state — included in the alt screen snapshot.
     private var savedCursorRow: Int = 0
     private var savedCursorCol: Int = 0
     private var savedPen: CellAttrs? = nil
 
-    /// 현재 펜(pen) 속성. SGR이 갱신.
+    /// Current pen attributes. Updated by SGR.
     public var pen: CellAttrs
 
-    /// SGR 0 (reset) 시 복원되는 기본 펜.
+    /// The default pen restored by SGR 0 (reset).
     public let defaultPen: CellAttrs
 
-    /// 호스트가 갱신을 감지하는 단조증가 버전. 매 mutation마다 +1.
+    /// Monotonically increasing version the host watches for updates. +1 per mutation.
     public private(set) var version: UInt64 = 0
 
-    /// 위로 밀려난 줄들. 가장 오래된 것이 index 0, 가장 최근이 마지막.
-    /// `maxScrollbackLines`를 초과하면 가장 오래된 것부터 evict.
+    /// Lines scrolled off the top. Oldest at index 0, newest last.
+    /// Past `maxScrollbackLines`, the oldest are evicted first.
     public private(set) var scrollback: [Line] = []
 
-    /// scrollback의 누적 push 카운트. evict가 일어나도 단조증가하므로
-    /// 호스트가 "그 사이 새로 추가된 줄 수" / "evict 여부"를 판단할 수 있음.
+    /// Cumulative scrollback push count. Monotonically increasing even across evicts,
+    /// so the host can compute "lines added since then" / whether eviction happened.
     public private(set) var scrollbackPushCount: UInt64 = 0
 
-    /// 세션 동안 scrollback 최상단에서 evict된 누적 줄 수 (`pushCount - 현재 count`).
+    /// Cumulative lines evicted from the top of scrollback this session (`pushCount - current count`).
     ///
-    /// **언더플로 안전.** reflow(`reflowPrimary`)는 `scrollbackPushCount`를 건드리지
-    /// 않고 `scrollback`을 통째로 재구성하므로, 컬럼을 좁히면 soft-wrap이 늘어
-    /// `scrollback.count`가 `scrollbackPushCount`를 넘을 수 있다. 그 경우 evict된 게
-    /// 없으므로 `UInt64` 빼기로 트랩(크래시)하는 대신 0을 돌려준다.
+    /// **Underflow-safe.** Reflow (`reflowPrimary`) rebuilds `scrollback` wholesale
+    /// without touching `scrollbackPushCount`, so narrowing the columns can add
+    /// soft-wraps until `scrollback.count` exceeds `scrollbackPushCount`. Nothing was
+    /// evicted in that case, so return 0 instead of trapping (crashing) on `UInt64` subtraction.
     public var linesEvictedFromTop: UInt64 {
         let count = UInt64(scrollback.count)
         return scrollbackPushCount > count ? scrollbackPushCount - count : 0
     }
 
-    /// scrollback 최대 줄 수. `DamsonSession`이 config에서 받아서 설정.
+    /// Maximum scrollback line count. `DamsonSession` sets it from config.
     public var maxScrollbackLines: Int = 10_000
 
-    /// 세션 복원 시, 라이브 출력이 시작되기 전에 이전 세션의 scrollback을 주입한다.
-    /// `lines`를 현재 scrollback 앞(가장 오래된 쪽)에 붙이고 `maxScrollbackLines`로 클램프.
-    /// pushCount도 늘려 "복원된 줄"이 정상 scrollback처럼 보이게 한다.
+    /// On session restore, inject the previous session's scrollback before live output starts.
+    /// Prepends `lines` to the current scrollback (oldest end) and clamps to `maxScrollbackLines`.
+    /// Also bumps pushCount so the "restored lines" look like normal scrollback.
     public func seedScrollback(_ lines: [Line]) {
         guard !lines.isEmpty else { return }
         scrollback = lines + scrollback
@@ -89,22 +89,22 @@ public final class Grid {
         }
     }
 
-    /// alt screen 진입 여부. true면 현재 buffer는 alt, 진입 직전의 primary 상태가 `savedPrimary`에 보존.
+    /// Whether the alt screen is active. If true the current buffer is alt, and the primary state from just before entry is kept in `savedPrimary`.
     public private(set) var isAltScreenActive: Bool = false
 
-    /// Synchronized Output Mode(DECSET 2026)가 이 session에서 사용된 적 있는지.
-    /// 한 번이라도 set 되면 sticky-true. resize 시 viewport-top anchoring + blank cells
-    /// 정책에 사용 — 한 번이라도 TUI를 띄운 적 있으면 그 세션은 TUI-friendly로 운영.
+    /// Whether Synchronized Output Mode (DECSET 2026) has ever been used in this session.
+    /// Sticky-true once set. Used for the viewport-top anchoring + blank cells policy on
+    /// resize — once a TUI has run, the session is operated TUI-friendly.
     public var hasUsedSyncOutput: Bool = false
 
-    /// 현재 2026 sync output mode 안에 있는지 (transient — `\e[?2026h`로 set,
-    /// `\e[?2026l`로 clear). Claude Code 같은 TUI가 redraw burst를 보낼 때 진행 중.
-    /// 이 동안의 scrollUp(line-feed로 화면 끝에서 바닥에 닿음)은 scrollback에 push
-    /// 안 함 — redraw burst의 옛 라인이 scrollback에 누적되어 사용자가 스크롤 시
-    /// 잔재 박스를 보는 회귀 방지.
+    /// Whether we're inside 2026 sync output mode right now (transient — set by
+    /// `\e[?2026h`, cleared by `\e[?2026l`). Active while TUIs like Claude Code send
+    /// redraw bursts. scrollUp during it (line-feed hitting bottom at the end of the
+    /// screen) doesn't push to scrollback — prevents the regression where old lines of
+    /// a redraw burst pile up in scrollback and the user sees leftover boxes when scrolling.
     public var inSyncOutputMode: Bool = false
 
-    /// alt screen 진입 시 보존되는 primary buffer 스냅샷. alt 도중 resize가 와도 같이 따라감.
+    /// Primary buffer snapshot kept on alt screen entry. Tracks resizes that arrive while in alt.
     private struct PrimarySnapshot {
         var cells: [Line]
         var cursorRow: Int
@@ -132,7 +132,7 @@ public final class Grid {
         self.scrollBottom = rows - 1
     }
 
-    // MARK: - 셀 접근
+    // MARK: - Cell access
 
     public func cell(row: Int, col: Int) -> Cell {
         precondition(row >= 0 && row < rows)
@@ -140,33 +140,34 @@ public final class Grid {
         return cells[row][col]
     }
 
-    /// 한 행 전체를 셀 배열로 반환. 렌더러용.
+    /// Return one whole row as a cell array. For the renderer.
     public func row(_ r: Int) -> [Cell] {
         precondition(r >= 0 && r < rows)
         return cells[r].cells
     }
 
-    /// 한 viewport 행이 soft-wrap 되었는지(다음 행으로 이어지는지). 렌더러/reflow용.
+    /// Whether a viewport row soft-wrapped (continues onto the next row). For renderer/reflow.
     public func rowWrapped(_ r: Int) -> Bool {
         precondition(r >= 0 && r < rows)
         return cells[r].wrapped
     }
 
-    /// 셸이 OSC 133;A(프롬프트 시작)를 보냈을 때 호출. 현재 커서 행에 프롬프트-시작
-    /// 마크를 단다. reflow가 이 마크부터 커서까지의 "라이브 프롬프트 블록"을 재줄바꿈
-    /// 없이 보존해, 셸의 SIGWINCH redraw(상대 커서 ↑N + 지우기)가 프롬프트 위 콘텐츠를
-    /// 먹지 않게 한다. viewport에는 마크가 하나만 있으면 되므로 기존 것은 지운다.
+    /// Called when the shell sends OSC 133;A (prompt start). Puts a prompt-start mark
+    /// on the current cursor row. Reflow preserves the "live prompt block" from this
+    /// mark to the cursor without rewrapping, so the shell's SIGWINCH redraw (relative
+    /// cursor ↑N + erase) can't eat content above the prompt. The viewport only needs
+    /// one mark, so existing ones are cleared.
     public func markPromptStart() {
         for r in 0..<rows { cells[r].isPromptStart = false }
         guard cursorRow >= 0, cursorRow < rows else { return }
         cells[cursorRow].isPromptStart = true
     }
 
-    // MARK: - 기본 mutation
+    // MARK: - Basic mutation
 
-    /// 한 글자를 현재 cursor 위치에 쓰고 cursor를 진행.
-    /// xterm-style deferred wrap: 마지막 열에서는 wrap을 다음 평문까지 미룸.
-    /// East Asian Wide char는 2 cell 점유 (선행 cell + continuation marker).
+    /// Write one character at the current cursor position and advance the cursor.
+    /// xterm-style deferred wrap: at the last column the wrap waits for the next printable.
+    /// An East Asian Wide char occupies 2 cells (leading cell + continuation marker).
     public func putChar(_ ch: Character) {
         // Grapheme reassembly: the shell can echo one grapheme's scalars across
         // separate writes during line editing (👍 then 🏽, 🇰 then 🇷), so a
@@ -191,10 +192,10 @@ public final class Grid {
 
         let wide = Cell.isWide(ch)
 
-        // wide char가 마지막 열에 걸리면 그 cell은 비우고 다음 줄로 wrap.
+        // A wide char landing on the last column leaves that cell blank and wraps to the next line.
         if wide && cursorCol == cols - 1 {
-            // 레이아웃 빈칸으로 표시 — reflow가 논리 줄을 되모을 때 이 칸을 콘텐츠로
-            // 잘못 끼워 넣지 않게 한다(콘텐츠 공백과 구분).
+            // Mark as a layout filler — keeps reflow from wrongly splicing this cell
+            // in as content when rejoining logical lines (distinct from a content space).
             cells[cursorRow][cursorCol] = Cell.wideSpacer(attrs: pen)
             // Same soft-wrap case: a wide glyph that won't fit pushes to the next
             // row, so the row it leaves behind is a wrapped continuation.
@@ -207,10 +208,10 @@ public final class Grid {
             cursorCol = 0
         }
 
-        // wide 문자의 한쪽 셀만 덮어쓰면 짝 셀이 orphan으로 남아 반쪽 글리프가 깨져
-        // 보인다(Claude Code 등 TUI가 커서를 옮겨 부분 재그리기할 때 발생). 덮어쓰기
-        // 전에 걸친 wide 문자의 짝을 공백으로 지운다. wide 문자를 쓸 땐 continuation이
-        // 차지할 다음 칸도 같이 정리.
+        // Overwriting only one cell of a wide char leaves its partner orphaned and a
+        // broken half glyph on screen (happens when TUIs like Claude Code move the
+        // cursor and partially redraw). Blank the partner of any straddling wide char
+        // before overwriting. When writing a wide char, also clean the next cell the continuation will occupy.
         eraseWidePartner(row: cursorRow, col: cursorCol)
         if wide, cursorCol + 1 < cols { eraseWidePartner(row: cursorRow, col: cursorCol + 1) }
 
@@ -231,9 +232,9 @@ public final class Grid {
         bumpVersion()
     }
 
-    /// `(row,col)`을 덮어쓰기 직전에, 그 자리에 걸친 wide 문자의 짝 셀을 공백으로
-    /// 지운다. col이 continuation이면 lead(col-1)를, col이 wide lead면 continuation
-    /// (col+1)을 비운다. 이렇게 해야 wide 문자의 반쪽만 덮을 때 orphan 글리프가 안 남는다.
+    /// Just before overwriting `(row,col)`, blank the partner cell of any wide char
+    /// straddling that spot. If col is a continuation, blank the lead (col-1); if col
+    /// is a wide lead, blank the continuation (col+1). Prevents orphan glyphs when only half a wide char is overwritten.
     private func eraseWidePartner(row: Int, col: Int) {
         guard row >= 0, row < rows, col >= 0, col < cols else { return }
         if cells[row][col].isContinuation {
@@ -302,9 +303,9 @@ public final class Grid {
         return (0x1F1E6...0x1F1FF).contains(v)
     }
 
-    /// LF (`\n`): cursor를 한 줄 아래로.
-    /// - scroll region 바닥(`scrollBottom`)에 닿으면 region 안에서 scrollUp(1).
-    /// - region 밖의 frozen 영역에서는 단순 cursor 이동, 화면 끝에선 no-op.
+    /// LF (`\n`): move the cursor down one line.
+    /// - At the scroll region bottom (`scrollBottom`), scrollUp(1) within the region.
+    /// - In the frozen area outside the region, just move the cursor; no-op at the screen edge.
     public func lineFeed() {
         pendingWrap = false
         if cursorRow == scrollBottom {
@@ -315,15 +316,15 @@ public final class Grid {
         bumpVersion()
     }
 
-    /// CR (`\r`): cursor를 줄 시작으로.
+    /// CR (`\r`): move the cursor to the start of the line.
     public func carriageReturn() {
         pendingWrap = false
         cursorCol = 0
         bumpVersion()
     }
 
-    /// BS (`\b`): cursor를 한 칸 왼쪽으로. 글자는 지우지 않는다.
-    /// 줄 시작에서는 no-op (간단한 모델 — wrap 되돌리기 없음).
+    /// BS (`\b`): move the cursor one cell left. Does not erase the character.
+    /// No-op at the start of a line (simple model — no wrap undo).
     public func backspace() {
         pendingWrap = false
         if cursorCol > 0 {
@@ -332,29 +333,31 @@ public final class Grid {
         }
     }
 
-    // MARK: - 스크롤
+    // MARK: - Scrolling
 
-    /// scroll region을 위로 `count`줄만큼 밀어 올림. region 밖 행은 영향 없음.
-    /// 위로 빠지는 줄은 region이 화면 최상단에서 시작할 때만 (primary buffer + scrollTop==0)
-    /// scrollback에 push, 아니면 그냥 버림. 바닥은 빈 줄로 채움.
+    /// Shift the scroll region up by `count` lines. Rows outside the region are untouched.
+    /// Lines falling off the top are pushed to scrollback only when the region starts at
+    /// the top of the screen (primary buffer + scrollTop==0), otherwise dropped. Bottom fills with blanks.
     public func scrollUp(count n: Int) {
         guard n > 0 else { return }
         let regionHeight = scrollBottom - scrollTop + 1
         guard regionHeight > 0 else { return }
         let evictCount = min(n, regionHeight)
 
-        // scrollback에는 region이 화면 최상단(scrollTop == 0)에서 시작하고 alt-screen이
-        // 아닐 때만 push. tmux 상태바처럼 region이 중간에 있으면 위로 빠지는 내용을
-        // 누적하지 않음 (xterm 동작).
+        // Push to scrollback only when the region starts at the top of the screen
+        // (scrollTop == 0) and we're not on the alt screen. With a mid-screen region
+        // (tmux status bar etc.), content falling off the top isn't accumulated (xterm behavior).
         //
-        // DEC 2026 synchronized output(inSyncOutputMode) 중에도 push한다 — sync는
-        // presentation hint일 뿐 scrollback과 무관(실제 터미널들과 동일). Claude Code 등
-        // primary-screen TUI의 redraw 프레임은 대부분 in-place(cursor up→reprint→복귀,
-        // net-zero scroll)라 scrollback에 아무것도 안 쌓이고, 실제 새 내용이 위로 밀려
-        // 나갈 때만 push되어 사용자가 위로 스크롤해 대화 history를 볼 수 있음. (sync
-        // frame은 host가 ESU까지 모아 atomic하게 present하므로 torn-frame 중복도 없음.)
-        // 이전엔 inSyncOutputMode 동안 push를 막았는데, 그게 TUI의 history를 통째로
-        // 버려 "위로 스크롤이 안 되고 화면 밖으로 사라지는" 회귀를 만들었음.
+        // Push even during DEC 2026 synchronized output (inSyncOutputMode) — sync is
+        // just a presentation hint, unrelated to scrollback (same as real terminals).
+        // Redraw frames of primary-screen TUIs like Claude Code are mostly in-place
+        // (cursor up→reprint→return, net-zero scroll), so nothing piles up in
+        // scrollback; pushes happen only when genuinely new content scrolls off the
+        // top, so the user can scroll up to see conversation history. (The host
+        // collects a sync frame until ESU and presents it atomically, so no
+        // torn-frame duplicates either.) We used to suppress pushes during
+        // inSyncOutputMode, which threw away the TUI's entire history and caused the
+        // "can't scroll up, content vanishes off-screen" regression.
         let suppressForTUI = isAltScreenActive
         if !suppressForTUI && scrollTop == 0 {
             for i in 0..<evictCount {
@@ -368,11 +371,11 @@ public final class Grid {
                 cells[r] = blank
             }
         } else {
-            // region 내 위로 shift
+            // shift up within the region
             for r in scrollTop...(scrollBottom - evictCount) {
                 cells[r] = cells[r + evictCount]
             }
-            // region 바닥 evictCount줄을 blank로
+            // blank the bottom evictCount rows of the region
             for r in (scrollBottom - evictCount + 1)...scrollBottom {
                 cells[r] = blank
             }
@@ -394,9 +397,9 @@ public final class Grid {
         scrollbackPushCount &+= 1
     }
 
-    // MARK: - 커서 이동 (CSI)
+    // MARK: - Cursor movement (CSI)
 
-    /// CUP / HVP — `\e[r;cH` 또는 `\e[r;cf`. 1-based 좌표.
+    /// CUP / HVP — `\e[r;cH` or `\e[r;cf`. 1-based coordinates.
     public func setCursor(row r: Int, col c: Int) {
         let newRow = max(0, min(rows - 1, max(r, 1) - 1))
         let newCol = max(0, min(cols - 1, max(c, 1) - 1))
@@ -406,7 +409,7 @@ public final class Grid {
         bumpVersion()
     }
 
-    /// CUU — cursor up by n (1 default), 위쪽 경계로 clip.
+    /// CUU — cursor up by n (1 default), clipped at the top edge.
     public func cursorUp(_ n: Int = 1) {
         cursorRow = max(0, cursorRow - max(1, n))
         pendingWrap = false
@@ -434,14 +437,14 @@ public final class Grid {
         bumpVersion()
     }
 
-    /// CHA / HPA — 같은 줄에서 cursor를 절대 col로 이동 (1-based).
+    /// CHA / HPA — move the cursor to an absolute col on the same line (1-based).
     public func setCursorColumn(_ col: Int) {
         cursorCol = max(0, min(cols - 1, max(col, 1) - 1))
         pendingWrap = false
         bumpVersion()
     }
 
-    /// VPA — cursor를 절대 row로 이동 (1-based). col은 유지.
+    /// VPA — move the cursor to an absolute row (1-based). col is kept.
     public func setCursorRow(_ row: Int) {
         cursorRow = max(0, min(rows - 1, max(row, 1) - 1))
         pendingWrap = false
@@ -468,9 +471,9 @@ public final class Grid {
     // MARK: - Erase (CSI)
 
     /// EL — `\e[Km` modes:
-    ///   0 (default): cursor → 줄 끝
-    ///   1: 줄 시작 → cursor (둘 다 포함)
-    ///   2: 줄 전체
+    ///   0 (default): cursor → end of line
+    ///   1: start of line → cursor (both inclusive)
+    ///   2: whole line
     public func eraseInLine(mode: Int) {
         let blank = Cell.empty(attrs: pen)
         switch mode {
@@ -494,10 +497,10 @@ public final class Grid {
     }
 
     /// ED — `\e[Jm` modes:
-    ///   0 (default): cursor → 화면 끝
-    ///   1: 화면 시작 → cursor
-    ///   2: 화면 전체 (cursor 위치 유지)
-    ///   3: 화면 + scrollback (현재는 2와 동일 — scrollback 미구현)
+    ///   0 (default): cursor → end of screen
+    ///   1: start of screen → cursor
+    ///   2: whole screen (cursor position kept)
+    ///   3: screen + scrollback (currently same as 2 — scrollback unimplemented)
     public func eraseInDisplay(mode: Int) {
         let blank = Cell.empty(attrs: pen)
         switch mode {
@@ -526,15 +529,15 @@ public final class Grid {
         bumpVersion()
     }
 
-    /// IL — cursor 위치에 n개의 빈 줄 삽입. cursor row와 그 아래(scrollBottom까지)가 아래로 밀림.
-    /// scroll region 밖에선 no-op.
+    /// IL — insert n blank lines at the cursor. The cursor row and everything below (through scrollBottom) shifts down.
+    /// No-op outside the scroll region.
     public func insertLines(_ n: Int) {
         guard cursorRow >= scrollTop, cursorRow <= scrollBottom else { return }
         let count = max(1, n)
         let regionRemain = scrollBottom - cursorRow + 1
         let actual = min(count, regionRemain)
         let blank = Line.blank(cols: cols, attrs: pen)
-        // cursorRow~scrollBottom 사이에서 아래쪽 actual개 잘림, 위에 actual개 빈 줄 삽입.
+        // Within cursorRow~scrollBottom: the bottom `actual` rows are cut, `actual` blank rows inserted above.
         for r in stride(from: scrollBottom, through: cursorRow + actual, by: -1) {
             cells[r] = cells[r - actual]
         }
@@ -546,7 +549,7 @@ public final class Grid {
         bumpVersion()
     }
 
-    /// DL — cursor row부터 n개 줄 삭제. 아래쪽이 위로 당겨짐. region 바닥은 blank로 채움.
+    /// DL — delete n lines starting at the cursor row. Rows below are pulled up. The region bottom fills with blanks.
     public func deleteLines(_ n: Int) {
         guard cursorRow >= scrollTop, cursorRow <= scrollBottom else { return }
         let count = max(1, n)
@@ -564,7 +567,7 @@ public final class Grid {
         bumpVersion()
     }
 
-    /// ICH — cursor 위치에 n개 빈 셀 삽입. 그 줄의 오른쪽 셀들이 우로 밀림 (마지막은 잘림).
+    /// ICH — insert n blank cells at the cursor. Cells to the right shift right (the last ones fall off).
     public func insertChars(_ n: Int) {
         guard cursorRow >= 0, cursorRow < rows else { return }
         guard cursorCol >= 0, cursorCol < cols else { return }
@@ -572,7 +575,7 @@ public final class Grid {
         let actual = min(count, cols - cursorCol)
         var row = cells[cursorRow]
         let blank = Cell.empty(attrs: pen)
-        // 끝에서부터 shift right
+        // shift right, starting from the end
         for c in stride(from: cols - 1, through: cursorCol + actual, by: -1) {
             row[c] = row[c - actual]
         }
@@ -584,7 +587,7 @@ public final class Grid {
         bumpVersion()
     }
 
-    /// DCH — cursor 위치 셀부터 n개 삭제. 오른쪽 셀들이 왼쪽으로 당겨짐. 줄 끝은 blank로.
+    /// DCH — delete n cells starting at the cursor. Cells to the right are pulled left. End of line fills with blanks.
     public func deleteChars(_ n: Int) {
         guard cursorRow >= 0, cursorRow < rows else { return }
         guard cursorCol >= 0, cursorCol < cols else { return }
@@ -603,7 +606,7 @@ public final class Grid {
         bumpVersion()
     }
 
-    /// ECH — cursor 위치부터 같은 줄에서 n개 셀을 blank로 (cursor는 그대로).
+    /// ECH — blank n cells on the same line starting at the cursor (cursor stays put).
     public func eraseChars(_ n: Int) {
         let count = max(1, n)
         let endCol = min(cols, cursorCol + count)
@@ -615,7 +618,7 @@ public final class Grid {
         bumpVersion()
     }
 
-    /// SD — scroll region을 아래로 `count`줄만큼 밀어 내림 (위에 빈 줄 삽입).
+    /// SD — shift the scroll region down by `count` lines (blank lines inserted at the top).
     public func scrollDown(count n: Int) {
         guard n > 0 else { return }
         let regionHeight = scrollBottom - scrollTop + 1
@@ -628,7 +631,7 @@ public final class Grid {
                 cells[r] = blank
             }
         } else {
-            // region 내 아래로 shift (역순으로 복사)
+            // shift down within the region (copy in reverse order)
             for r in stride(from: scrollBottom, through: scrollTop + insertCount, by: -1) {
                 cells[r] = cells[r - insertCount]
             }
@@ -639,9 +642,9 @@ public final class Grid {
         bumpVersion()
     }
 
-    // MARK: - SGR (pen 갱신)
+    // MARK: - SGR (pen updates)
 
-    /// `\e[ ... m` — pen 속성을 누적 갱신. `-1`(미지정)은 0(reset)으로 정규화.
+    /// `\e[ ... m` — cumulatively update pen attributes. `-1` (unspecified) normalizes to 0 (reset).
     public func applySGR(_ rawParams: [Int]) {
         let params = rawParams.map { $0 < 0 ? 0 : $0 }
         var i = 0
@@ -691,7 +694,7 @@ public final class Grid {
         bumpVersion()
     }
 
-    /// `38;5;n` 또는 `38;2;r;g;b` 파싱. (색, 추가 소비한 파람 수) 반환.
+    /// Parse `38;5;n` or `38;2;r;g;b`. Returns (color, extra params consumed).
     private func extendedColor(params: [Int], from idx: Int) -> (TermColor, Int)? {
         guard idx < params.count else { return nil }
         switch params[idx] {
@@ -711,41 +714,42 @@ public final class Grid {
 
     // MARK: - resize
 
-    /// SIGWINCH에 대응. 셀 행렬을 새 크기로 재구성.
-    /// - primary 화면에서 **컬럼이 바뀌면 reflow** (soft-wrap 된 줄을 새 너비에 맞춰
-    ///   재배치). 그 외(alt 화면, 너비 불변)는 trim/pad.
-    /// - 행이 줄면 가장 오래된 행이 scrollback으로, 늘면 하단을 빈 셀로 패딩.
+    /// Handles SIGWINCH. Rebuilds the cell matrix at the new size.
+    /// - On the primary screen, **a column change reflows** (re-lays soft-wrapped lines
+    ///   out for the new width). Otherwise (alt screen, width unchanged): trim/pad.
+    /// - Fewer rows push the oldest rows to scrollback; more rows pad the bottom with blanks.
     public func resize(cols newCols: Int, rows newRows: Int) {
         precondition(newCols > 0 && newRows > 0)
         if newCols == cols && newRows == rows { return }
 
         if !isAltScreenActive && newCols != cols {
-            // 컬럼이 바뀌는 primary 화면 → reflow. soft-wrap 된 물리 행들을 논리 줄로
-            // 재결합해 새 너비로 다시 쪼개고 scrollback+viewport로 재분배하며 커서의
-            // 논리 위치를 보존. (alt 화면은 앱이 스스로 redraw하므로 제외.)
+            // Primary screen with a column change → reflow. Rejoins soft-wrapped
+            // physical rows into logical lines, re-splits at the new width, redistributes
+            // into scrollback+viewport, preserving the cursor's logical position. (Alt
+            // screen excluded — apps redraw it themselves.)
             reflowPrimary(toCols: newCols, toRows: newRows)
         } else {
-            // alt 화면이거나 순수 행 변경 → 단순 trim/pad. 너비가 그대로면 wrap 경계가
-            // 움직이지 않으므로 reflow 불필요.
+            // Alt screen or a pure row change → simple trim/pad. With width unchanged,
+            // wrap boundaries don't move, so no reflow needed.
             resizeTrimPad(toCols: newCols, toRows: newRows)
         }
 
         cols = newCols
         rows = newRows
-        // resize 시 scroll region은 전체 화면으로 reset (xterm 동작).
-        // 앱이 SIGWINCH 후 다시 DECSTBM을 설정함.
+        // On resize the scroll region resets to the full screen (xterm behavior).
+        // Apps re-issue DECSTBM after SIGWINCH.
         scrollTop = 0
         scrollBottom = newRows - 1
         bumpVersion()
     }
 
-    /// 단순 trim/pad resize. alt 화면 또는 너비 불변 행 변경에 사용. 호출 시점에
-    /// `cols`/`rows`는 아직 옛 값(공통 tail이 갱신).
+    /// Simple trim/pad resize. Used for the alt screen or width-preserving row changes.
+    /// At call time `cols`/`rows` still hold the old values (the shared tail updates them).
     private func resizeTrimPad(toCols newCols: Int, toRows newRows: Int) {
-        // shrink 시 어느 쪽 행을 잘라낼지 — cursor 기준으로 결정.
-        //   cursor가 새 viewport에 들어가면 (cursorRow < newRows) → 아래쪽을 잘라냄.
-        //     prompt(cursor 위쪽)는 유지, 빈 bottom만 사라짐 → "prompt 누적" 회귀 막음.
-        //   안 들어가면 → 초과분 위쪽을 scrollback으로 push.
+        // On shrink, which rows to cut — decided by the cursor.
+        //   Cursor fits the new viewport (cursorRow < newRows) → trim the bottom.
+        //     The prompt (above the cursor) stays; only the empty bottom goes → avoids the "prompt pile-up" regression.
+        //   Doesn't fit → push the excess top rows to scrollback.
         let rowOffset: Int
         if newRows < rows {
             if cursorRow < newRows {
@@ -768,7 +772,7 @@ public final class Grid {
         cursorRow = max(0, min(newRows - 1, cursorRow - rowOffset))
         cursorCol = max(0, min(newCols - 1, cursorCol))
 
-        // saved primary가 있으면 같이 resize (동일 크기 유지 + shrink 시 자기 scrollback에 push).
+        // If there's a saved primary, resize it too (keeps the same size + pushes to its own scrollback on shrink).
         if var saved = savedPrimary {
             let savedRows = saved.cells.count
             let savedCols = saved.cells.first?.count ?? 0
@@ -798,29 +802,30 @@ public final class Grid {
         pendingWrap = false
     }
 
-    /// 컬럼 reflow (primary 화면 전용). 호출 시점에 `cols`/`rows`는 아직 옛 값.
-    /// scrollback+viewport를 논리 줄로 재결합 → 새 너비로 재분할 → scrollback과
-    /// `newRows` 높이 viewport로 재분배. 커서 논리 위치 보존.
+    /// Column reflow (primary screen only). At call time `cols`/`rows` still hold the old values.
+    /// Rejoin scrollback+viewport into logical lines → re-split at the new width →
+    /// redistribute into scrollback and a `newRows`-tall viewport. Preserves the cursor's logical position.
     private func reflowPrimary(toCols newCols: Int, toRows newRows: Int) {
-        // 1. scrollback + viewport를 하나의 연속 물리 행 시퀀스로. 마지막 scrollback
-        //    행의 wrap 플래그가 첫 viewport 행으로 이어진다.
+        // 1. scrollback + viewport as one contiguous sequence of physical rows. The
+        //    last scrollback row's wrap flag carries into the first viewport row.
         let phys: [Line] = scrollback + cells
         let cursorAbs = scrollback.count + cursorRow
 
-        // 2. 커서 아래의 빈 padding 행은 버린다(reflow 후 다시 채움). 커서·마지막
-        //    콘텐츠 행까지는 유지.
+        // 2. Drop blank padding rows below the cursor (refilled after reflow). Keep
+        //    everything through the cursor and the last content row.
         var lastKeep = cursorAbs
         for i in phys.indices where !isBlankRow(phys[i]) { lastKeep = max(lastKeep, i) }
         let kept = Array(phys[0...min(lastKeep, phys.count - 1)])
 
-        // 3. "라이브 프롬프트 블록" 보존 구간의 시작(preserveStart)을 정한다.
-        //    셸은 SIGWINCH 후 reset-prompt에서 "커서 상대 이동(↑N) + 화면 지우기"로
-        //    프롬프트를 다시 그린다. N은 셸이 *직전에 그린* 프롬프트의 물리 행 수다.
-        //    우리가 프롬프트를 미리 재줄바꿈해 행 수를 바꾸면 그 ↑N이 프롬프트 위
-        //    콘텐츠로 넘어가 지워버린다(좁은 폭에서 접혔던 starship 정보 줄이 넓힐 때
-        //    펴지며 재현). 그래서 프롬프트 블록은 재줄바꿈하지 않고 원본 물리 행 수를
-        //    그대로 보존한다. 경계는 OSC 133;A(프롬프트 시작) 마크. 마크가 없으면(133
-        //    미지원 셸) 커서의 논리 줄만 보존한다.
+        // 3. Pick the start (preserveStart) of the "live prompt block" preservation span.
+        //    After SIGWINCH the shell's reset-prompt redraws the prompt via "relative
+        //    cursor move (↑N) + screen erase", where N is the physical row count of the
+        //    prompt the shell *last drew*. If we pre-rewrap the prompt and change its
+        //    row count, that ↑N overshoots into content above the prompt and erases it
+        //    (repro: a starship info line folded at narrow width unfolds on widening).
+        //    So the prompt block is not rewrapped — its original physical row count is
+        //    preserved as-is. The boundary is the OSC 133;A (prompt start) mark; with
+        //    no mark (shells without 133) only the cursor's logical line is preserved.
         var preserveStart = cursorAbs
         var m = min(cursorAbs, kept.count - 1)
         var foundMark = false
@@ -829,22 +834,24 @@ public final class Grid {
             m -= 1
         }
         if !foundMark { preserveStart = cursorAbs }
-        // 논리 줄을 쪼개지 않도록 그 줄 시작까지 뒤로 확장.
+        // Extend back to the start of that logical line so it isn't split.
         while preserveStart > 0 && kept[preserveStart - 1].wrapped { preserveStart -= 1 }
         preserveStart = max(0, min(preserveStart, cursorAbs))
 
-        // 4. preserveStart 이전(완료된 출력 + scrollback)만 논리 줄로 재결합 후 newCols로
-        //    재줄바꿈한다. 커서는 보존 구간에 있으므로 여기선 추적하지 않는다.
+        // 4. Only what precedes preserveStart (finished output + scrollback) is
+        //    rejoined into logical lines and rewrapped to newCols. The cursor is in
+        //    the preserved span, so it isn't tracked here.
         //
-        //    이때 프롬프트 블록 "바로 위"의 연속 빈 행 run은 1개로 줄인다(여러 개 → 1개).
-        //    줌/리사이즈 연타 중 zsh의 SIGWINCH 처리는 coalesce되므로, 셸이 stale한
-        //    COLUMNS로 출력한 partial-line 보호 패딩(PROMPT_SP: `%` + 줄폭만큼 공백)이
-        //    좁아진 그리드에서 wrap돼 프롬프트 위에 빈 논리 줄을 사이클마다 하나씩
-        //    흘린다. 그 빈 줄은 다음 reflow에서 "완료된 출력"으로 굳어 영영 안 사라지고,
-        //    출력과 프롬프트 사이 간격이 줌을 할수록 자라는 증상이 됐다(§field: zoom gap).
-        //    의도된 빈 줄(starship add_newline 등)은 1개를 남기므로 보존된다. 출력
-        //    말미의 다중 의도 빈 줄은 리사이즈 시 1개로 줄 수 있으나(iTerm2류 트리밍과
-        //    동급의 trade-off) 누적 결함보다 훨씬 낫다.
+        //    Also collapse the run of consecutive blank rows *directly above* the
+        //    prompt block to one (many → 1). During zoom/resize bursts zsh's SIGWINCH
+        //    handling coalesces, so the partial-line guard padding the shell printed
+        //    with a stale COLUMNS (PROMPT_SP: `%` + a line-width of spaces) wraps on
+        //    the narrowed grid, leaking one blank logical line above the prompt per
+        //    cycle. The next reflow hardens that blank into "finished output" forever —
+        //    the gap between output and prompt grew with every zoom (§field: zoom gap).
+        //    Intentional blank lines (starship add_newline etc.) survive since one is
+        //    kept. Multiple intentional trailing blanks may shrink to one on resize
+        //    (a trade-off on par with iTerm2-style trimming) — far better than the accumulating defect.
         var rewrapEnd = preserveStart
         var blanksAbove = 0
         while rewrapEnd - blanksAbove - 1 >= 0, isBlankRow(kept[rewrapEnd - blanksAbove - 1]) {
@@ -854,8 +861,8 @@ public final class Grid {
         var newPhys: [Line] = []
         appendRewrapped(Array(kept[0..<rewrapEnd]), to: newCols, into: &newPhys)
 
-        // 5. 프롬프트 블록(마크~커서, +커서 아래 라이브 콘텐츠)은 원본 물리 행을 폭만
-        //    clip/pad 해 그대로 보존(행 수·wrap·프롬프트 마크 유지).
+        // 5. The prompt block (mark~cursor, + live content below the cursor) keeps its
+        //    original physical rows, only clipped/padded to width (row count, wrap, prompt mark preserved).
         let newCursorAbs = newPhys.count + (cursorAbs - preserveStart)
         let newCursorCol: Int
         let newPendingWrap: Bool
@@ -868,7 +875,7 @@ public final class Grid {
         }
         if newPhys.isEmpty { newPhys.append(paddedRow([], to: newCols, wrapped: false)) }
 
-        // 6. viewport(마지막 newRows) + scrollback(나머지). 콘텐츠가 적으면 바닥 패딩.
+        // 6. viewport (last newRows) + scrollback (the rest). Pad the bottom if content is short.
         if newPhys.count < newRows {
             for _ in 0..<(newRows - newPhys.count) {
                 newPhys.append(paddedRow([], to: newCols, wrapped: false))
@@ -878,7 +885,7 @@ public final class Grid {
         var newScrollback = Array(newPhys[0..<vpStart])
         let newViewport = Array(newPhys[vpStart..<newPhys.count])
 
-        // 7. 커밋. scrollback 한도 초과분 evict.
+        // 7. Commit. Evict whatever exceeds the scrollback cap.
         if newScrollback.count > maxScrollbackLines {
             newScrollback.removeFirst(newScrollback.count - maxScrollbackLines)
         }
@@ -890,10 +897,11 @@ public final class Grid {
 
     }
 
-    /// reflow의 "재줄바꿈 구간"(프롬프트 블록 위의 완료된 출력 + scrollback): 물리 행을
-    /// wrap 플래그로 논리 줄로 재결합(wide-spacer 제외)하고, 논리 줄별 trailing blank를
-    /// 다듬은 뒤 newCols로 재분할해 `newPhys`에 덧붙인다. wide 문자가 행 경계에 걸리면
-    /// 다음 행으로 넘기고 그 자리에 spacer를 남긴다(한글 반쪽 잘림 방지).
+    /// Reflow's "rewrap span" (finished output above the prompt block + scrollback):
+    /// rejoins physical rows into logical lines via the wrap flags (excluding wide
+    /// spacers), trims each logical line's trailing blanks, then re-splits at newCols
+    /// into `newPhys`. A wide char straddling a row boundary moves to the next row,
+    /// leaving a spacer behind (prevents half-clipped Hangul).
     private func appendRewrapped(_ rows: [Line], to newCols: Int, into newPhys: inout [Line]) {
         guard !rows.isEmpty else { return }
         var logicals: [[Cell]] = []
@@ -924,34 +932,36 @@ public final class Grid {
         }
     }
 
-    /// 시각적으로 빈 셀(공백 + 배경/링크/강조 없음)인지. reflow의 trailing 트리밍용.
+    /// Whether a cell is visually blank (space + no background/link/emphasis). For reflow's trailing trim.
     private func isBlankCell(_ c: Cell) -> Bool {
-        // continuation 셀은 wide 문자의 뒷칸이라 char가 " "지만 비어있지 않다. blank로
-        // 보면 trailing 트리밍이 wide 문자의 짝을 떼어내 lead가 반쪽으로 잘려 그려진다.
+        // A continuation cell is a wide char's trailing half: its char is " " but it
+        // isn't empty. Treating it as blank lets trailing trim strip the wide char's
+        // partner, so the lead draws clipped to half.
         !c.isContinuation
             && c.char == " " && c.attrs.bg == nil && c.hyperlink == nil
             && !c.attrs.inverse && !c.attrs.underline && !c.attrs.strikethrough
     }
 
-    /// wrap 되지 않았고 모든 셀이 빈 행인지. reflow가 버릴 padding 행 판정용.
+    /// Whether a row is unwrapped with every cell blank. Identifies padding rows reflow can drop.
     private func isBlankRow(_ line: Line) -> Bool {
         !line.wrapped && line.cells.allSatisfy { isBlankCell($0) }
     }
 
-    /// 커서 행 아래에 비어있지 않은 행이 있는가 (primary 화면 기준).
+    /// Is there a non-blank row below the cursor row (primary screen only)?
     ///
-    /// Claude Code처럼 alt-screen/sync-output을 쓰지 않으면서도 입력 줄 **아래**에
-    /// status/footer를 상주시키는 primary-screen TUI를 식별하는 신호다. follow-bottom
-    /// 시 호스트는 이 경우 cursor-visible 정책 대신 grid-top anchor를 써서, 커서만
-    /// 보이고 그 아래 footer가 fold 밑으로 잘리는 것을 막는다. (rows*cellH ≤ viewport라
-    /// 라이브 grid는 항상 viewport에 들어가므로 grid-top anchor가 하단까지 안전하다.)
+    /// A signal that identifies primary-screen TUIs which, like Claude Code, keep a
+    /// status/footer resident **below** the input line without using alt-screen/
+    /// sync-output. During follow-bottom the host then uses a grid-top anchor instead
+    /// of the cursor-visible policy, so it isn't just the cursor that's visible with
+    /// the footer below it clipped under the fold. (rows*cellH ≤ viewport, so the live
+    /// grid always fits the viewport, making the grid-top anchor safe down to the bottom.)
     public var hasContentBelowCursor: Bool {
         guard !isAltScreenActive, cursorRow + 1 < rows else { return false }
         for r in (cursorRow + 1)..<rows where !isBlankRow(cells[r]) { return true }
         return false
     }
 
-    /// `width` 길이로 pad/trim 한 Line 생성 (reflow용).
+    /// Build a Line padded/trimmed to `width` (for reflow).
     private func paddedRow(_ rowCells: [Cell], to width: Int, wrapped: Bool) -> Line {
         var r = rowCells
         if r.count < width {
@@ -999,14 +1009,14 @@ public final class Grid {
 
     // MARK: - Scroll region (DECSTBM)
 
-    /// DECSTBM 적용. `top`, `bottom`은 0-based, inclusive.
-    /// 잘못된 범위면 무시 (`top >= bottom`이거나 `bottom >= rows`인 invalid 케이스).
-    /// 유효한 region 설정 후 cursor는 home (0,0)으로 이동 (DECOM 비활성 가정).
+    /// Apply DECSTBM. `top`, `bottom` are 0-based, inclusive.
+    /// Bad ranges are ignored (the invalid cases `top >= bottom` or `bottom >= rows`).
+    /// After a valid region is set the cursor moves home (0,0) (DECOM assumed off).
     public func setScrollRegion(top: Int, bottom: Int) {
         let newTop = max(0, top)
         let newBottom = min(rows - 1, bottom)
         guard newTop < newBottom else {
-            // 명백히 잘못된 범위 — 무시 (xterm 동작)
+            // clearly invalid range — ignore (xterm behavior)
             return
         }
         scrollTop = newTop
@@ -1019,8 +1029,8 @@ public final class Grid {
 
     // MARK: - Alt screen (CSI ?1049 / ?1047 / ?47)
 
-    /// alt buffer로 swap. 현재 primary 상태(cells/cursor/pen/scrollback/visibility)를 snapshot.
-    /// 알려진 한도: 1049/1047/47 차이를 구분 안 함 — 모두 1049 의미로 처리 (vim/less/htop 호환).
+    /// Swap to the alt buffer. Snapshots the current primary state (cells/cursor/pen/scrollback/visibility).
+    /// Known limitation: 1049/1047/47 aren't distinguished — all get 1049 semantics (vim/less/htop compatible).
     public func enterAltScreen() {
         if isAltScreenActive { return }
         savedPrimary = PrimarySnapshot(
@@ -1038,7 +1048,7 @@ public final class Grid {
             savedCursorCol: savedCursorCol,
             savedPen: savedPen
         )
-        // 빈 alt buffer로 swap. pen은 그대로 (앱이 곧 SGR로 재설정).
+        // Swap to a blank alt buffer. The pen carries over (the app resets it via SGR shortly).
         cells = Self.makeBlank(rows: rows, cols: cols, attrs: pen)
         cursorRow = 0
         cursorCol = 0
@@ -1054,7 +1064,7 @@ public final class Grid {
         bumpVersion()
     }
 
-    /// alt에서 빠져나와 primary 복원. snapshot이 없으면 no-op.
+    /// Leave alt and restore primary. No-op if there's no snapshot.
     public func leaveAltScreen() {
         guard isAltScreenActive, let saved = savedPrimary else {
             isAltScreenActive = false
@@ -1078,36 +1088,36 @@ public final class Grid {
         bumpVersion()
     }
 
-    /// DECTCEM 토글. private mode 25 `h/l` 디스패치에서 호출.
+    /// DECTCEM toggle. Called from the private mode 25 `h/l` dispatch.
     public func setCursorVisible(_ visible: Bool) {
         if cursorVisible == visible { return }
         cursorVisible = visible
         bumpVersion()
     }
 
-    /// DECSCUSR 적용. handleCSI에서 호출.
+    /// Apply DECSCUSR. Called from handleCSI.
     public func setCursorShape(_ shape: CursorShape) {
         if cursorShape == shape { return }
         cursorShape = shape
         bumpVersion()
     }
 
-    /// OSC 8 활성 URI 갱신. nil은 비활성.
-    /// 이후의 `putChar`가 cells의 `hyperlink` 필드에 이 값 attach.
+    /// Update the active OSC 8 URI. nil deactivates.
+    /// Subsequent `putChar`s attach this value to cells' `hyperlink` field.
     public func setHyperlink(_ uri: String?) {
         currentHyperlink = uri
-        // 이미 그려진 cell은 영향 없음 → version 안 올림.
+        // Already-drawn cells are unaffected → don't bump version.
     }
 
-    /// 스크롤백 전체 비우기 (ED mode 3 등이 사용).
+    /// Clear all scrollback (used by ED mode 3 etc.).
     public func clearScrollback() {
         scrollback.removeAll(keepingCapacity: true)
         bumpVersion()
     }
 
-    // MARK: - 디버그/스냅샷
+    // MARK: - Debug/snapshot
 
-    /// 디버그/테스트 편의: grid를 줄 단위 문자열로 dump (속성 무시).
+    /// Debug/test convenience: dump the grid as one string per row (attributes ignored).
     public func debugDump() -> String {
         var out: [String] = []
         for r in 0..<rows {

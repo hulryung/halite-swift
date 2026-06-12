@@ -7,38 +7,38 @@ let package = Package(
         .macOS(.v13),
     ],
     products: [
-        // 엔진 라이브러리 — cmux와 Damson.app이 공유
+        // Engine library — shared by cmux and Damson.app
         .library(
             name: "DamsonTerminal",
             targets: ["DamsonTerminal"]
         ),
-        // damson ↔ damson-cli IPC wire format (서버/클라이언트 공유)
+        // damson ↔ damson-cli IPC wire format (shared by server/client)
         .library(
             name: "DamsonControl",
             targets: ["DamsonControl"]
         ),
-        // 독립 앱 (개발 중에는 `swift run damson`, 배포는 추후 Xcode 프로젝트)
+        // Standalone app (`swift run damson` during development; Xcode project later for distribution)
         .executable(
             name: "damson",
             targets: ["damson"]
         ),
-        // CLI 클라이언트 — damson 서버에 명령 전송
+        // CLI client — sends commands to the damson server
         .executable(
             name: "damson-cli",
             targets: ["damson-cli"]
         ),
     ],
     dependencies: [
-        // Sparkle 자동업데이트 — Developer ID 서명된 .app 한정으로 동작.
-        // EdDSA 키페어는 scripts/sparkle-keygen.sh로 1회 생성 후 Info.plist의
-        // SUPublicEDKey에 박힘. 자세한 절차는 docs/RELEASE.md 참조.
+        // Sparkle auto-update — only works in a Developer ID-signed .app.
+        // The EdDSA keypair is generated once via scripts/sparkle-keygen.sh and
+        // baked into SUPublicEDKey in Info.plist. See docs/RELEASE.md for details.
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0"),
     ],
     targets: [
         .target(
             name: "DamsonTerminal",
             path: "Sources/DamsonTerminal"
-            // 추후 Shaders.metal 추가 시 resources에 .process()로 선언
+            // When Shaders.metal is added later, declare it in resources with .process()
         ),
         .target(
             name: "DamsonControl",

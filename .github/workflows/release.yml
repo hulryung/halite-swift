@@ -1,19 +1,20 @@
 name: release
 
-# v* 태그 push 시 (또는 수동 트리거 시) 전체 릴리즈 파이프라인 실행:
-#   build → codesign → notarize → .dmg → GitHub Release → appcast 갱신(main에 push).
+# On v* tag push (or manual trigger), runs the full release pipeline:
+#   build → codesign → notarize → .dmg → GitHub Release → appcast update (push to main).
 #
-# 필요한 secrets (Settings → Secrets and variables → Actions). 정식 릴리즈를 찍기
-# 전까지는 설정 안 해도 됨 — 그 전엔 이 워크플로가 실패할 뿐 다른 영향 없음:
+# Required secrets (Settings → Secrets and variables → Actions). Nothing needs
+# to be set until the first real release — until then this workflow merely
+# fails, with no other impact:
 #   APPLE_CERTIFICATE_BASE64      Developer ID Application .p12 → base64 -i cert.p12
 #   APPLE_CERTIFICATE_PASSWORD    .p12 import password
 #   APPLE_SIGNING_IDENTITY        "Developer ID Application: Your Name (TEAMID)"
-#   APP_STORE_CONNECT_KEY_B64     App Store Connect API key(.p8) → base64
-#   APP_STORE_CONNECT_KEY_ID      ASC API Key ID (예: 87VR84KH53)
+#   APP_STORE_CONNECT_KEY_B64     App Store Connect API key (.p8) → base64
+#   APP_STORE_CONNECT_KEY_ID      ASC API Key ID (e.g. 87VR84KH53)
 #   APP_STORE_CONNECT_ISSUER      ASC Issuer ID (UUID)
 #   APPLE_TEAM_ID                 ABCDE12345
-#   (레거시 대안: APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD)
-#   SPARKLE_PUBLIC_KEY            base64 EdDSA public key (sparkle-keygen.sh 출력)
+#   (legacy alternative: APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD)
+#   SPARKLE_PUBLIC_KEY            base64 EdDSA public key (sparkle-keygen.sh output)
 #   SPARKLE_PRIVATE_KEY           base64 EdDSA private key (keychain export → base64)
 
 on:
@@ -27,15 +28,15 @@ on:
         type: string
 
 permissions:
-  contents: write   # GitHub Release 생성 + appcast.xml을 main에 push
+  contents: write   # create GitHub Release + push appcast.xml to main
 
 jobs:
   release:
-    runs-on: macos-14   # arm64. universal 빌드는 RELEASE.md 참조.
+    runs-on: macos-14   # arm64. See RELEASE.md for universal builds.
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # 전체 히스토리 → 단조 증가 build number + appcast를 main에 commit
+          fetch-depth: 0   # full history → monotonic build number + committing appcast to main
 
       - name: Select Xcode
         uses: maxim-lobanov/setup-xcode@v1
@@ -71,7 +72,7 @@ jobs:
           security unlock-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN"
           security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
             -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
-          # build keychain을 검색 목록 맨 앞에 두고, codesign이 비대화식으로 키에 접근하도록 허용.
+          # Put the build keychain first in the search list and let codesign access the key non-interactively.
           security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
           security set-key-partition-list -S apple-tool:,apple:,codesign: \
             -s -k "$KEYCHAIN_PWD" "$KEYCHAIN"
@@ -91,7 +92,7 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          # 공증: ASC API 키(.p8) 우선 — 파일로 풀어 notarytool --key 경로로 전달.
+          # Notarization: prefer the ASC API key (.p8) — decode to a file and pass via notarytool --key.
           if [[ -n "$APP_STORE_CONNECT_KEY_B64" ]]; then
             echo "$APP_STORE_CONNECT_KEY_B64" | base64 --decode > "$RUNNER_TEMP/asc_key.p8"
             export APP_STORE_CONNECT_KEY_FILE="$RUNNER_TEMP/asc_key.p8"
@@ -108,7 +109,7 @@ jobs:
           VERSION="${{ steps.ver.outputs.version }}"
           TAG="${{ steps.ver.outputs.tag }}"
           DMG="dist/Damson-$VERSION.dmg"
-          # 릴리즈가 없으면 생성(태그도 함께 — workflow_dispatch 경로), 이미 있으면 자산만 갱신.
+          # Create the release if absent (tag included — the workflow_dispatch path); otherwise just refresh assets.
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "$DMG" --clobber
           else
@@ -128,15 +129,15 @@ jobs:
           DMG="dist/Damson-$VERSION.dmg"
           URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/$TAG/Damson-$VERSION.dmg"
 
-          # sign_update에 넘길 raw EdDSA private key (secret은 base64 1회 인코딩).
+          # Raw EdDSA private key for sign_update (the secret is base64-encoded once).
           export SPARKLE_PRIVATE_KEY="$(echo "$SPARKLE_PRIVATE_KEY_B64" | base64 --decode)"
 
-          # 서명된 dmg에 대한 <item> 블록 생성 (untracked — checkout 사이에서 살아남음).
+          # Generate the <item> block for the signed dmg (untracked — survives across checkouts).
           ./scripts/sparkle-appcast.sh \
             --dmg "$DMG" --version "$VERSION" --build "$BUILD" --url "$URL" > entry.xml
 
-          # 태그 빌드는 detached HEAD라 main으로 전환해 거기에 appcast를 commit.
-          # (이 시점 tracked 트리는 깨끗함 — dist/.build는 gitignore.)
+          # Tag builds run on a detached HEAD, so switch to main and commit the appcast there.
+          # (The tracked tree is clean at this point — dist/.build are gitignored.)
           git fetch origin main
           git checkout -B main origin/main
           python3 .github/scripts/insert-appcast-entry.py appcast.xml entry.xml > appcast.new.xml
