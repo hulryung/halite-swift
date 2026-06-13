@@ -149,10 +149,11 @@ final class MetalTerminalBackend: TerminalRenderBackend {
 
     private func ensureAtlas() {
         let scale = metalView.metalLayer.contentsScale
-        let sig = "\(renderFont.fontName)|\(renderFont.pointSize)|\(metrics.width)|\(metrics.height)|\(scale)"
+        let sig = "\(renderFont.fontName)|\(renderFont.pointSize)|\(metrics.width)|\(metrics.height)|\(scale)|\(config.doubleWidthIcons)"
         if sig != atlasSignature || atlas == nil {
             atlas = GlyphAtlas(device: md.device, font: renderFont,
-                               cellW: metrics.width, cellH: metrics.height, scale: scale)
+                               cellW: metrics.width, cellH: metrics.height, scale: scale,
+                               iconDoubleWidth: config.doubleWidthIcons)
             let bold = NSFontManager.shared.convert(renderFont, toHaveTrait: .boldFontMask)
             lineShaper = LineShaper(baseFont: renderFont, boldFont: bold)
             atlasSignature = sig
@@ -696,7 +697,18 @@ final class MetalTerminalBackend: TerminalRenderBackend {
                             uvOrigin: region.uv.origin, uvSize: region.uv.size, color: rgba(fg)))
                     }
                 } else if cell.char != " ", let region = atlas?.region(for: cell.char, bold: cell.attrs.bold, wide: wide) {
-                    var inst = GlyphInstance(origin: origin, size: size,
+                    // Double-width Nerd icons: the bitmap is a 2-cell box but the
+                    // grid slot is 1 cell — widen the quad symmetrically (centered
+                    // overflow into neighbors), mirroring the ligature-pad path.
+                    var gOrigin = origin, gSize = size
+                    if region.overflowCells > 0 {
+                        let half = region.overflowCells * metrics.width / 2
+                        let gx0 = snap(inset.width + CGFloat(col) * metrics.width - half)
+                        let gx1 = snap(inset.width + CGFloat(col + wcells) * metrics.width + half)
+                        gOrigin = SIMD2<Float>(Float(gx0), Float(y0))
+                        gSize = SIMD2<Float>(Float(gx1 - gx0), Float(y1 - y0))
+                    }
+                    var inst = GlyphInstance(origin: gOrigin, size: gSize,
                                              uvOrigin: region.uv.origin, uvSize: region.uv.size,
                                              color: rgba(fg))
                     // Appear animation (near the cursor): fade/scale by progress.

@@ -16,6 +16,7 @@ struct DamsonSettingsView: View {
     @AppStorage("damson.animations") private var animations: Bool = true
     @AppStorage("damson.cursorShape") private var cursorShapeRaw: String = Grid.CursorShape.block.rawValue
     @AppStorage("damson.ligatures") private var ligatures: Bool = false
+    @AppStorage("damson.doubleWidthIcons") private var doubleWidthIcons: Bool = true
     @AppStorage("damson.showScrollbar") private var showScrollbar: Bool = false
     @AppStorage("damson.tabTransition") private var tabTransitionRaw: String = TabTransitionStyle.slide.rawValue
     @AppStorage("damson.activePaneIndicator") private var activePaneRaw: String = ActivePaneIndicator.dimInactive.rawValue
@@ -56,6 +57,7 @@ struct DamsonSettingsView: View {
         .onChange(of: animations) { _ in postChanged() }
         .onChange(of: cursorShapeRaw) { _ in postChanged() }
         .onChange(of: ligatures) { _ in postChanged() }
+        .onChange(of: doubleWidthIcons) { _ in postChanged() }
         .onChange(of: showScrollbar) { _ in postChanged() }
         .onChange(of: activePaneRaw) { _ in postChanged() }
         .onChange(of: backgroundOpacity) { _ in postChanged() }
@@ -116,6 +118,10 @@ struct DamsonSettingsView: View {
                 }
                 Toggle("Ligatures", isOn: $ligatures)
                 Text("Programming ligatures like => != -> ===. Shown only when the font supports them (Fira Code, JetBrains Mono, D2CodingLigature, etc.).")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Toggle("Double-width icons", isOn: $doubleWidthIcons)
+                Text("Render oversized Nerd Font icons (powerline prompts) at full size across two cells instead of shrinking them into one. Affects non-Mono / Propo font variants; may overlap adjacent text.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -565,6 +571,7 @@ extension DamsonConfig {
         }
         config.cursorBlink = d.bool(forKey: "damson.cursorBlink")
         config.ligatures = d.bool(forKey: "damson.ligatures")
+        config.doubleWidthIcons = d.object(forKey: "damson.doubleWidthIcons") as? Bool ?? true
         config.showScrollbar = d.bool(forKey: "damson.showScrollbar")
         if let h = d.object(forKey: "damson.paddingH") as? Double {
             config.padding.width = CGFloat(max(0, min(64, h)))

@@ -230,7 +230,9 @@ extension GlyphFallbackTests {
             throw XCTSkip("Terminess Nerd Font Propo not installed")
         }
         let cellW = ("M" as NSString).size(withAttributes: [.font: base]).width
-        let r = GlyphRasterizer(font: base, cellW: cellW, cellH: cellW * 2, scale: 2)
+        // doubleWidth off → the shrink-to-one-cell path (this test's subject).
+        let r = GlyphRasterizer(font: base, cellW: cellW, cellH: cellW * 2, scale: 2,
+                                iconDoubleWidth: false)
         // Gear / database / git branch — common prompt icons, all 1-cell in the grid.
         for ch in ["\u{F013}", "\u{F1C0}", "\u{E725}"] as [Character] {
             let bmp = try XCTUnwrap(r.raster(ch, bold: false, wide: Cell.isWide(ch)),
@@ -252,6 +254,36 @@ extension GlyphFallbackTests {
             XCTAssertLessThan(abs(center - Double(bmp.width - 1) / 2), Double(bmp.width) * 0.2,
                 "\(ch) inked bbox off-center (\(minX)…\(maxX) in w=\(bmp.width)) — likely clipped")
         }
+    }
+
+    /// With double-width on, an oversized Nerd icon is rendered at natural size
+    /// into a 2-cell bitmap (flagged `overflowCells`) instead of being shrunk,
+    /// and its ink is not clipped at either edge.
+    func testDoubleWidthIconRendersIntoTwoCells() throws {
+        let size: CGFloat = 17
+        guard let base = font("Terminess Nerd Font Propo", size) else {
+            throw XCTSkip("Terminess Nerd Font Propo not installed")
+        }
+        let cellW = ("M" as NSString).size(withAttributes: [.font: base]).width
+        let r = GlyphRasterizer(font: base, cellW: cellW, cellH: cellW * 2, scale: 2,
+                                iconDoubleWidth: true)
+        let bmp = try XCTUnwrap(r.raster("\u{F1C0}", bold: false, wide: false),  // database
+                                "icon must render")
+        // Rendered into a 2-cell box, flagged for centered overflow.
+        XCTAssertEqual(bmp.overflowCells, 1, accuracy: 0.001,
+            "overflowing icon should be flagged double-width")
+        XCTAssertGreaterThan(bmp.width, Int(cellW * 1.5 * 2),
+            "double-width bitmap should span ~2 cells (w=\(bmp.width), cellW=\(cellW))")
+        var minX = bmp.width, maxX = -1
+        for y in 0..<bmp.height {
+            let row = y * bmp.width
+            for x in 0..<bmp.width where bmp.bytes[row + x] != 0 {
+                if x < minX { minX = x }
+                if x > maxX { maxX = x }
+            }
+        }
+        XCTAssertGreaterThan(minX, 0, "icon ink clipped at the LEFT edge")
+        XCTAssertLessThan(maxX, bmp.width - 1, "icon ink clipped at the RIGHT edge")
     }
 
     /// Powerline separators (U+E0B0…) butt flush against neighboring cells; the

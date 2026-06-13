@@ -24,6 +24,9 @@ final class GlyphAtlas {
     struct Region {
         var uv: GlyphInstanceUV
         var isColor: Bool
+        /// Cells the render quad spans beyond the grid slot, centered (see
+        /// `GlyphRasterizer.Bitmap.overflowCells`). 0 for ordinary glyphs.
+        var overflowCells: CGFloat = 0
     }
 
     /// nil value = rasterized but nothing to draw (blank). Cached to avoid retry.
@@ -53,7 +56,8 @@ final class GlyphAtlas {
         var size: SIMD2<Float>
     }
 
-    init?(device: MTLDevice, font: NSFont, cellW: CGFloat, cellH: CGFloat, scale: CGFloat) {
+    init?(device: MTLDevice, font: NSFont, cellW: CGFloat, cellH: CGFloat, scale: CGFloat,
+          iconDoubleWidth: Bool = true) {
         let side = 2048
         let desc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .r8Unorm, width: side, height: side, mipmapped: false)
@@ -65,7 +69,8 @@ final class GlyphAtlas {
         self.width = side
         self.height = side
         self.shelfHeight = max(1, Int(ceil(cellH * max(scale, 1))))
-        self.rasterizer = GlyphRasterizer(font: font, cellW: cellW, cellH: cellH, scale: scale)
+        self.rasterizer = GlyphRasterizer(font: font, cellW: cellW, cellH: cellH, scale: scale,
+                                          iconDoubleWidth: iconDoubleWidth)
     }
 
     /// Region for a glyph, rasterizing+packing on first use. nil = draw nothing.
@@ -77,8 +82,8 @@ final class GlyphAtlas {
             return nil
         }
         let result: Region? = bmp.isColor
-            ? packColor(bmp).map { Region(uv: $0, isColor: true) }
-            : packMask(bmp).map { Region(uv: $0, isColor: false) }
+            ? packColor(bmp).map { Region(uv: $0, isColor: true, overflowCells: bmp.overflowCells) }
+            : packMask(bmp).map { Region(uv: $0, isColor: false, overflowCells: bmp.overflowCells) }
         regions[key] = .some(result)
         return result
     }

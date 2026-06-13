@@ -37,6 +37,12 @@ public struct DamsonConfig {
     /// Whether to show a scroll-position indicator (thumb) on the right edge. Default OFF.
     /// Only visible when the scrollback is longer than the viewport.
     public var showScrollbar: Bool
+    /// Render oversized Nerd Font icons (powerline prompts etc.) at natural size
+    /// across two cells, centered on their grid slot, instead of shrinking them
+    /// into one cell. Default ON. Only affects non-Mono / Propo font variants —
+    /// Mono variants size icons to one cell already, so nothing overflows. The
+    /// trade-off is icons may overlap immediately-adjacent text. [[ScreenEffect]]-free.
+    public var doubleWidthIcons: Bool
     /// Terminal background opacity (0.2~1.0). 1.0 is fully opaque (the existing behavior). Below 1,
     /// only the background/selection/cursor fills become that translucent (text, emoji, and underlines
     /// stay opaque) and what's behind the window shows through. The window's isOpaque/blur is matched
@@ -84,6 +90,7 @@ public struct DamsonConfig {
         cursorShape: Grid.CursorShape = .block,
         ligatures: Bool = false,
         showScrollbar: Bool = false,
+        doubleWidthIcons: Bool = true,
         backgroundOpacity: CGFloat = 1.0,
         backgroundBlur: Bool = false,
         padding: NSSize = NSSize(width: 4, height: 4),
@@ -108,6 +115,7 @@ public struct DamsonConfig {
         self.cursorShape = cursorShape
         self.ligatures = ligatures
         self.showScrollbar = showScrollbar
+        self.doubleWidthIcons = doubleWidthIcons
         self.backgroundOpacity = backgroundOpacity
         self.backgroundBlur = backgroundBlur
         self.padding = padding

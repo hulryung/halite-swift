@@ -22,8 +22,26 @@ import CoreText
 /// for simplicity: the render quad is exactly the cell rect, no per-glyph
 /// bearing math. Atlas growth/eviction is a later optimization.
 final class GlyphRasterizer {
+    /// How a glyph whose ink overflows its assigned cell box is handled.
+    enum OverflowFit {
+        /// Natural pen layout, no overflow handling (the common monospace case).
+        case none
+        /// Shrink the overflowing ink to fit 1 cell, centered (powerline shapes
+        /// fill the cell edge-to-edge). Used for fallback faces and, when
+        /// double-width is off, for oversized Nerd icons.
+        case fitOneCell
+        /// Render the icon at natural size into a 2-cell box, centered, and flag
+        /// the bitmap (`overflowCells`) so the quad is drawn 2 cells wide centered
+        /// on the 1-cell grid slot — keeps non-Mono Nerd icons big.
+        case doubleWidthIcon
+    }
+
     private let font: NSFont
     private let boldFont: NSFont
+    /// Render oversized Nerd Font (PUA) icons double-width instead of shrinking
+    /// them into one cell. Non-Mono / Propo variants draw icons wider than a
+    /// cell; doubling keeps them at natural size (overflowing into neighbors).
+    private let iconDoubleWidth: Bool
     /// CJK-only fallback face (e.g. D2CodingLigature Nerd Font Mono); nil if none
     /// installed. Used solely for East-Asian glyphs the base font lacks.
     private let cjkFont: NSFont?
@@ -45,10 +63,16 @@ final class GlyphRasterizer {
         /// false = R8 coverage mask (modulated by fg); true = premultiplied BGRA
         /// color (emoji), drawn as-is ignoring fg.
         var isColor: Bool = false
+        /// Extra cells the render quad should span beyond the glyph's grid width,
+        /// split evenly on both sides (centered overflow). >0 only for double-
+        /// width Nerd icons: the bitmap is a 2-cell box but the grid slot is 1.
+        var overflowCells: CGFloat = 0
     }
 
-    init(font: NSFont, cellW: CGFloat, cellH: CGFloat, scale: CGFloat) {
+    init(font: NSFont, cellW: CGFloat, cellH: CGFloat, scale: CGFloat,
+         iconDoubleWidth: Bool = true) {
         self.font = font
+        self.iconDoubleWidth = iconDoubleWidth
         self.boldFont = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
         let cjk = cjkFallbackFont(size: font.pointSize)
         self.cjkFont = cjk
@@ -82,17 +106,24 @@ final class GlyphRasterizer {
         }
         // Private-use icons (Nerd Font symbols) get the overflow check even on
         // the base font: non-Mono variants ("Nerd Font" / "… Propo") give them
-        // wider-than-cell advances while the grid assigns 1 cell — without the
-        // check the icon's right half is clipped at the bitmap edge.
-        if let bmp = draw(ch, in: bold ? boldFont : font, wide: wide,
-                          fitOverflow: Self.isPrivateUse(ch)) {
+        // wider-than-cell advances while the grid assigns 1 cell. Without it the
+        // icon's right half is clipped at the bitmap edge. By default the icon is
+        // rendered double-width (natural size, overflowing into neighbors);
+        // powerline shapes and double-width-off fall back to fit-one-cell.
+        let baseFit: OverflowFit
+        if Self.isPrivateUse(ch) {
+            baseFit = (iconDoubleWidth && !Self.isPowerline(ch)) ? .doubleWidthIcon : .fitOneCell
+        } else {
+            baseFit = .none
+        }
+        if let bmp = draw(ch, in: bold ? boldFont : font, wide: wide, overflow: baseFit) {
             return bmp
         }
         // Pinned fallback face — deterministic across machines. Its metrics don't
         // match the base cell, so overflowing ink (full-width ① in a 1-cell
         // ambiguous-width box) is shrink-to-fit instead of clipped.
         if let cjk = bold ? boldCJKFont : cjkFont,
-           let bmp = draw(ch, in: cjk, wide: wide, fitOverflow: true) {
+           let bmp = draw(ch, in: cjk, wide: wide, overflow: .fitOneCell) {
             return bmp
         }
         // System fallback: whatever CoreText recommends for this character.
@@ -289,14 +320,15 @@ final class GlyphRasterizer {
     /// Rasterize `ch` with `f`, or nil if `f`'s own cmap lacks the glyph (a direct
     /// per-font query — `NSFont.cascadeList` is intentionally not consulted).
     ///
-    /// `fitOverflow` (fallback faces only): when the natural pen layout's ink
-    /// would overflow the cell box horizontally — e.g. D2Coding draws East-Asian-
-    /// Ambiguous circled digits (①…⑳) full-width but the grid gives them 1 cell —
-    /// reroute through `drawFitted` so the glyph is shrunk and centered instead of
-    /// hard-clipped at the bitmap edge. The base font is monospace and lays out at
-    /// x=0 by design, so tier 2 keeps the cheap unfitted path.
+    /// `overflow` (≠ .none): when the natural pen layout's ink would overflow the
+    /// cell box, reroute instead of clipping at the bitmap edge. `.fitOneCell`
+    /// shrinks+centers into one cell (D2Coding's full-width ①…⑳; oversized icons
+    /// when double-width is off). `.doubleWidthIcon` renders the icon at natural
+    /// size into a 2-cell box and flags `overflowCells` so the quad spans two
+    /// cells centered on the slot. Plain monospace text lays out at x=0, so the
+    /// common path stays `.none` (cheap, unfitted).
     private func draw(_ ch: Character, in f: NSFont, wide: Bool,
-                      fitOverflow: Bool = false) -> Bitmap? {
+                      overflow: OverflowFit = .none) -> Bitmap? {
         let ctFont = f as CTFont
 
         // Normalize to precomposed (NFC). The terminal can receive decomposed
@@ -330,7 +362,7 @@ final class GlyphRasterizer {
             penX += advances[i].width
         }
 
-        if fitOverflow {
+        if overflow != .none {
             // Ink bounds under the pen layout; anything outside [0, glyphCellW]
             // would be silently clipped by the CGContext bitmap below.
             var boxes = [CGRect](repeating: .zero, count: glyphs.count)
@@ -353,7 +385,21 @@ final class GlyphRasterizer {
             let overflowsY = Self.isPrivateUse(ch)
                 && (inkMinY < -0.5 || inkMaxY > cellH + 0.5)
             if inkMaxX > inkMinX, overflowsX || overflowsY {
-                return drawFitted(ch, in: f, wide: wide, fillCell: Self.isPowerline(ch))
+                switch overflow {
+                case .none:
+                    break
+                case .fitOneCell:
+                    return drawFitted(ch, in: f, wide: wide, fillCell: Self.isPowerline(ch))
+                case .doubleWidthIcon:
+                    // Natural size into a 2-cell box (drawFitted upscales nothing,
+                    // so an icon ≤2 cells keeps its size), centered. The grid slot
+                    // is 1 cell (wide=false), so the quad overflows 0.5 cell each
+                    // side → overflowCells = 1.
+                    guard var bmp = drawFitted(ch, in: f, wide: true, fillCell: false)
+                    else { return nil }
+                    bmp.overflowCells = wide ? 0 : 1
+                    return bmp
+                }
             }
         }
 
