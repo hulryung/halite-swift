@@ -178,6 +178,11 @@ public final class DamsonSurfaceView: NSView, NSTextInputClient {
     /// `anchor` is the mouseDown position, `head` is the endpoint that follows mouseDragged.
     private var selectionAnchor: (row: Int, col: Int)?
     private var selectionHead: (row: Int, col: Int)?
+    /// Last plain-click cell. Persists after a click clears the live selection so a
+    /// following Shift-click has a point to extend from (click A, then Shift-click B
+    /// selects A…B — the standard terminal/macOS behavior). Same coordinate space as
+    /// `selectionAnchor`, so it stays valid as the buffer scrolls.
+    private var selectionOrigin: (row: Int, col: Int)?
     /// Accumulated trackpad precision wheel delta (points). Used to throttle wheel delivery to mouse-reporting apps.
     private var wheelReportAccum: CGFloat = 0
 
@@ -680,6 +685,18 @@ public final class DamsonSurfaceView: NSView, NSTextInputClient {
         }
 
         let point = convertEventToCell(event)
+
+        // Shift-click extends the selection: keep the existing anchor (or the last
+        // click point) and move the head to the clicked cell. Repeated Shift-clicks
+        // re-extend from the same anchor. A drag afterward keeps adjusting the head.
+        if event.modifierFlags.contains(.shift),
+           let anchor = selectionAnchor ?? selectionOrigin {
+            selectionAnchor = anchor
+            selectionHead = point
+            scheduleRender()
+            return
+        }
+
         switch event.clickCount {
         case 2:
             // Double click — word selection (broken at spaces).
@@ -700,6 +717,9 @@ public final class DamsonSurfaceView: NSView, NSTextInputClient {
             selectionAnchor = point
             selectionHead = point
         }
+        // Remember where this click landed so a later Shift-click can extend from it,
+        // even after mouseUp clears a zero-width (plain-click) selection.
+        selectionOrigin = point
         scheduleRender()
     }
 
