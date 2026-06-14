@@ -181,6 +181,7 @@ final class MetalTerminalBackend: TerminalRenderBackend {
         self.config = config
         renderFont = fontWithNerdFallback(family: config.fontFamily, size: config.fontSize)
         inset = config.padding
+        rgbaCache.removeAll(keepingCapacity: true)   // theme may have changed
         redrawLast()
     }
 
@@ -666,9 +667,9 @@ final class MetalTerminalBackend: TerminalRenderBackend {
                 let origin = SIMD2<Float>(Float(x0), Float(y0))
                 let size = SIMD2<Float>(Float(x1 - x0), Float(y1 - y0))
 
-                if let color = bgColor(cell: cell, col: col, sel: sel, finds: finds,
-                                       activeFind: activeFind, isCursor: isCursor) {
-                    let bgi = BgInstance(origin: origin, size: size, color: rgba(color))
+                if let bgRGBAColor = bgRGBA(cell: cell, col: col, sel: sel, finds: finds,
+                                           activeFind: activeFind, isCursor: isCursor) {
+                    let bgi = BgInstance(origin: origin, size: size, color: bgRGBAColor)
                     bg.append(bgi)
                     // Draw the block cursor over a blank cell once more in the
                     // overlay pass (on top of glyphs). That way a ghost glyph fading
@@ -678,8 +679,8 @@ final class MetalTerminalBackend: TerminalRenderBackend {
                         overlay.append(bgi)
                     }
                 }
-                let fg = fgColor(cell: cell, col: col, sel: sel, finds: finds,
-                                 activeFind: activeFind, hover: hover, isCursor: isCursor)
+                let fgRGBAColor = fgRGBA(cell: cell, col: col, sel: sel, finds: finds,
+                                         activeFind: activeFind, hover: hover, isCursor: isCursor)
                 if shapedCovered.contains(col) {
                     // A shaped run owns this cell. Draw the shaped glyph id at its
                     // start column (spanning cellSpan), nothing for trailing cells.
@@ -694,7 +695,7 @@ final class MetalTerminalBackend: TerminalRenderBackend {
                         glyphs.append(GlyphInstance(
                             origin: SIMD2<Float>(Float(gx0), Float(y0)),
                             size: SIMD2<Float>(Float(gx1 - gx0), Float(y1 - y0)),
-                            uvOrigin: region.uv.origin, uvSize: region.uv.size, color: rgba(fg)))
+                            uvOrigin: region.uv.origin, uvSize: region.uv.size, color: fgRGBAColor))
                     }
                 } else if cell.char != " ", let region = atlas?.region(for: cell.char, bold: cell.attrs.bold, wide: wide) {
                     // Double-width Nerd icons: the bitmap is a 2-cell box but the
@@ -710,7 +711,7 @@ final class MetalTerminalBackend: TerminalRenderBackend {
                     }
                     var inst = GlyphInstance(origin: gOrigin, size: gSize,
                                              uvOrigin: region.uv.origin, uvSize: region.uv.size,
-                                             color: rgba(fg))
+                                             color: fgRGBAColor)
                     // Appear animation (near the cursor): fade/scale by progress.
                     if config.glyphAppear != .none, let p = appearProgress(row: row, col: col) {
                         inst = config.glyphAppear.apply(to: inst, appearing: true, p: p)
@@ -724,23 +725,30 @@ final class MetalTerminalBackend: TerminalRenderBackend {
                 let hovered = hover?.contains(col) ?? false
                 if cell.attrs.underline || cell.attrs.strikethrough || cell.hyperlink != nil || hovered {
                     let thickness = max(1, (cellH * 0.08).rounded())
-                    var underlineColor: NSColor? = cell.attrs.underline ? fg : nil
+                    // SGR-underline uses the cell's display fg (incl. cursor/find/
+                    // hover overrides) → same rgba as the glyph.
+                    var underlineColor: SIMD4<Float>? = cell.attrs.underline ? fgRGBAColor : nil
                     if cell.hyperlink != nil {
-                        underlineColor = cell.attrs.resolvedColors(theme: config.theme).fg
-                            .withAlphaComponent(0.5)
+                        // Hyperlink underline = the cell's OWN resolved fg at α0.5,
+                        // ignoring overrides (matches legacy).
+                        var c = (cell.attrs.faint || cell.attrs.inverse)
+                            ? rgba(cell.attrs.resolvedColors(theme: config.theme).fg)
+                            : baseRGBA(cell.attrs.fg)
+                        c.w = 0.5
+                        underlineColor = c
                     }
-                    if hovered { underlineColor = .systemBlue }
+                    if hovered { underlineColor = rgba(.systemBlue) }
                     if let uc = underlineColor {
                         let uy = snap(y1 - thickness)
                         overlay.append(BgInstance(origin: SIMD2<Float>(Float(x0), Float(uy)),
                                                   size: SIMD2<Float>(Float(x1 - x0), Float(y1 - uy)),
-                                                  color: rgba(uc)))
+                                                  color: uc))
                     }
                     if cell.attrs.strikethrough {
                         let sy = snap(y0 + (y1 - y0) * 0.5 - thickness * 0.5)
                         overlay.append(BgInstance(origin: SIMD2<Float>(Float(x0), Float(sy)),
                                                   size: SIMD2<Float>(Float(x1 - x0), Float(thickness)),
-                                                  color: rgba(fg)))
+                                                  color: fgRGBAColor))
                     }
                 }
             }
@@ -917,29 +925,7 @@ final class MetalTerminalBackend: TerminalRenderBackend {
                                   color: rgba(color)))
     }
 
-    /// Resolved glyph foreground, mirroring the legacy fg rules.
-    private func fgColor(cell: Cell, col: Int, sel: Range<Int>?, finds: [Range<Int>],
-                         activeFind: Range<Int>?, hover: Range<Int>?, isCursor: Bool) -> NSColor {
-        if isCursor { return config.theme.background }   // inverse over the cursor block
-        if hover?.contains(col) ?? false { return .systemBlue }
-        if (activeFind?.contains(col) ?? false) || finds.contains(where: { $0.contains(col) }) {
-            return .black
-        }
-        let (fg, _) = cell.attrs.resolvedColors(theme: config.theme)
-        return fg
-    }
-
-    /// Resolved fill for a cell, honoring the legacy priority
-    /// (cursor > selection > active-find > find > cell bg), or nil = clear.
-    private func bgColor(cell: Cell, col: Int, sel: Range<Int>?, finds: [Range<Int>],
-                         activeFind: Range<Int>?, isCursor: Bool) -> NSColor? {
-        if isCursor { return config.cursorColor }
-        if sel?.contains(col) ?? false { return .selectedTextBackgroundColor }
-        if activeFind?.contains(col) ?? false { return NSColor.systemOrange.withAlphaComponent(0.85) }
-        if finds.contains(where: { $0.contains(col) }) { return NSColor.systemYellow.withAlphaComponent(0.6) }
-        let (_, bg) = cell.attrs.resolvedColors(theme: config.theme)
-        return bg
-    }
+    // fg/bg color resolution → see `fgRGBA` / `bgRGBA` (rgba-returning, cached).
 
     private func cellsForRow(grid: Grid, unifiedRow: Int) -> [Cell] {
         let sc = grid.scrollback.count
@@ -1136,6 +1122,60 @@ final class MetalTerminalBackend: TerminalRenderBackend {
         let s = c.usingColorSpace(.sRGB) ?? c
         return SIMD4<Float>(Float(s.redComponent), Float(s.greenComponent),
                             Float(s.blueComponent), Float(s.alphaComponent))
+    }
+
+    /// Cached `TermColor` → premultiplied-free sRGB rgba. Without this, every
+    /// visible cell re-ran `theme.nsColor(...)` (allocating a fresh NSColor for
+    /// palette/cube/truecolor) and `usingColorSpace(.sRGB)` (a tagged-color
+    /// space conversion) every frame — the dominant cost while a busy terminal
+    /// streams output (profiled hot path). Keyed by `TermColor` only, so it's
+    /// theme-dependent: cleared whenever the config (theme) changes. Bounded —
+    /// only `.default` + `.palette(0…255)` are stored (≤257 entries); `.rgb` is
+    /// computed directly (no NSColor, no store) since truecolor is unbounded.
+    private var rgbaCache: [TermColor: SIMD4<Float>] = [:]
+
+    private func baseRGBA(_ c: TermColor) -> SIMD4<Float> {
+        if case .rgb(let r, let g, let b) = c {
+            return SIMD4<Float>(Float(r) / 255, Float(g) / 255, Float(b) / 255, 1)
+        }
+        if let hit = rgbaCache[c] { return hit }
+        let v = rgba(config.theme.nsColor(c))
+        rgbaCache[c] = v
+        return v
+    }
+
+    /// Foreground rgba for a cell — the per-glyph hot path. Mirrors `fgColor`
+    /// but returns rgba directly, routing the common case (no faint/inverse,
+    /// no cursor/find/hover override) through `baseRGBA`'s cache. The rare
+    /// overrides keep the exact `fgColor` semantics via the NSColor path.
+    private func fgRGBA(cell: Cell, col: Int, sel: Range<Int>?, finds: [Range<Int>],
+                        activeFind: Range<Int>?, hover: Range<Int>?, isCursor: Bool) -> SIMD4<Float> {
+        if isCursor { return rgba(config.theme.background) }
+        if hover?.contains(col) ?? false { return rgba(.systemBlue) }
+        if (activeFind?.contains(col) ?? false) || finds.contains(where: { $0.contains(col) }) {
+            return rgba(.black)
+        }
+        let a = cell.attrs
+        if !a.faint && !a.inverse { return baseRGBA(a.fg) }
+        return rgba(a.resolvedColors(theme: config.theme).fg)   // faint/inverse: rare
+    }
+
+    /// Background fill rgba for a cell (nil = transparent). Mirrors `bgColor`,
+    /// cache-fast for the common cell-bg case.
+    private func bgRGBA(cell: Cell, col: Int, sel: Range<Int>?, finds: [Range<Int>],
+                        activeFind: Range<Int>?, isCursor: Bool) -> SIMD4<Float>? {
+        if isCursor { return rgba(config.cursorColor) }
+        if sel?.contains(col) ?? false { return rgba(.selectedTextBackgroundColor) }
+        if activeFind?.contains(col) ?? false { return rgba(NSColor.systemOrange.withAlphaComponent(0.85)) }
+        if finds.contains(where: { $0.contains(col) }) { return rgba(NSColor.systemYellow.withAlphaComponent(0.6)) }
+        let a = cell.attrs
+        if !a.faint && !a.inverse {
+            guard let bg = a.bg else { return nil }
+            return baseRGBA(bg)
+        }
+        // faint/inverse: rare — exact NSColor semantics (inverse promotes fg→bg).
+        guard let bg = a.resolvedColors(theme: config.theme).bg else { return nil }
+        return rgba(bg)
     }
 
     /// Capture the current on-screen frame as a `CGImage` by re-rendering the

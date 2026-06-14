@@ -14,7 +14,7 @@ private let _wcwidthLocale: Int = {
 /// resolved against the current theme at render time → switching themes instantly
 /// recolors already-drawn ANSI colors (Terminal.app/iTerm2 behavior). truecolor(.rgb)
 /// is absolute, so theme-independent (Starship rainbow prompts etc. stay put — correct).
-public enum TermColor: Equatable, Codable {
+public enum TermColor: Equatable, Hashable, Codable {
     /// Default foreground (the theme's foreground). Not used for bg — the bg "default" is nil (transparent).
     case `default`
     /// ANSI palette index 0-255. 0-15 are the theme's 16 colors, 16-255 the standard xterm cube/grayscale.
