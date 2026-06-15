@@ -2207,17 +2207,25 @@ public final class DamsonSurfaceView: NSView, NSTextInputClient {
     }
 
     private func refreshCursorOverlayNow() {
+        // `cursorLayer` is a manually-added sublayer (not a view's backing
+        // layer), so implicit CA animations are ON by default. Without disabling
+        // them, toggling isHidden for the blink ran a ~0.25s fade EACH phase —
+        // that animation drove WindowServer to recomposite the (vibrancy/frosted)
+        // window at the display refresh rate the whole time, ~2×/s, costing
+        // several % of WindowServer CPU while the terminal was otherwise idle.
+        // Disable actions on BOTH branches so the blink is an instant on/off
+        // (also crisper, as a terminal cursor should be).
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         if let overlay = backend.cursorOverlay(grid: session.grid, config: session.config,
                                                state: currentRenderState(), metrics: cellMetrics) {
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
             cursorLayer.frame = overlay.frame
             cursorLayer.backgroundColor = overlay.color.cgColor
             cursorLayer.isHidden = false
-            CATransaction.commit()
         } else {
             cursorLayer.isHidden = true
         }
+        CATransaction.commit()
     }
 
 }
