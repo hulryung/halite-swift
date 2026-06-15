@@ -65,17 +65,21 @@ enum FontDiscovery {
             || family.contains(" NFP")
     }
 
-    /// Damson's default font family = **JetBrainsMono Nerd Font Mono** (NFM).
+    /// Damson's default font family = **JetBrainsMonoHangul Nerd Font Mono** (NFM).
     ///
-    /// Latin glyphs are 100% identical to the NF variant, while Nerd icons are **scaled down
-    /// to one cell wide** to fit the terminal cell grid. The non-Mono (NF) variant is avoided
-    /// because its icon ink exceeds one cell (e.g. the U+F43A clock spans 0–1.67 cells) and
-    /// gets clipped by the Metal rasterizer's one-cell box. Korean/CJK falls back to
-    /// `cjkFallbackFont` (the D2Coding family) — fallback is minimized. If unavailable: NF → Menlo.
+    /// This merged face carries JetBrains Mono Latin, D2Coding Hangul, and the Nerd icon
+    /// set in a single font, so Korean text and powerline glyphs render from one face with
+    /// **no `cjkFallbackFont` round-trip** (the Hangul advances are already width-matched).
+    /// If it isn't installed we fall back to plain JetBrainsMono NFM/NF (Latin only; Korean
+    /// then comes from `cjkFallbackFont`, the D2Coding family). The Mono (NFM) variant is
+    /// preferred over NF because NF icon ink exceeds one cell (e.g. the U+F43A clock spans
+    /// 0–1.67 cells) and gets clipped by the Metal rasterizer's one-cell box.
+    /// If none are present: Menlo.
     static func defaultFamily() -> String {
         let preferred = [
-            "JetBrainsMono Nerd Font Mono",  // NFM: Latin same as NF + icons one cell wide
-            "JetBrainsMono Nerd Font",       // NF (natural icon width) — second choice
+            "JetBrainsMonoHangul Nerd Font Mono",  // merged Latin + Hangul + icons, single face
+            "JetBrainsMono Nerd Font Mono",        // NFM: Latin same as NF + icons one cell wide
+            "JetBrainsMono Nerd Font",             // NF (natural icon width) — third choice
         ]
         let installed = Set(NSFontManager.shared.availableFontFamilies)
         for family in preferred where installed.contains(family) {
