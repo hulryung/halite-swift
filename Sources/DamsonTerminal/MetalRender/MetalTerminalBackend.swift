@@ -47,6 +47,33 @@ final class MetalTerminalBackend: TerminalRenderBackend {
     /// Recreated when the drawable size changes.
     private var sceneTexture: MTLTexture?
 
+    /// Cached base-frame GPU buffers (everything EXCEPT the block cursor, which
+    /// is a separate pass). Reused when nothing but the cursor blink phase
+    /// changed, so a blinking block cursor doesn't rebuild + re-upload the whole
+    /// grid ~2×/s. Invalidated on any config/font change (applyConfig /
+    /// setRenderFont); per-frame validity is checked against `FrameCache.key`.
+    private struct FrameKey: Equatable {
+        var version: UInt64
+        var cols: Int
+        var rows: Int
+        var scrollbackCount: Int
+        var scrollY: CGFloat
+        var boundsW: CGFloat
+        var boundsH: CGFloat
+        var scale: CGFloat
+        var opacity: CGFloat
+        var atlasSig: String
+        var stateKey: String
+    }
+    private struct FrameCache {
+        var key: FrameKey
+        var bg: MTLBuffer?; var bgCount: Int
+        var glyph: MTLBuffer?; var glyphCount: Int
+        var color: MTLBuffer?; var colorCount: Int
+        var overlay: MTLBuffer?; var overlayCount: Int
+    }
+    private var frameCache: FrameCache?
+
     /// Animated screen effects (rain / snow / underwater): a dedicated display
     /// link drives continuous redraws while one is active. The shader reads
     /// time from `PostFXParams.coeffs4.x`. The link stops automatically when
@@ -182,11 +209,13 @@ final class MetalTerminalBackend: TerminalRenderBackend {
         renderFont = fontWithNerdFallback(family: config.fontFamily, size: config.fontSize)
         inset = config.padding
         rgbaCache.removeAll(keepingCapacity: true)   // theme may have changed
+        frameCache = nil   // theme / padding / ligatures etc. aren't in the frame key
         redrawLast()
     }
 
     func setRenderFont(_ font: NSFont) {
         renderFont = font
+        frameCache = nil
         redrawLast()
     }
 
@@ -473,9 +502,40 @@ final class MetalTerminalBackend: TerminalRenderBackend {
             return
         }
 
-        let (rawBg, glyphInstances, colorGlyphInstances, overlayInstances) =
-            buildInstances(grid: grid, state: state)
-        let bgInstances = fadeBackgrounds(rawBg, opacity: opacity)
+        // Build the base instances (everything but the block cursor) or reuse
+        // the cached GPU buffers when nothing affecting them changed. A blink
+        // phase toggle hits the cache, so the grid isn't rebuilt + re-uploaded
+        // ~2×/s while idle — the block cursor is a separate pass below.
+        let scale = metalView.metalLayer.contentsScale
+        let key = FrameKey(
+            version: grid.version, cols: grid.cols, rows: grid.rows,
+            scrollbackCount: grid.scrollback.count, scrollY: scrollY,
+            boundsW: metalView.bounds.width, boundsH: metalView.bounds.height,
+            scale: scale, opacity: opacity, atlasSig: atlasSignature,
+            stateKey: baseStateKey(state))
+        let cache: FrameCache
+        // Time-based glyph animations change the base every frame → never reuse.
+        if glyphAnims.isEmpty, let fc = frameCache, fc.key == key {
+            cache = fc
+        } else {
+            let (rawBg, glyphInstances, colorGlyphInstances, overlayInstances) =
+                buildInstances(grid: grid, state: state)
+            let bgInstances = fadeBackgrounds(rawBg, opacity: opacity)
+            func makeBuf<T>(_ arr: [T]) -> MTLBuffer? {
+                guard !arr.isEmpty else { return nil }
+                return arr.withUnsafeBytes { raw in
+                    md.device.makeBuffer(bytes: raw.baseAddress!, length: raw.count,
+                                         options: .storageModeShared)
+                }
+            }
+            cache = FrameCache(
+                key: key,
+                bg: makeBuf(bgInstances), bgCount: bgInstances.count,
+                glyph: makeBuf(glyphInstances), glyphCount: glyphInstances.count,
+                color: makeBuf(colorGlyphInstances), colorCount: colorGlyphInstances.count,
+                overlay: makeBuf(overlayInstances), overlayCount: overlayInstances.count)
+            frameCache = cache
+        }
 
         // When a screen effect (CRT etc.) is on, draw the terminal into the
         // offscreen sceneTexture, then composite onto the drawable with a fullscreen
@@ -497,58 +557,46 @@ final class MetalTerminalBackend: TerminalRenderBackend {
         var uniforms = Uniforms(viewportSize: SIMD2<Float>(Float(metalView.bounds.width),
                                                            Float(metalView.bounds.height)))
 
-        // Pass 1: cell backgrounds / selection / find / block cursor.
-        if !bgInstances.isEmpty,
-           let buf = md.device.makeBuffer(bytes: bgInstances,
-                                          length: MemoryLayout<BgInstance>.stride * bgInstances.count,
-                                          options: .storageModeShared) {
+        // Pass 1: cell backgrounds / selection / find.
+        if let b = cache.bg, cache.bgCount > 0 {
             enc.setRenderPipelineState(md.bgPipeline)
             enc.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 0)
-            enc.setVertexBuffer(buf, offset: 0, index: 1)
+            enc.setVertexBuffer(b, offset: 0, index: 1)
             enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4,
-                               instanceCount: bgInstances.count)
+                               instanceCount: cache.bgCount)
         }
-
         // Pass 2: glyphs (coverage atlas modulated by fg color).
-        if !glyphInstances.isEmpty, let atlas = atlas,
-           let buf = md.device.makeBuffer(bytes: glyphInstances,
-                                          length: MemoryLayout<GlyphInstance>.stride * glyphInstances.count,
-                                          options: .storageModeShared) {
+        if let b = cache.glyph, cache.glyphCount > 0, let atlas = atlas {
             enc.setRenderPipelineState(md.glyphPipeline)
             enc.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 0)
-            enc.setVertexBuffer(buf, offset: 0, index: 1)
+            enc.setVertexBuffer(b, offset: 0, index: 1)
             enc.setFragmentTexture(atlas.texture, index: 0)
             enc.setFragmentSamplerState(md.glyphSampler, index: 0)
             enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4,
-                               instanceCount: glyphInstances.count)
+                               instanceCount: cache.glyphCount)
         }
-
         // Pass 2b: color emoji (premultiplied BGRA color page, fg ignored).
-        if !colorGlyphInstances.isEmpty, let colorTex = atlas?.colorTexture,
-           let buf = md.device.makeBuffer(bytes: colorGlyphInstances,
-                                          length: MemoryLayout<GlyphInstance>.stride * colorGlyphInstances.count,
-                                          options: .storageModeShared) {
+        if let b = cache.color, cache.colorCount > 0, let colorTex = atlas?.colorTexture {
             enc.setRenderPipelineState(md.colorGlyphPipeline)
             enc.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 0)
-            enc.setVertexBuffer(buf, offset: 0, index: 1)
+            enc.setVertexBuffer(b, offset: 0, index: 1)
             enc.setFragmentTexture(colorTex, index: 0)
             enc.setFragmentSamplerState(md.glyphSampler, index: 0)
             enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4,
-                               instanceCount: colorGlyphInstances.count)
+                               instanceCount: cache.colorCount)
         }
-
         // Pass 3: line overlays (underline / strikethrough / hyperlink / hover) —
         // same filled-quad pipeline as bg, drawn ON TOP so strikethrough shows.
-        if !overlayInstances.isEmpty,
-           let buf = md.device.makeBuffer(bytes: overlayInstances,
-                                          length: MemoryLayout<BgInstance>.stride * overlayInstances.count,
-                                          options: .storageModeShared) {
+        if let b = cache.overlay, cache.overlayCount > 0 {
             enc.setRenderPipelineState(md.bgPipeline)
             enc.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 0)
-            enc.setVertexBuffer(buf, offset: 0, index: 1)
+            enc.setVertexBuffer(b, offset: 0, index: 1)
             enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4,
-                               instanceCount: overlayInstances.count)
+                               instanceCount: cache.overlayCount)
         }
+        // Pass 4: the block cursor — a separate pass (on top) so a blink phase
+        // toggle reuses the cached base passes above instead of rebuilding.
+        encodeCursorPass(enc: enc, uniforms: &uniforms, grid: grid, state: state)
 
         enc.endEncoding()
 
@@ -616,9 +664,9 @@ final class MetalTerminalBackend: TerminalRenderBackend {
         bg.reserveCapacity((last - first + 1) * max(grid.cols, 1))
         glyphs.reserveCapacity(bg.capacity)
 
-        let blockCursorRow = grid.cursorVisible ? (grid.scrollback.count + grid.cursorRow) : -1
-        let blinkOff = state.cursorBlinkEnabled && !state.cursorBlinkVisible
-        let blockCursorOn = grid.cursorShape == .block && state.markedText.isEmpty && !blinkOff
+        // The block cursor is NOT baked here — it's drawn as a separate pass in
+        // render() (see cursorDrawData) so a blink phase toggle reuses these
+        // cached base instances instead of rebuilding the whole grid.
 
         // IME preedit overlay (composing text drawn at the cursor; the cells it
         // covers are hidden). Shown even when DECTCEM hid the cursor.
@@ -650,7 +698,6 @@ final class MetalTerminalBackend: TerminalRenderBackend {
                 let cell = cells[col]
                 if cell.isContinuation { continue }
                 if imeActive, row == imeRow, col >= grid.cursorCol, col < imeAfterCol { continue }
-                let isCursor = (row == blockCursorRow && col == grid.cursorCol && blockCursorOn)
                 let wide = (col + 1 < cols && cells[col + 1].isContinuation)
                 let wcells = wide ? 2 : 1
                 // Pixel-snap cell edges so adjacent cells share the exact same
@@ -668,19 +715,11 @@ final class MetalTerminalBackend: TerminalRenderBackend {
                 let size = SIMD2<Float>(Float(x1 - x0), Float(y1 - y0))
 
                 if let bgRGBAColor = bgRGBA(cell: cell, col: col, sel: sel, finds: finds,
-                                           activeFind: activeFind, isCursor: isCursor) {
-                    let bgi = BgInstance(origin: origin, size: size, color: bgRGBAColor)
-                    bg.append(bgi)
-                    // Draw the block cursor over a blank cell once more in the
-                    // overlay pass (on top of glyphs). That way a ghost glyph fading
-                    // out on backspace doesn't cover the cursor — only the parts that
-                    // slide or spread outside the cell show next to the cursor.
-                    if isCursor, blockCursorOn, cell.char == " ", config.glyphDisappear != .none {
-                        overlay.append(bgi)
-                    }
+                                           activeFind: activeFind, isCursor: false) {
+                    bg.append(BgInstance(origin: origin, size: size, color: bgRGBAColor))
                 }
                 let fgRGBAColor = fgRGBA(cell: cell, col: col, sel: sel, finds: finds,
-                                         activeFind: activeFind, hover: hover, isCursor: isCursor)
+                                         activeFind: activeFind, hover: hover, isCursor: false)
                 if shapedCovered.contains(col) {
                     // A shaped run owns this cell. Draw the shaped glyph id at its
                     // start column (spanning cellSpan), nothing for trailing cells.
@@ -950,6 +989,98 @@ final class MetalTerminalBackend: TerminalRenderBackend {
     }
 
     // MARK: - Cursor overlay (underline/bar — host draws on its own layer)
+
+    /// The block cursor, drawn as a separate pass on top of the cached base
+    /// frame: a `cursorColor` fill plus the cursor cell's glyph re-drawn in the
+    /// background color (the classic inverted-cell look). Same atlas/pipeline as
+    /// every other glyph, so the character never shifts between blink phases.
+    /// Returns nil when there's no block cursor to draw (other shapes use the
+    /// CALayer overlay; blink-off / IME / hidden / off-screen → nothing).
+    private func cursorDrawData(grid: Grid, state: RenderState)
+        -> (bg: BgInstance, glyph: GlyphInstance?, glyphIsColor: Bool)? {
+        guard grid.cursorVisible, grid.cursorShape == .block, state.markedText.isEmpty
+        else { return nil }
+        if state.cursorBlinkEnabled && !state.cursorBlinkVisible { return nil }
+
+        let row = grid.scrollback.count + grid.cursorRow
+        let col = grid.cursorCol
+        let r = grid.row(grid.cursorRow)
+        let wide = col + 1 < r.count && r[col + 1].isContinuation
+        let wcells = wide ? 2 : 1
+        let x0 = snap(inset.width + CGFloat(col) * metrics.width)
+        let x1 = snap(inset.width + CGFloat(col + wcells) * metrics.width)
+        let y0 = snap(inset.height + CGFloat(row) * metrics.height) - scrollY
+        let y1 = snap(inset.height + CGFloat(row + 1) * metrics.height) - scrollY
+        // Off-screen (scrolled into history) → nothing to draw.
+        guard y1 > 0, y0 < metalView.bounds.height else { return nil }
+        let origin = SIMD2<Float>(Float(x0), Float(y0))
+        let size = SIMD2<Float>(Float(x1 - x0), Float(y1 - y0))
+        let bg = BgInstance(origin: origin, size: size, color: rgba(config.cursorColor))
+
+        guard col < r.count else { return (bg, nil, false) }
+        let cell = r[col]
+        guard cell.char != " ", let region = atlas?.region(for: cell.char, bold: cell.attrs.bold, wide: wide)
+        else { return (bg, nil, false) }
+        var gOrigin = origin, gSize = size
+        if region.overflowCells > 0 {
+            let half = region.overflowCells * metrics.width / 2
+            let gx0 = snap(inset.width + CGFloat(col) * metrics.width - half)
+            let gx1 = snap(inset.width + CGFloat(col + wcells) * metrics.width + half)
+            gOrigin = SIMD2<Float>(Float(gx0), Float(y0))
+            gSize = SIMD2<Float>(Float(gx1 - gx0), Float(y1 - y0))
+        }
+        // Inverted glyph color = the terminal background (matches the old baked
+        // fgRGBA(isCursor:) path). Color emoji ignore the tint (drawn as-is).
+        let glyph = GlyphInstance(origin: gOrigin, size: gSize,
+                                  uvOrigin: region.uv.origin, uvSize: region.uv.size,
+                                  color: rgba(config.theme.background))
+        return (bg, glyph, region.isColor)
+    }
+
+    /// Cheap signature of the render state that affects the base frame (cursor
+    /// excluded). When this and the geometry/version match the cache, the base
+    /// buffers are reused. NOT included: the cursor blink phase (that's the whole
+    /// point) and the cursor position.
+    private func baseStateKey(_ state: RenderState) -> String {
+        var k = state.markedText + "|"
+        if let a = state.selectionAnchor { k += "\(a.row),\(a.col)" }
+        k += ">"
+        if let h = state.selectionHead { k += "\(h.row),\(h.col)" }
+        k += state.selectionRectangular ? "R|" : "|"
+        if let r = state.activeFindRow, let rng = state.activeFindRange { k += "\(r):\(rng.lowerBound)-\(rng.upperBound)" }
+        k += "|f\(state.findMatchesByRow.count)|h\(state.hoveredSegments.count)"
+        for (row, seg) in state.hoveredSegments.sorted(by: { $0.key < $1.key }) {
+            k += ";\(row):\(seg.lowerBound)-\(seg.upperBound)"
+        }
+        return k
+    }
+
+    /// Encode the block-cursor pass (cursorColor fill + inverted glyph) into an
+    /// in-flight encoder. Shared by the live render and the offscreen capture so
+    /// both show the cursor identically. No-op when there's no block cursor.
+    private func encodeCursorPass(enc: MTLRenderCommandEncoder, uniforms: inout Uniforms,
+                                  grid: Grid, state: RenderState) {
+        guard let cur = cursorDrawData(grid: grid, state: state) else { return }
+        if let b = withUnsafeBytes(of: cur.bg, {
+            md.device.makeBuffer(bytes: $0.baseAddress!, length: $0.count, options: .storageModeShared)
+        }) {
+            enc.setRenderPipelineState(md.bgPipeline)
+            enc.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 0)
+            enc.setVertexBuffer(b, offset: 0, index: 1)
+            enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: 1)
+        }
+        guard let g = cur.glyph,
+              let tex = cur.glyphIsColor ? atlas?.colorTexture : atlas?.texture,
+              let b = withUnsafeBytes(of: g, {
+                  md.device.makeBuffer(bytes: $0.baseAddress!, length: $0.count, options: .storageModeShared)
+              }) else { return }
+        enc.setRenderPipelineState(cur.glyphIsColor ? md.colorGlyphPipeline : md.glyphPipeline)
+        enc.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 0)
+        enc.setVertexBuffer(b, offset: 0, index: 1)
+        enc.setFragmentTexture(tex, index: 0)
+        enc.setFragmentSamplerState(md.glyphSampler, index: 0)
+        enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: 1)
+    }
 
     func cursorOverlay(grid: Grid, config: DamsonConfig, state: RenderState, metrics: CellMetrics) -> CursorOverlay? {
         let shape = grid.cursorShape
@@ -1260,6 +1391,8 @@ final class MetalTerminalBackend: TerminalRenderBackend {
         drawGlyphs(glyphs, pipeline: md.glyphPipeline, texture: atlas?.texture)
         drawGlyphs(colorGlyphs, pipeline: md.colorGlyphPipeline, texture: atlas?.colorTexture)
         drawBg(overlay)
+        // Block cursor (separate pass, like the live render) — keeps captures faithful.
+        encodeCursorPass(enc: enc, uniforms: &uniforms, grid: grid, state: state)
         enc.endEncoding()
 
         // Screen effect: run the same fullscreen post-fx pass as on-screen
