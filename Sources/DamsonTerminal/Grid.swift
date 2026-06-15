@@ -500,7 +500,7 @@ public final class Grid {
     ///   0 (default): cursor → end of screen
     ///   1: start of screen → cursor
     ///   2: whole screen (cursor position kept)
-    ///   3: screen + scrollback (currently same as 2 — scrollback unimplemented)
+    ///   3: whole screen + clears the scrollback ring (xterm `\e[3J`)
     public func eraseInDisplay(mode: Int) {
         let blank = Cell.empty(attrs: pen)
         switch mode {

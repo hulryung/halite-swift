@@ -655,10 +655,11 @@ the control protocol. This is now auto-detected, opening the same native integra
 
 ## 15. Open Issues (found during real-world agent-teams testing, 2026-06-10)
 
-The P0–P3 implementation is complete, but two unresolved issues were found while testing the final acceptance
-scenario (Claude Code agent teams split-pane). Both are separate areas, not the tmux integration core.
+The P0–P3 implementation is complete. Two issues were found while testing the final acceptance
+scenario (Claude Code agent teams split-pane) — both separate areas, not the tmux integration core.
+§15.1 has since been resolved (environment-side, not a Damson bug).
 
-### 15.1 agent teams spawn ordinary subagents instead of teammates (claude config/environment issue)
+### 15.1 agent teams spawn ordinary subagents instead of teammates (claude config/environment issue) — RESOLVED 2026-06-15
 
 - Symptom: given the prompt "Create an agent team with 3 teammates", Claude Code launches ordinary
   subagents (Explore/general-purpose `Agent(...)`) instead of teammates → `split-window` never fires at all.
@@ -668,6 +669,11 @@ scenario (Claude Code agent teams split-pane). Both are separate areas, not the 
 - Retry procedure: start a new `claude` session inside a pane of the tmux host window → team prompt.
   On the Damson side, the `split-window`→`%layout-change`→native split path is already verified
   (testSplitWindowYieldsTwoPaneLayout), so it's expected to work once a team is created properly.
+- **Resolution.** Never a Damson code bug — both causes were environment-side and are now closed:
+  ① `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is present in `~/.claude/settings.json`; ② the launch
+  procedure requires running `claude` inside a `tmux -CC` host pane (`$TMUX` set). Damson's split path
+  re-verified against real tmux 3.6b — `testSplitWindowYieldsTwoPaneLayout` passes (`split-window -h` →
+  `%layout-change` → two-pane horizontal native split). Nothing further is owed on the Damson side.
 
 ### 15.2 Claude Code TUI rendering corruption (Damson VT/renderer bug, unrelated to tmux — occurs in local tabs)
 
